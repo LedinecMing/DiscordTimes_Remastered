@@ -1,9 +1,11 @@
 use crate::Unit;
 
-pub(crate) trait Item
+pub trait Item
 {
-    fn add_effects(unit: &dyn Unit)
-    {
+    fn add_effects(&self, unit: &mut dyn Unit);
+}
 
-    }
+pub struct ItemInfo
+{
+
 }
