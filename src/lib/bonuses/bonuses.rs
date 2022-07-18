@@ -53,3 +53,7 @@ impl Bonus for FastGoing
         true
     }
 }
+
+#[derive(Copy, Clone, Debug)]
+pub struct NoBonus {}
+impl Bonus for NoBonus {}

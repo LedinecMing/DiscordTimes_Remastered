@@ -2,7 +2,7 @@ use crate::lib::effects::effect::{Effect, EffectInfo};
 use crate::lib::units::unit::UnitStats;
 use crate::Unit;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct MoreHealth
 {
     pub info: EffectInfo
@@ -27,7 +27,7 @@ impl Effect for MoreHealth
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct MoreHandAttack
 {
     pub info: EffectInfo
@@ -52,7 +52,7 @@ impl Effect for MoreHandAttack
     fn tick(&mut self, unit: &mut dyn Unit) -> bool { false }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct MoreMoves
 {
     pub info: EffectInfo
@@ -84,7 +84,7 @@ impl Effect for MoreMoves
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct ItemEffect
 {
     pub info: EffectInfo,
@@ -95,6 +95,6 @@ impl Effect for ItemEffect
     fn update_stats(&self, unitstats: UnitStats) -> UnitStats
     {
         let mut new_stats = unitstats.clone();
-        new_stats
+        new_stats + self.additions
     }
 }

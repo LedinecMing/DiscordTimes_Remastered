@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use crate::lib::bonuses::bonus::Bonus;
 use crate::lib::effects::effect::{Effect, EffectInfo};
 use crate::lib::effects::effects::ItemEffect;
@@ -5,21 +7,9 @@ use crate::lib::items::item::Item;
 use crate::lib::units::unit::{Defence, Power, UnitStats};
 use crate::Unit;
 
-pub struct Sword
+impl Item
 {
-    bonus: Option<Box<dyn Bonus>>,
-    effect: Box<dyn Effect>
-}
-impl Item for Sword
-{
-    fn add_effects(&self, unit: &mut dyn Unit)
-    {
-        unit.add_effect(self.effect.clone());
-    }
-}
-impl Sword
-{
-    fn cool_sword() -> Self
+    pub fn CoolSword() -> Self
     {
         Self
         {
@@ -33,7 +23,7 @@ impl Sword
                 speed: 10,
                 ..UnitStats::empty()
             } }),
-            ..Sword::empty()
+            ..Item::empty()
         }
     }
     fn empty() -> Self
