@@ -1,17 +1,24 @@
-use crate::lib::bonuses::bonus::Bonus;
-use crate::lib::effects::effect::{Effect, EffectInfo};
-use crate::lib::effects::effects::ItemEffect;
-use crate::lib::units::unit::{Power, UnitStats};
-use crate::Unit;
+use
+{
+    crate::lib::bonuses::bonus::Bonus,
+    crate::lib::effects::effect::Effect,
+    crate::lib::effects::effects::ItemEffect,
+    crate::lib::units::unit::{Power, UnitStats},
+    crate::Unit
+};
 
 #[derive(Clone, Debug)]
 pub struct ItemInfo
 {
-
+    pub name: String,
+    pub description: String,
+    pub cost: u64,
+    pub sells: bool
 }
 #[derive(Clone, Debug)]
 pub struct Item
 {
     pub bonus: Option<Box<dyn Bonus>>,
-    pub effect: Box<dyn Effect>
+    pub effect: Box<dyn Effect>,
+    pub info: ItemInfo
 }

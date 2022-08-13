@@ -1,13 +1,25 @@
-use std::fmt::Debug;
-use dyn_clone::{clone_box, DynClone};
-use crate::{DefencePiercing, Dodging};
-use crate::lib::battle::army::Army;
-use crate::lib::battle::battlefield::BattleField;
-use crate::lib::effects::effect::Effect;
-use crate::lib::effects::effects::MoreHealth;
-use crate::lib::items::item::Item;
-use crate::lib::bonuses::bonus::Bonus;
-use derive_more::Add;
+use
+{
+    std::fmt::Debug,
+    dyn_clone::DynClone,
+    crate::lib::
+    {
+        bonuses::bonuses::*,
+        battle::
+        {
+            army::Army,
+            battlefield::BattleField,
+        },
+        effects::
+        {
+            effect::Effect,
+            effects::MoreHealth
+        },
+        items::item::Item,
+        bonuses::bonus::Bonus
+    },
+    derive_more::Add
+};
 
 fn nat(a: i32) -> i32
 {
@@ -106,7 +118,7 @@ impl UnitStats
 pub struct UnitInfo
 {
     pub name: String,
-    pub cost: i32
+    pub cost: u64
 }
 impl UnitInfo
 {
@@ -114,7 +126,7 @@ impl UnitInfo
     {
         Self
         {
-            name: "".to_string(),
+            name: "".into(),
             cost: 0
         }
     }
@@ -125,26 +137,58 @@ pub struct UnitInventory
     pub items: Vec<Item>
 }
 
+#[derive(Clone, Debug)]
+pub struct UnitData
+{
+    pub stats: UnitStats,
+    pub info: UnitInfo,
+    pub inventory: UnitInventory,
+    pub bonus: Box<dyn Bonus>,
+    pub effects: Vec<Box<dyn Effect>>
+}
+
 dyn_clone::clone_trait_object!(Unit);
 pub trait Unit : DynClone + Debug
 {
     fn attack(&mut self, target: &mut dyn Unit, battle: &mut BattleField) -> bool;
-    fn get_effected_stats(&self) -> UnitStats;
-    fn get_info(&self) -> UnitInfo;
+    fn get_effected_stats(&self) -> UnitStats
+    {
+        let mut previous: UnitStats = self.get_data().stats.clone();
+        let effects = &self.get_data().effects;
+        effects.iter().for_each(|effect|
+            {
+                previous = effect.update_stats(previous);
+            });
+        let inventory = &self.get_data().inventory;
+        inventory.items.iter().for_each(|item|
+            {
+                previous = item.effect.update_stats(previous);
+            });
+        previous
+    }
+    fn get_mut_data(&mut self) -> &mut UnitData;
+    fn get_data(&self) -> &UnitData;
     fn get_bonus(&self) -> Box<dyn Bonus>;
-    fn add_effect(&mut self, effect: Box<dyn Effect>) -> bool;
-    fn add_item(&mut self, item: Item) -> bool;
+    fn add_effect(&mut self, effect: Box<dyn Effect>) -> bool
+    {
+        self.get_mut_data().effects.push(effect);
+        true
+    }
+    fn add_item(&mut self, item: Item) -> bool
+    {
+        self.get_mut_data().inventory.items.push(item);
+        true
+    }
     fn being_attacked(&mut self, damage: &Power, sender: &mut dyn Unit) -> i32;
     fn correct_damage(&self, damage: &Power) -> Power
     {
         let defence: Defence = self.get_effected_stats().defence;
         println!("Использую защиту {:?}", defence);
-        let new_pow = Power {
+        Power {
             ranged: (nat(damage.ranged - defence.ranged_units) as f32 * (1.0 - defence.ranged_percent as f32 / 100.0)) as i32,
             magic: (nat(damage.magic-defence.magic_units) as f32 * (1.0 - defence.magic_percent as f32 / 100.0)) as i32,
             hand: (nat(damage.hand-defence.hand_units) as f32 * (1.0 - defence.hand_percent as f32 / 100.0)) as i32
-        };
-        new_pow
+        }
     }
     fn tick(&mut self) -> bool;
 }

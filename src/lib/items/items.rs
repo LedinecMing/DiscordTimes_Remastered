@@ -1,11 +1,20 @@
 #![allow(non_snake_case)]
 
-use crate::lib::bonuses::bonus::Bonus;
-use crate::lib::effects::effect::{Effect, EffectInfo};
-use crate::lib::effects::effects::ItemEffect;
-use crate::lib::items::item::Item;
-use crate::lib::units::unit::{Defence, Power, UnitStats};
-use crate::Unit;
+use
+{
+    crate::lib::
+    {
+        bonuses::bonus::Bonus,
+        effects::
+        {
+            effect::EffectInfo,
+            effects::ItemEffect,
+        },
+        items::item::{Item, ItemInfo},
+        units::unit::{Defence, Power, UnitStats, Unit}
+    }
+};
+
 
 impl Item
 {
@@ -23,6 +32,12 @@ impl Item
                 speed: 10,
                 ..UnitStats::empty()
             } }),
+            info: ItemInfo {
+                name: "Cool Sword".to_string(),
+                description: "really cool".to_string(),
+                cost: 100,
+                sells: true
+            },
             ..Item::empty()
         }
     }
@@ -31,7 +46,13 @@ impl Item
         Self
         {
             bonus: None,
-            effect: Box::new(ItemEffect { info: EffectInfo { lifetime: -1 }, additions: UnitStats::empty() })
+            effect: Box::new(ItemEffect { info: EffectInfo { lifetime: -1 }, additions: UnitStats::empty() }),
+            info: ItemInfo {
+                name: "".to_string(),
+                description: "".to_string(),
+                cost: 0,
+                sells: false
+            }
         }
     }
 }

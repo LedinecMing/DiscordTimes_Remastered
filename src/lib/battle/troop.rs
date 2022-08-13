@@ -1,6 +1,23 @@
-use crate::lib::battle::army::Army;
-use crate::Unit;
-use crate::lib::units::units::Hand;
+use
+{
+    std::
+    {
+        cell::RefCell,
+        rc::Rc
+    },
+    crate::lib::
+    {
+        battle::army::Army,
+        units::
+        {
+            unit::Unit,
+            units::Hand
+        },
+    },
+    crate::MutRc
+};
+
+use crate::lib::units;
 
 #[derive(Clone, Debug)]
 pub struct Troop
@@ -15,13 +32,13 @@ pub struct Troop
 
 impl Troop
 {
-    pub fn on_pay(&self, army: &mut Army) -> i32
+    pub fn on_pay(&self, army: &mut Army) -> u64
     {
         if self.is_free
         {
             return 0;
         }
-        self.unit.get_info().cost
+        self.unit.get_data().info.cost
     }
     pub fn on_hour(&self, army: &mut Army) -> bool
     {
@@ -38,5 +55,13 @@ impl Troop
             custom_name: None,
             unit: Box::new(Hand::Recruit())
         }
+    }
+}
+
+impl From<Troop> for Option<MutRc<Troop>>
+{
+    fn from(troop: Troop) -> Self
+    {
+        Some(Rc::new(RefCell::new(troop)))
     }
 }

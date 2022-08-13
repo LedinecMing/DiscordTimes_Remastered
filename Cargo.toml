@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 dyn-clone = "1.0.6"
 derive_more = "0.99.16"
+rand = "0.8.5"

@@ -1,70 +1,66 @@
 mod lib;
 
-use dyn_clone::clone_box;
-use lib::units::units::*;
-use lib::units::unit::Unit;
-use lib::battle::battlefield::BattleField;
-use lib::bonuses::bonuses::Dodging;
-use crate::lib::battle::army::{Army, ArmyStats};
-use crate::lib::battle::troop::Troop;
-use crate::lib::bonuses::bonuses::DefencePiercing;
-use crate::lib::items::item::Item;
-use crate::lib::units::unit::Power;
-use crate::lib::units::units::Hand;
+use
+{
+    std::
+    {
+        cell::RefCell,
+        rc::Rc
+    },
+    lib::
+    {
+        units::units::*,
+        units::unit::Unit,
+        battle::battlefield::BattleField,
+        battle::army::{Army, ArmyStats},
+        battle::troop::Troop,
+        items::item::Item
+    }
+};
 
-
+type MutRc<T> = Rc<RefCell<T>>;
 fn main() {
     println!("Приветц!");
-    let troops: Vec<Option<Box<Troop>>> =
+    let troops: Vec<Option<MutRc<Troop>>> =
         vec![
-            Some(Box::new(Troop {
-                was_payed: true,
-                is_dead: false,
-                is_free: true,
+            Troop {
                 is_main: true,
                 custom_name: Some("Chel".to_string()),
-                unit: Box::new(Ranged::Sniper())
-            })),
-            Some(Box::new(Troop {
-                was_payed: false,
-                is_dead: false,
-                is_free: false,
-                is_main: false,
-                custom_name: None,
-                unit: Box::new(Ranged::Hunter())
-            })),
+                unit: Box::new(Ranged::Sniper()),
+                ..Troop::empty()
+            }.into(),
+            Troop {
+                unit: Box::new(Ranged::Hunter()),
+                ..Troop::empty()
+            }.into(),
             None];
-
-        let mut army = Army { troops, stats: ArmyStats {
-        gold: 0,
-        mana: 0,
-        army_name: "Армия героя".to_string()
-    } };
-    let troops1 : Vec<Option<Box<Troop>>> =
+    let mut army = Army { troops, stats: ArmyStats {
+            gold: 0,
+            mana: 0,
+            army_name: "Армия героя".into()
+        },
+        inventory: vec![]
+        };
+    let troops1 : Vec<Option<MutRc<Troop>>> =
         vec![
-            Some(Box::new(Troop {
+            Troop {
                 unit: Box::new(Hand::Recruit()),
                 ..Troop::empty()
-            }))
+            }.into()
         ];
     let mut army1 = Army { troops: troops1, stats: ArmyStats {
-        gold: 0,
-        mana: 0,
-        army_name: "".to_string()
-    } };
-    let mut troop0 = clone_box(&*army.troops[0].as_ref().unwrap());
-    let mut unit0 = troop0.unit;
-    let mut troop1 = clone_box(&*army1.troops[0].as_ref().unwrap());
-    let mut unit1 : Box<dyn Unit> = troop1.unit;
-    unit1.add_item(Item::CoolSword());
-    println!("Хиты {:?}", unit1.get_effected_stats().hp);
-    unit0.attack(&mut *unit1, &mut BattleField{ troops: [Some(Box::new(Ranged::Sniper()))] });
-    println!("Хиты {:?}", unit1.get_effected_stats().hp);
-    println!("Хиты {:?}", unit0.get_effected_stats().hp);
-    unit1.attack(&mut *unit0, &mut BattleField{ troops: [Some(Box::new(Ranged::Sniper()))] });
-    println!("Хиты {:?}", unit0.get_effected_stats().hp);
-    troop0.unit = unit0;
-    troop1.unit = unit1;
-    army.troops[0] = Some(*troop0);
-    army.troops[1] = Some(*troop1);
+            gold: 0,
+            mana: 0,
+            army_name: "".into()
+        },
+        inventory: vec![]
+    };
+    {
+        let mut troop0 = army.troops[0].as_ref().unwrap().borrow_mut();
+        let mut troop1 = army1.troops[0].as_ref().unwrap().borrow_mut();
+        troop1.unit.add_item(Item::CoolSword());
+        troop1.unit.attack(&mut *troop0.unit, &mut BattleField { troops: [None] });
+        troop0.unit.attack(&mut *troop1.unit, &mut BattleField { troops: [None] });
+    }
+    dbg!(army.troops[0].as_ref().unwrap().borrow_mut().unit.get_data().stats.hp);
 }

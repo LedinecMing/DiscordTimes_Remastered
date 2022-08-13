@@ -94,7 +94,6 @@ impl Effect for ItemEffect
 {
     fn update_stats(&self, unitstats: UnitStats) -> UnitStats
     {
-        let mut new_stats = unitstats.clone();
-        new_stats + self.additions
+        unitstats + self.additions
     }
 }
