@@ -5,3 +5,4 @@ pub mod items;
 pub mod bonuses;
 pub mod map;
 pub mod time;
+pub mod console;

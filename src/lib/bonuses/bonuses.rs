@@ -1,6 +1,8 @@
 use crate::lib::bonuses::bonus::Bonus;
-use crate::lib::effects::effects::MoreMoves;
-use crate::lib::units::unit::Power;
+use crate::lib::effects::effect::EffectInfo;
+use crate::lib::effects::effects::{ItemEffect, MoreMoves};
+use crate::lib::time::time::Time;
+use crate::lib::units::unit::{Defence, Power, UnitStats};
 use crate::Unit;
 
 
@@ -50,6 +52,54 @@ impl Bonus for FastGoing
     fn on_battle_start(&self, unit: &mut dyn Unit) -> bool
     {
         unit.add_effect(Box::new(MoreMoves::default()));
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Berserk {}
+impl Bonus for Berserk
+{
+    fn on_kill(&self, receiver: &mut dyn Unit, sender: &mut dyn Unit) -> bool
+    {
+        sender.add_effect(
+            Box::new(ItemEffect
+            {
+                info: EffectInfo { lifetime: i32::MAX },
+                additions: UnitStats {
+                    damage: Power {
+                        hand: 10,
+                        ranged: 10,
+                        magic: 10
+                    },
+                    ..UnitStats::empty()
+                }
+            }));
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Block {}
+impl Bonus for Block
+{
+    fn on_move_skip(&self, unit: &mut dyn Unit) -> bool
+    {
+        println!("Бонус: персонаж пропустил ход, увеличиваю защиту в 2 раза");
+        unit.add_effect(
+            Box::new(ItemEffect
+            {
+                info: EffectInfo { lifetime: 1 },
+                additions: UnitStats {
+                    defence: Defence {
+                        ranged_percent: 0,
+                        hand_percent: 0,
+                        magic_percent: 0,
+                        ..unit.get_data().stats.defence
+                    },
+                    ..UnitStats::empty()
+                }
+            }));
         true
     }
 }

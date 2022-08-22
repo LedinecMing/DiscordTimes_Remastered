@@ -63,7 +63,7 @@ impl Default for MoreMoves
     {
         Self
         {
-            info: EffectInfo {lifetime: 2}
+            info: EffectInfo {lifetime: 1}
         }
     }
 }
@@ -72,6 +72,81 @@ impl Effect for MoreMoves
     fn update_stats(&self, mut unitstats: UnitStats) -> UnitStats
     {
         unitstats.max_moves+=1;
+        unitstats
+    }
+    fn on_tick(&mut self) -> bool
+    {
+        self.info.lifetime -= 1;
+        true
+    }
+    fn is_dead(&self) -> bool {
+        self.info.lifetime < 1
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct HealMagic
+{
+    pub info: EffectInfo,
+    pub magic_power: u64
+}
+impl Default for HealMagic
+{
+    fn default() -> Self
+    {
+        Self
+        {
+            info: EffectInfo {lifetime: 1},
+            magic_power: 15
+        }
+    }
+}
+impl Effect for HealMagic
+{
+    fn update_stats(&self, mut unitstats: UnitStats) -> UnitStats
+    {
+        unitstats.defence.ranged_units += self.magic_power / 5;
+        unitstats.defence.hand_units += self.magic_power / 5;
+        unitstats.damage.ranged += self.magic_power / 10;
+        unitstats.damage.hand += self.magic_power / 10;
+        unitstats
+    }
+    fn on_tick(&mut self) -> bool
+    {
+        self.info.lifetime -= 1;
+        true
+    }
+    fn is_dead(&self) -> bool {
+        self.info.lifetime < 1
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct DisableMagic
+{
+    pub info: EffectInfo,
+    pub magic_power: u64
+}
+impl Default for DisableMagic
+{
+    fn default() -> Self
+    {
+        Self
+        {
+            info: EffectInfo {lifetime: 1},
+            magic_power: 15
+        }
+    }
+}
+impl Effect for DisableMagic
+{
+    fn update_stats(&self, mut unitstats: UnitStats) -> UnitStats
+    {
+        if self.magic_power < 20
+        {
+            return unitstats
+        }
+        unitstats.moves = 0;
         unitstats
     }
     fn on_tick(&mut self) -> bool
@@ -95,5 +170,10 @@ impl Effect for ItemEffect
     fn update_stats(&self, unitstats: UnitStats) -> UnitStats
     {
         unitstats + self.additions
+    }
+    fn on_battle_end(&mut self) -> bool
+    {
+        self.info.lifetime = 0;
+        true
     }
 }

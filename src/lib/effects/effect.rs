@@ -9,6 +9,7 @@ pub trait Effect : DynClone + Debug
 {
     fn update_stats(&self, unitstats: UnitStats) -> UnitStats;
     fn on_tick(&mut self) -> bool { false }
+    fn on_battle_end(&mut self) -> bool { false }
     fn tick(&mut self, unit: &mut dyn Unit) -> bool
     {
         self.on_tick();

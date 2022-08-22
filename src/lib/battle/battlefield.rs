@@ -1,6 +1,6 @@
-use crate::Unit;
+use crate::{Troop, Unit};
 
 pub struct BattleField
 {
-    pub troops: [Option<Box<dyn Unit>>;1]
+    pub troops: [Option<Troop>;24]
 }
