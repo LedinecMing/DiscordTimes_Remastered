@@ -11,10 +11,6 @@ pub struct MapObjectData
     pub recruitment: Option<Recruitment>,
     pub owner: MutRc<Army>
 }
-impl MapObjectData
-{
-
-}
 
 const RECRUIT_COST: f64 = 2.0;
 pub struct Market
