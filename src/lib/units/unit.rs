@@ -5,17 +5,7 @@ use
     dyn_clone::DynClone,
     crate::lib::
     {
-        bonuses::bonuses::*,
-        battle::
-        {
-            army::Army,
-            battlefield::BattleField,
-        },
-        effects::
-        {
-            effect::Effect,
-            effects::MoreHealth
-        },
+        effects::effect::Effect,
         items::item::Item,
         bonuses::bonus::Bonus
     },
