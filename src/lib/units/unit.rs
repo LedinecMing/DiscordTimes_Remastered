@@ -1,21 +1,10 @@
-
 use
 {
     std::fmt::Debug,
     dyn_clone::DynClone,
     crate::lib::
     {
-        bonuses::bonuses::*,
-        battle::
-        {
-            army::Army,
-            battlefield::BattleField,
-        },
-        effects::
-        {
-            effect::Effect,
-            effects::MoreHealth
-        },
+        effects::effect::Effect,
         items::item::Item,
         bonuses::bonus::Bonus
     },
@@ -178,7 +167,7 @@ pub trait Unit : DynClone + Debug
     }
     fn get_effected_stats(&self) -> UnitStats
     {
-        let mut previous: UnitStats = self.get_data().stats.clone();
+        let mut previous: UnitStats = self.get_data().stats;
         let effects = &self.get_data().effects;
         effects.iter().for_each(|effect|
             {
