@@ -1,6 +1,5 @@
 #![allow(non_snake_case)]
 
-use std::mem::take;
 use
 {
     dyn_clone::clone_box,
@@ -13,10 +12,7 @@ use
         {
             effect::Effect,
             effect::EffectInfo,
-            effects::HealMagic
         },
-        battle::battlefield::BattleField,
-        items::item::Item
     },
 };
 use crate::lib::effects::effects::DisableMagic;

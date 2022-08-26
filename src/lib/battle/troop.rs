@@ -17,8 +17,6 @@ use
     crate::MutRc
 };
 
-use crate::lib::units;
-
 #[derive(Clone, Debug)]
 pub struct Troop
 {
