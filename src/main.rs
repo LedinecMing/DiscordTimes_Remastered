@@ -1,15 +1,17 @@
 mod lib;
 
-use
-{
-    std::
-    {
+use {
+    std:: {
         collections::HashMap,
         cell::RefCell,
-        rc::Rc
+        rc::Rc,
+        io:: {
+            prelude::*,
+            stdin, stdout,
+            Stdout, Stdin
+        }
     },
-    lib::
-    {
+    lib:: {
         units::units::*,
         units::unit::Unit,
         battle::battlefield::BattleField,
@@ -18,14 +20,11 @@ use
         items::item::Item
     }
 };
-use std::io;
-use std::io::prelude::*;
-use std::io::Stdout;
-use crate::lib::effects::effects::DisableMagic;
+
 
 fn pause() {
-    let mut stdin = io::stdin();
-    let mut stdout = io::stdout();
+    let mut stdin = stdin();
+    let mut stdout = stdout();
 
     // We want the cursor to stay at the end of the line, so we print without a newline and flush manually.
     write!(stdout, "Press any key to continue...").unwrap();
@@ -34,23 +33,50 @@ fn pause() {
     // Read a single byte and discard
     let _ = stdin.read(&mut [0u8]).unwrap();
 }
-fn input(your_io: &mut Stdout, input_string: &str) -> String
-{
+
+fn input(your_io: &mut Stdout, input_string: &str) -> String {
     const START: usize = 0;
     your_io.write(input_string.as_ref()).unwrap();
     your_io.flush().unwrap();
     let mut input = "".to_string();
-    io::stdin().read_line(&mut input).unwrap();
+    stdin().read_line(&mut input).unwrap();
     let end = input.chars().count() - 1;
     input.chars().take(end).skip(START).collect()
 }
-pub fn insert_unit(hashmap: &mut HashMap<String, Box<dyn Unit>>, unit: Box<dyn Unit>)
+
+fn insert_unit(hashmap: &mut HashMap<String, Box<dyn Unit>>, unit: Box<dyn Unit>)
 {
     hashmap.insert(unit.get_data().info.name.clone(), unit);
 }
+
+fn add_character(your_io: &mut Stdout, army: &mut Army, characters: HashMap<String, Box<dyn Unit>>)
+{
+    println!("Хочешь добавить больше юнитов? Легко, напиши его название, а если захочешь остановиться пиши СТОП");
+    characters.keys().for_each(|key| print!("{} ", key));
+    println!();
+    loop {
+        let ch_string = &*input(your_io, "Хочешь себе юнита?(а не хочешь - пиши СТОП) введи один из списка,");
+        if ch_string == "СТОП" {
+            println!("Остановка");
+            break
+        }
+        if characters.contains_key(ch_string) {
+            army.add_troop(Troop {
+                unit: characters.get(ch_string).unwrap().clone(),
+                ..Troop::empty()
+            });
+            println!("Добавлен персонаж {} в вашу армию!", ch_string);
+        }
+        else {
+            println!("Это какая-то несуразица, попробуйте ещё разок!");
+        }
+    }
+    dbg!(&army);
+}
+
 type MutRc<T> = Rc<RefCell<T>>;
 fn main() {
-    let mut mio = io::stdout();
+    let mut mio = stdout();
     let army_name = input(&mut mio, "Название вашей армии: ");
     let mut characters: HashMap<String, Box<dyn Unit>> = HashMap::new();
     insert_unit(&mut characters, Box::new(Hand::Knight()));
@@ -96,26 +122,17 @@ fn main() {
     };
     println!("Информация по вашей армии:");
     dbg!(&army);
-    println!("Хочешь добавить больше юнитов? Легко, напиши его название, а если захочешь остановиться пиши СТОП");
-    characters.keys().for_each(|key| print!("{} ", key));
-    println!();
     loop {
-        let ch_string = &*input(&mut mio, "Хочешь себе юнита?(а не хочешь - пиши СТОП) введи один из списка,");
-        if ch_string == "СТОП" {
-            println!("Остановка");
-            break
-        }
-        if characters.contains_key(ch_string) {
-            army.add_troop(Troop {
-                unit: characters.get(ch_string).unwrap().clone(),
-                ..Troop::empty()
-            });
-            println!("Добавлен персонаж {} в вашу армию!", ch_string);
-        }
-        else {
-            println!("Это какая-то несуразица, попробуйте ещё разок!");
+        let user_choice = input(&mut mio, "Что делать? ");
+        match &*user_choice {
+            "Армия" => {
+                println!("Ваша армия \"{}\"| Золото⛀⛁⛃⛂: {}⛃ | Мана✧: {}✧ |", army.stats.army_name, army.stats.gold, army.stats.mana)
+            }
+            "СТОП" => {
+                break
+            }
+            _ => println!("Ничего не понял!")
         }
     }
-    dbg!(&army);
     pause();
 }
