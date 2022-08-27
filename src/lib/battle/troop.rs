@@ -1,15 +1,11 @@
-use
-{
-    std::
-    {
+use {
+    std::{
         cell::RefCell,
         rc::Rc
     },
-    crate::lib::
-    {
+    crate::lib::{
         battle::army::Army,
-        units::
-        {
+        units::{
             unit::Unit,
             units::Hand
         },
@@ -18,8 +14,7 @@ use
 };
 
 #[derive(Clone, Debug)]
-pub struct Troop
-{
+pub struct Troop {
     pub was_payed: bool,
     pub is_dead: bool,
     pub is_free: bool,
@@ -28,24 +23,18 @@ pub struct Troop
     pub unit: Box<dyn Unit>
 }
 
-impl Troop
-{
-    pub fn on_pay(&self, army: &mut Army) -> u64
-    {
-        if self.is_free
-        {
+impl Troop {
+    pub fn on_pay(&self, army: &mut Army) -> u64 {
+        if self.is_free {
             return 0;
         }
         self.unit.get_data().info.cost
     }
-    pub fn on_hour(&self, army: &mut Army) -> bool
-    {
+    pub fn on_hour(&self, army: &mut Army) -> bool {
         true
     }
-    pub fn empty() -> Self
-    {
-        Self
-        {
+    pub fn empty() -> Self {
+        Self {
             was_payed: true,
             is_dead: false,
             is_free: false,
@@ -56,10 +45,8 @@ impl Troop
     }
 }
 
-impl From<Troop> for Option<MutRc<Troop>>
-{
-    fn from(troop: Troop) -> Self
-    {
-        Some(Rc::new(RefCell::new(troop)))
+impl From<Troop> for MutRc<Option<Troop>> {
+    fn from(troop: Troop) -> Self {
+        Rc::new(RefCell::new(Some(troop)))
     }
 }

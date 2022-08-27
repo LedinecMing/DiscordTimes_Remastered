@@ -17,7 +17,12 @@ use {
         battle::battlefield::BattleField,
         battle::army::{Army, ArmyStats},
         battle::troop::Troop,
-        items::item::Item
+        items::item::Item,
+        time::time::Time,
+        map::{
+            map::{GameMap, MAP_SIZE},
+            tile::Tile
+        }
     }
 };
 
@@ -49,7 +54,7 @@ fn insert_unit(hashmap: &mut HashMap<String, Box<dyn Unit>>, unit: Box<dyn Unit>
     hashmap.insert(unit.get_data().info.name.clone(), unit);
 }
 
-fn add_character(your_io: &mut Stdout, army: &mut Army, characters: HashMap<String, Box<dyn Unit>>)
+fn add_character(your_io: &mut Stdout, army: &mut Army, characters: &HashMap<String, Box<dyn Unit>>)
 {
     println!("Хочешь добавить больше юнитов? Легко, напиши его название, а если захочешь остановиться пиши СТОП");
     characters.keys().for_each(|key| print!("{} ", key));
@@ -76,6 +81,13 @@ fn add_character(your_io: &mut Stdout, army: &mut Army, characters: HashMap<Stri
 
 type MutRc<T> = Rc<RefCell<T>>;
 fn main() {
+    let gamemap = GameMap {
+        time: Time{minutes: 0},
+        tilemap: [[Tile {walkspeed: 1}; MAP_SIZE]; MAP_SIZE],
+        objectmap: [[None; MAP_SIZE]; MAP_SIZE],
+        decomap: [[vec![]; MAP_SIZE]; MAP_SIZE],
+        armys: vec![]
+    };
     let mut mio = stdout();
     let army_name = input(&mut mio, "Название вашей армии: ");
     let mut characters: HashMap<String, Box<dyn Unit>> = HashMap::new();
@@ -122,11 +134,35 @@ fn main() {
     };
     println!("Информация по вашей армии:");
     dbg!(&army);
+    println!("Вы можете написать Армия => [Статистика, Бойцы, Добавить персонажа], СТОП");
     loop {
         let user_choice = input(&mut mio, "Что делать? ");
         match &*user_choice {
             "Армия" => {
-                println!("Ваша армия \"{}\"| Золото⛀⛁⛃⛂: {}⛃ | Мана✧: {}✧ |", army.stats.army_name, army.stats.gold, army.stats.mana)
+                match &*input(&mut mio, "Что желаете делать?") {
+                    "Статистика" => {
+                        println!("Ваша армия \"{}\"| Золото⛀⛁⛃⛂: {}⛃ | Мана✧: {}✧ |", army.stats.army_name, army.stats.gold, army.stats.mana);
+                    }
+                    "Бойцы" => {
+                        army.troops.iter().for_each(
+                            |troop| {
+                                print!(" {} |",
+                                       match Some(troop)
+                                       {
+                                           Some(troop) => troop.borrow().as_ref().unwrap().unit.get_data().info.name.clone(),
+                                           None => "Пусто".into()
+                                       })
+                            });
+                        println!();
+                    }
+                    "Добавить персонажа" => {
+                        add_character(&mut mio, &mut army, &characters)
+                    }
+                    "НАЗАД" => {
+                        break
+                    }
+                    T => println!("Ничего не понял в этих ваших \"{}\"!", T)
+                }
             }
             "СТОП" => {
                 break

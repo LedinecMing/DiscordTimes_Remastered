@@ -44,8 +44,7 @@ impl Unit for Ranged
         clone_box(&*self.data.bonus)
     }
 
-    fn being_attacked(&mut self, damage: &Power, sender: &mut dyn Unit) -> u64
-    {
+    fn being_attacked(&mut self, damage: &Power, sender: &mut dyn Unit) -> u64 {
         let name = &self.data.info.name.clone();
         let sender_name = sender.get_data().info.name.clone();
         println!("{} атакует {} ({:?} силы)", sender_name, name, damage);
@@ -60,16 +59,13 @@ impl Unit for Ranged
         corrected_damage_units
     }
 
-    fn tick(&mut self) -> bool
-    {
+    fn tick(&mut self) -> bool {
         let mut effect: Box<dyn Effect>;
-        for effect_num in 0..self.data.effects.len()
-        {
+        for effect_num in 0..self.data.effects.len() {
             effect = self.data.effects[effect_num].clone();
             effect.tick(self);
             self.data.effects[effect_num].on_tick();
-            if effect.is_dead()
-            {
+            if effect.is_dead() {
                 self.data.effects.remove(effect_num);
             }
         }
@@ -77,25 +73,18 @@ impl Unit for Ranged
         true
     }
 }
-impl Ranged
-{
-    pub fn Sniper() -> Self
-    {
-        Self
-        {
-            data: UnitData
-            {
-                stats: UnitStats
-                {
+impl Ranged {
+    pub fn Sniper() -> Self {
+        Self {
+            data: UnitData {
+                stats: UnitStats {
                     hp: 65,
                     max_hp: 65,
-                    damage: Power
-                    {
+                    damage: Power {
                         ranged: 40,
                         ..Power::empty()
                     },
-                    defence: Defence
-                    {
+                    defence: Defence {
                         hand_units: 10,
                         ranged_units: 10,
                         ..Defence::empty()
@@ -112,23 +101,17 @@ impl Ranged
             }
         }
     }
-    pub fn Pathfinder() -> Self
-    {
-        Self
-        {
-            data: UnitData
-            {
-                stats: UnitStats
-                {
+    pub fn Pathfinder() -> Self {
+        Self {
+            data: UnitData {
+                stats: UnitStats {
                     hp: 75,
                     max_hp: 75,
-                    damage: Power
-                    {
+                    damage: Power {
                         ranged: 45,
                         ..Power::empty()
                     },
-                    defence: Defence
-                    {
+                    defence: Defence {
                         hand_units: 5,
                         ranged_units: 5,
                         ..Defence::empty()
@@ -145,25 +128,17 @@ impl Ranged
             }
         }
     }
-    pub fn Hunter() -> Self
-    {
-        Self
-        {
-            data: UnitData
-            {
-                stats: UnitStats
-                {
+    pub fn Hunter() -> Self {
+        Self {
+            data: UnitData {
+                stats: UnitStats {
                     hp: 50,
                     max_hp: 50,
-                    damage: Power
-                    {
+                    damage: Power {
                         ranged: 20,
                         ..Power::empty()
                     },
-                    defence: Defence
-                    {
-                        ..Defence::empty()
-                    },
+                    defence: Defence::empty(),
                     moves: 2,
                     max_moves: 2,
                     speed: 16,
@@ -180,32 +155,22 @@ impl Ranged
 }
 
 #[derive(Clone, Debug)]
-pub struct Hand
-{
+pub struct Hand {
     data: UnitData
 }
-impl Unit for Hand
-{
-    fn attack(&mut self, target: &mut dyn Unit) -> bool
-    {
+impl Unit for Hand {
+    fn attack(&mut self, target: &mut dyn Unit) -> bool {
         let stats = self.get_effected_stats();
         println!("Атакую цель {:?}", stats.damage);
         target.being_attacked(&(stats.damage), self) > 0
     }
-    fn get_mut_data(&mut self) -> &mut UnitData
-    {
+    fn get_mut_data(&mut self) -> &mut UnitData {
         &mut self.data
     }
-    fn get_data(&self) -> &UnitData
-    {
-        &self.data
-    }
-    fn get_bonus(&self) -> Box<dyn Bonus> {
-        clone_box(&*self.data.bonus)
-    }
+    fn get_data(&self) -> &UnitData { &self.data }
+    fn get_bonus(&self) -> Box<dyn Bonus> { clone_box(&*self.data.bonus) }
 
-    fn being_attacked(&mut self, damage: &Power, sender: &mut dyn Unit) -> u64
-    {
+    fn being_attacked(&mut self, damage: &Power, sender: &mut dyn Unit) -> u64 {
         let name = self.data.info.name.clone();
         let sender_name = sender.get_data().info.name.clone();
         println!("{} атакует {} ({:?} силы)", sender_name, name, damage);
@@ -219,16 +184,13 @@ impl Unit for Hand
         println!("Стало {:?}", self.get_data().stats.hp);
         corrected_damage_units
     }
-    fn tick(&mut self) -> bool
-    {
+    fn tick(&mut self) -> bool {
         let mut effect: Box<dyn Effect>;
-        for effect_num in 0..self.data.effects.len()
-        {
+        for effect_num in 0..self.data.effects.len() {
             effect = self.data.effects[effect_num].clone();
             effect.tick(self);
             self.data.effects[effect_num].on_tick();
-            if effect.is_dead()
-            {
+            if effect.is_dead() {
                 self.data.effects.remove(effect_num);
             }
         }
@@ -236,14 +198,10 @@ impl Unit for Hand
         true
     }
 }
-impl Hand
-{
-    pub fn Recruit () -> Self
-    {
-        Self
-        {
-            data: UnitData
-            {
+impl Hand {
+    pub fn Recruit () -> Self {
+        Self {
+            data: UnitData {
                 stats: UnitStats {
                     hp: 50,
                     max_hp: 50,
@@ -272,10 +230,8 @@ impl Hand
     }
     pub fn Knight () -> Self
     {
-        Self
-        {
-            data: UnitData
-            {
+        Self {
+            data: UnitData {
                 stats: UnitStats {
                     hp: 110,
                     max_hp: 110,
@@ -309,14 +265,11 @@ impl Hand
 
 
 #[derive(Clone, Debug)]
-pub struct HealMage
-{
+pub struct HealMage {
     data: UnitData
 }
-impl Unit for HealMage
-{
-    fn attack(&mut self, target: &mut dyn Unit) -> bool
-    {
+impl Unit for HealMage {
+    fn attack(&mut self, target: &mut dyn Unit) -> bool {
         let name = &self.data.info.name;
         let target_name = target.get_data().info.name.clone();
         let stats = self.get_effected_stats();
@@ -324,6 +277,7 @@ impl Unit for HealMage
         {return false}
         println!("У {} {:?} жизней", target.get_data().info.name, target.get_effected_stats().hp);
         println!("{} исцеляет цель {} ({:?} магии)", name, target.get_data().info.name, stats.damage.magic);
+        // Following commented code lines is a needed logic, but have problems that should be idiomaticly reviewed
         // if target.heal(stats.damage.magic) && target.has_effect(HealMagic)
         // {
         //     target.add_effect(Box::new(HealMagic { info: EffectInfo { lifetime: 2 }, magic_power: stats.damage.magic }));
@@ -377,12 +331,9 @@ impl Unit for HealMage
         true
     }
 }
-impl HealMage
-{
-    pub fn Maidservant() -> Self
-    {
-        Self
-        {
+impl HealMage {
+    pub fn Maidservant() -> Self {
+        Self {
             data: UnitData {
                 stats: UnitStats {
                     hp: 45,
@@ -411,10 +362,8 @@ impl HealMage
             }
         }
     }
-    pub fn Nun() -> Self
-    {
-        Self
-        {
+    pub fn Nun() -> Self {
+        Self {
             data: UnitData {
                 stats: UnitStats {
                     hp: 55,

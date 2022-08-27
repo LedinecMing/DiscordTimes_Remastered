@@ -1,9 +1,7 @@
-use
-{
+use {
     std::fmt::Debug,
     dyn_clone::DynClone,
-    crate::lib::
-    {
+    crate::lib::{
         effects::effect::Effect,
         items::item::Item,
         bonuses::bonus::Bonus
@@ -11,18 +9,15 @@ use
     derive_more::Add
 };
 
-fn nat<T: PartialOrd + From<u16>>(a: T) -> T
-{
-    if a >= T::from(0)
-    {
+fn nat<T: PartialOrd + From<u16>>(a: T) -> T {
+    if a >= T::from(0) {
         return a;
     }
     0.into()
 }
 
 #[derive(Copy, Clone, Debug, Add)]
-pub struct Defence
-{
+pub struct Defence {
     pub magic_percent: i32,
     pub hand_percent: i32,
     pub ranged_percent: i32,
@@ -30,10 +25,8 @@ pub struct Defence
     pub hand_units: u64,
     pub ranged_units: u64
 }
-impl Defence
-{
-    pub fn empty() -> Self
-    {
+impl Defence {
+    pub fn empty() -> Self {
         Self
         {
             magic_percent: 0,
@@ -46,18 +39,15 @@ impl Defence
     }
 }
 #[derive(Copy, Clone, Debug, Add)]
-pub struct Power
-{
+pub struct Power {
     pub magic: u64,
     pub ranged: u64,
     pub hand: u64
 }
 impl Power
 {
-    pub fn empty() -> Self
-    {
-        Self
-        {
+    pub fn empty() -> Self {
+        Self {
             magic: 0,
             ranged: 0,
             hand: 0

@@ -1,13 +1,20 @@
-use std::fmt::Debug;
-use dyn_clone::DynClone;
-use crate::lib::time::time::Time;
-use crate::lib::units::unit::Power;
-use crate::Unit;
+use {
+    std::fmt::Debug,
+    dyn_clone::DynClone,
+    crate::lib::{
+        time::time::Time,
+        units::{
+            unit::{
+                Unit,
+                Power
+            }
+        }
+    }
+};
 
 
 dyn_clone::clone_trait_object!(Bonus);
-pub trait Bonus : DynClone + Debug
-{
+pub trait Bonus : DynClone + Debug {
     fn on_attacked(&self, damage: Power, receiver: &mut dyn Unit, sender: &mut dyn Unit) -> Power { damage }
     fn on_attacking(&self, damage: Power, receiver: &mut dyn Unit, sender: &mut dyn Unit) -> Power { damage }
     fn on_kill(&self,  receiver: &mut dyn Unit, sender: &mut dyn Unit) -> bool { false }

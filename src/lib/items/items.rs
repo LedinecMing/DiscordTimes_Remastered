@@ -1,11 +1,8 @@
 #![allow(non_snake_case)]
 
-use
-{
-    crate::lib::
-    {
-        effects::
-        {
+use {
+    crate::lib::{
+        effects::{
             effect::EffectInfo,
             effects::ItemEffect,
         },
@@ -15,12 +12,9 @@ use
 };
 
 
-impl Item
-{
-    pub fn CoolSword() -> Self
-    {
-        Self
-        {
+impl Item {
+    pub fn CoolSword() -> Self {
+        Self {
             effect: Box::new(ItemEffect { info: EffectInfo { lifetime: -1 }, additions: UnitStats {
                 damage: Power {
                     magic: 0,
@@ -40,10 +34,8 @@ impl Item
             ..Item::empty()
         }
     }
-    fn empty() -> Self
-    {
-        Self
-        {
+    fn empty() -> Self {
+        Self {
             bonus: None,
             effect: Box::new(ItemEffect { info: EffectInfo { lifetime: -1 }, additions: UnitStats::empty() }),
             info: ItemInfo {
