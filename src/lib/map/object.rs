@@ -74,3 +74,4 @@ pub trait MapObject : DynClone {
     fn on_step(&self) {}
     fn get_data(&self) {}
 }
+

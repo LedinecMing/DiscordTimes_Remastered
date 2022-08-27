@@ -20,3 +20,4 @@ pub struct Item {
     pub effect: Box<dyn Effect>,
     pub info: ItemInfo
 }
+
