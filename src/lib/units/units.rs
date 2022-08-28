@@ -273,12 +273,11 @@ impl Unit for HealMage {
         let name = &self.data.info.name;
         let target_name = target.get_data().info.name.clone();
         let stats = self.get_effected_stats();
-        if target.is_dead()
-        {return false}
+        if target.is_dead() {return false}
         println!("У {} {:?} жизней", target.get_data().info.name, target.get_effected_stats().hp);
         println!("{} исцеляет цель {} ({:?} магии)", name, target.get_data().info.name, stats.damage.magic);
+        target.heal(stats.damage.magic);
         // Following commented code lines is a needed logic, but have problems that should be idiomaticly reviewed
-        // if target.heal(stats.damage.magic) && target.has_effect(HealMagic)
         // {
         //     target.add_effect(Box::new(HealMagic { info: EffectInfo { lifetime: 2 }, magic_power: stats.damage.magic }));
         // }

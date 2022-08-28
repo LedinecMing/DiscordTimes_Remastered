@@ -132,6 +132,60 @@ impl Effect for DisableMagic {
     }
 }
 
+const POISON_PERCENT: u64 = 15;
+#[derive(Copy, Clone, Debug)]
+pub struct Poison {
+    pub info: EffectInfo,
+}
+impl Effect for Poison {
+    fn update_stats(&self, unitstats: UnitStats) -> UnitStats {
+        let mut unitstats = unitstats;
+        unitstats.hp -= unitstats.hp / 100 * POISON_PERCENT;
+        unitstats
+    }
+    fn on_battle_end(&mut self) -> bool {
+        self.info.lifetime = 0;
+        true
+    }
+    fn is_dead(&self) -> bool {
+        self.info.lifetime < 1
+    }
+}
+
+const FIRE_PERCENT: u64 = 10;
+const FIRE_SLOWNESS_PERCENT: u64 = 50;
+#[derive(Copy, Clone, Debug)]
+pub struct Fire {
+    pub info: EffectInfo,
+}
+impl Effect for Fire {
+    fn update_stats(&self, unitstats: UnitStats) -> UnitStats {
+        let mut unitstats = unitstats;
+        unitstats.hp -= unitstats.hp / 100 * FIRE_PERCENT;
+        unitstats.speed -= unitstats.speed / 100 * FIRE_SLOWNESS_PERCENT;
+        unitstats
+    }
+    fn on_tick(&mut self) -> bool {
+        self.info.lifetime -= 1;
+        true
+    }
+    fn on_battle_end(&mut self) -> bool {
+        self.info.lifetime = 0;
+        true
+    }
+    fn is_dead(&self) -> bool {
+        self.info.lifetime < 1
+    }
+}
+impl Default for Fire {
+    fn default() -> Self {
+        Self {
+            info: EffectInfo { lifetime: 5 }
+        }
+    }
+}
+
+
 #[derive(Copy, Clone, Debug)]
 pub struct ItemEffect {
     pub info: EffectInfo,

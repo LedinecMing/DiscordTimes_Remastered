@@ -1,3 +1,4 @@
+
 use {
     crate::lib::{
         bonuses::bonus::Bonus,
@@ -92,14 +93,19 @@ impl Bonus for Block {
     }
 }
 
-const POISON_PERCENT: u64 = 15;
 #[derive(Copy, Clone, Debug)]
-pub struct Poison {}
-impl Bonus for Poison {
-    fn on_tick(&self, unit: &mut dyn Unit) -> bool {
-        let amount = unit.get_data().stats.hp / 100 * POISON_PERCENT;
-        unit.get_mut_data().stats.hp -= amount;
-        true
+pub struct PoisonAttack {}
+impl Bonus for PoisonAttack {
+    fn on_battle_start(&self, unit: &mut dyn Unit) -> bool {
+        unit.add_effect(Box::new(Poison { info: EffectInfo { lifetime: 1 } }))
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct FireAttack {}
+impl Bonus for FireAttack {
+    fn on_battle_start(&self, unit: &mut dyn Unit) -> bool {
+        unit.add_effect(Box::new(Fire::default()))
     }
 }
 
