@@ -6,9 +6,18 @@ use {
     }
 };
 
+#[derive(PartialEq)]
+pub enum EffectKind {
+    MageCurse,
+    MageSupport,
+    Bonus,
+    Item,
+    Poison,
+    Fire
+}
 
 dyn_clone::clone_trait_object!(Effect);
-pub trait Effect : DynClone + Debug     {
+pub trait Effect : DynClone + Debug {
     fn update_stats(&self, unitstats: UnitStats) -> UnitStats;
     fn on_tick(&mut self) -> bool { false }
     fn on_battle_end(&mut self) -> bool { false }
@@ -17,7 +26,9 @@ pub trait Effect : DynClone + Debug     {
         true
     }
     fn is_dead(&self) -> bool { false }
-}
+    fn get_kind(&self) -> EffectKind {
+        EffectKind::Bonus
+}   }
 
 
 #[derive(PartialEq, Copy, Clone, Debug)]

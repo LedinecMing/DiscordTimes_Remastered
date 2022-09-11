@@ -1,13 +1,7 @@
-use {
-    std::{
-        cell::RefCell,
-        rc::Rc
-    },
-    crate::lib::{
-        items::item::Item,
-        battle::troop::Troop
-    },
-    crate::MutRc
+use crate::lib:: {
+    items::item::Item,
+    battle::troop::Troop,
+    mutrc::MutRc
 };
 
 
@@ -19,32 +13,34 @@ pub struct ArmyStats {
 }
 #[derive(Debug)]
 pub struct Army {
-    pub troops: Vec<MutRc<Option<Troop>>>,
+    pub troops: Vec<TroopType>,
     pub stats: ArmyStats,
-    pub inventory: Vec<Item>
+    pub inventory: Vec<Item>,
+    pub pos: [usize; 2]
 }
+pub type TroopType = MutRc<Option<Troop>>;
 const MAX_TROOPS: usize = 12;
 impl Army {
-    pub fn add_troop(&mut self, troop: Troop) {
-        let index = self.troops.iter().position(|el| el.borrow().is_none() );
+    pub fn add_troop(&mut self, troop: Troop) -> Result<(), ()> {
+        let index = self.troops.iter().position(|el| el.borrow().as_ref().is_none() );
         match index {
-            Some(index) => self.troops[index] = troop.into(),
-            None => if self.troops.len() + 1 < MAX_TROOPS {
-                self.troops.push(troop.into())
-            }
-        }
+            Some(index) => self.troops[index] = MutRc::new(Some(troop)),
+            None => match self.troops.len() + 1 < MAX_TROOPS {
+                true => self.troops.push(MutRc::new(Some(troop))),
+                false => return Err(())
+            }   }
+        Ok(())
     }
     pub fn add_item(&mut self, item: Item) {
         self.inventory.push(item)
     }
 
-    pub fn get_troop(&self, pos: usize) -> Option<MutRc<Option<Troop>>> {
+    pub fn get_troop(&self, pos: usize) -> Option<TroopType> {
         return match self.troops.get(pos) {
             Some(probably_troop_ref) => {
                 if probably_troop_ref.borrow().as_ref().is_some() {
-                    return Some(Rc::clone(probably_troop_ref))
-                }
-                else {
+                    return Some(probably_troop_ref.clone())
+                } else {
                     println!("В этом месте никого нет");
                     None
                 }
@@ -52,23 +48,16 @@ impl Army {
             None => {
                 println!("Вы вышли за границы клеточек вашей армии");
                 return None
-            }
-        }
-    }
+    }   }   }
 
-    pub fn new(mut troops: Vec<MutRc<Option<Troop>>>, stats: ArmyStats, inventory: Vec<Item>) -> Self {
-        for _ in troops.len()..MAX_TROOPS {
-            troops.push(Rc::new(RefCell::new(None)));
+    pub fn new(troops: Vec<TroopType>, stats: ArmyStats, inventory: Vec<Item>, pos: [usize; 2]) -> Self {
+        let mut fixed_troops = troops;
+        for _ in fixed_troops.len()..MAX_TROOPS {
+            fixed_troops.push(MutRc::new(None));
         };
         Self {
-            troops,
+            troops: fixed_troops,
             stats,
-            inventory
-        }
-    }
-}
-impl From<Army> for MutRc<Army> {
-    fn from(army: Army) -> Self {
-        Rc::new(RefCell::new(army))
-    }
-}
+            inventory,
+            pos
+}   }   }

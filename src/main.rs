@@ -1,65 +1,33 @@
-extern crate core;
-
 mod lib;
 
 
 use {
     std:: {
         collections::HashMap,
-        cell::RefCell,
-        rc::Rc,
         num::ParseIntError,
         io:: {
-            prelude::*,
-            stdin, stdout,
-            Stdout, Stdin
-        }
-    },
+            stdout,
+            Stdout
+    }   },
     lib:: {
         units::units::*,
-        units::unit::{Unit, UnitData, UnitStats},
-        battle::battlefield::BattleField,
+        units::unit::{Unit},
         battle::army::{Army, ArmyStats},
         battle::troop::Troop,
-        items::item::Item,
         time::time::Time,
+        console::*,
+        mutrc::MutRc,
         map::{
             map::{GameMap, MAP_SIZE},
             tile::Tile
-        }
-    }
-};
+}   }   };
 
 
-fn pause() {
-    let mut stdin = stdin();
-    let mut stdout = stdout();
-
-    // We want the cursor to stay at the end of the line, so we print without a newline and flush manually.
-    write!(stdout, "Press any key to continue...").unwrap();
-    stdout.flush().unwrap();
-
-    // Read a single byte and discard
-    let _ = stdin.read(&mut [0u8]).unwrap();
+fn insert_unit(hashmap: &mut HashMap<String, Box<dyn Unit>>, unit: Box<dyn Unit>) {
+    hashmap.insert(unit.get_info().name.clone(), unit);
 }
 
-fn input(your_io: &mut Stdout, input_string: &str) -> String {
-    const START: usize = 0;
-    your_io.write(input_string.as_ref()).unwrap();
-    your_io.flush().unwrap();
-    let mut input = "".to_string();
-    stdin().read_line(&mut input).unwrap();
-    let end = input.chars().count() - 1;
-    input.chars().take(end).skip(START).collect()
-}
-
-fn insert_unit(hashmap: &mut HashMap<String, Box<dyn Unit>>, unit: Box<dyn Unit>)
-{
-    hashmap.insert(unit.get_data().info.name.clone(), unit);
-}
-
-fn add_character(your_io: &mut Stdout, army: &mut Army, characters: &HashMap<String, Box<dyn Unit>>)
-{
+fn add_character(your_io: &mut Stdout, army: &mut Army, characters: &HashMap<String, Box<dyn Unit>>) {
     println!("Хочешь добавить больше юнитов? Легко, напиши его название, а если захочешь остановиться пиши СТОП");
     characters.keys().for_each(|key| print!("{} ", key));
     println!();
@@ -69,23 +37,19 @@ fn add_character(your_io: &mut Stdout, army: &mut Army, characters: &HashMap<Str
             println!("Остановка");
             break
         }
-        if characters.contains_key(ch_string) {
-            army.add_troop(Troop {
-                unit: characters.get(ch_string).unwrap().clone(),
-                ..Troop::empty()
-            });
-            println!("Добавлен персонаж {} в вашу армию!", ch_string);
-        }
-        else {
-            println!("Это какая-то несуразица, попробуйте ещё разок!");
-        }
-    }
-}
+        match characters.get(ch_string) {
+            Some(character) => match army.add_troop(Troop { unit: character.clone(), ..Troop::empty() }) {
+                Ok(_) => println!("Добавлен персонаж {} в вашу армию!", ch_string),
+                Err(_) => {
+                    println!("Достигнут предел по количеству юнитов в отряде");
+                    break
+            }   }
+            None => println!("Это какая-то несуразица, попробуйте ещё разок!")
+}   }   }
 
-type MutRc<T> = Rc<RefCell<T>>;
 fn main() {
     let gamemap = GameMap {
-        time: Time{minutes: 0},
+        time: Time {minutes: 0},
         tilemap: [[Tile {walkspeed: 1}; MAP_SIZE]; MAP_SIZE],
         objectmap: [[None; MAP_SIZE]; MAP_SIZE],
         decomap: [[vec![]; MAP_SIZE]; MAP_SIZE],
@@ -111,14 +75,13 @@ fn main() {
         playable_characters.insert("Архимаг".into(), Box::new(DisablerMage::Archimage()));
         let mut ch_string: &str = &*input(&mut mio, "Тип персонажа(Рыцарь, Егерь, Архимаг): ");
 
-        if playable_characters.contains_key(ch_string)
+        match playable_characters.contains_key(ch_string)
         {
-            character = playable_characters.get(ch_string).unwrap().clone();
-        } else {
-            character = Box::new(Hand::Knight());
-            println!("Игрок ошибся: {:?}", ch_string);
-        }
-    }
+            true => character = playable_characters.get(ch_string).unwrap().clone(),
+            _ => {
+                character = Box::new(Hand::Knight());
+                println!("Игрок ошибся: {:?}", ch_string);
+    }   }   }
     let ch_name = input(&mut mio, "Имя персонажа: ");
 
     let mut army = Army::new(
@@ -129,12 +92,9 @@ fn main() {
             unit: character,
             ..Troop::empty()
         }.into()],
-        ArmyStats {
-            gold: 0,
-            mana: 0,
-            army_name
-        },
-        vec![]
+        ArmyStats { gold: 0, mana: 0, army_name },
+        vec![],
+        [0, 0]
     );
     println!("Вы можете написать Армия => [Статистика, Бойцы, Добавить персонажа, Статистика персонажа, Атаковать, Справка], Справка, СТОП");
     loop {
@@ -150,9 +110,8 @@ fn main() {
                             army.troops.iter().for_each(
                                 |troop| {
                                     print!(" {} |",
-                                           match troop.borrow().as_ref()
-                                           {
-                                               Some(troop) => troop.unit.get_data().info.name.clone(),
+                                           match troop.borrow().as_ref() {
+                                               Some(troop) => troop.unit.get_info().name.clone(),
                                                None => "Пусто".into()
                                            })
                                 });
@@ -165,77 +124,40 @@ fn main() {
                             match input(&mut mio, "Введите номер ячейки вашего персонажа:").parse::<usize>() {
                                 Ok(value) => {
                                     match army.get_troop(value - 1) {
-                                        Some(ref_troop) => {
-                                            let my_borrowed = ref_troop.borrow();
-                                            let troop = my_borrowed.as_ref().unwrap();
-                                            let custom_name = match &troop.custom_name {
-                                                Some(name) => name.clone(),
-                                                None => "".into()
-                                            };
-                                            let unitdata: &UnitData = troop.unit.get_data();
-                                            let unitstats: &UnitStats = &unitdata.stats;
-                                            let unit_name = unitdata.info.name.clone();
-                                            let name = format!("{}-{}", custom_name, unit_name);
-                                            println!("| {name} |\n| {hp}/{maxhp}ХП ({is_dead}) |\n| {hand_attack} ближнего урона; {ranged_attack} дальнего урона; {magic_attack} магии |\n| {hand_def} ближней защиты.-{ranged_def} дальней защиты. |\n| Защита от магии: {magic_def_percent}%|\n|Регенерация {regen_percent}% |\n| Вампиризм {vamp_percent}% |\n| {speed} инициативы |\n| {moves}/{max_moves} ходов |", name=name,
-                                                     hp = unitstats.hp,
-                                                     maxhp = unitstats.max_hp,
-                                                     is_dead = match troop.unit.is_dead() {
-                                                         true => "мёртв.",
-                                                         false => "живой"
-                                                     },
-                                                     hand_attack = unitstats.damage.hand,
-                                                     ranged_attack = unitstats.damage.ranged,
-                                                     magic_attack = unitstats.damage.magic,
-                                                     hand_def = unitstats.defence.hand_units,
-                                                     ranged_def = unitstats.defence.ranged_units,
-                                                     magic_def_percent = unitstats.defence.magic_percent,
-                                                     regen_percent = unitstats.regen,
-                                                     vamp_percent = unitstats.vamp,
-                                                     speed = unitstats.speed,
-                                                     moves = unitstats.moves,
-                                                     max_moves = unitstats.max_moves
-                                            );
-                                        }
-                                        None => {}
-                                    }
-                                }
-                                Err(error) => println!("Милорд, это не число!")
-                            }
-                        }
+                                        Some(troop) => {
+                                            let borrowed = troop.borrow();
+                                            let troop = borrowed.as_ref().unwrap();
+                                            println!("{}", troop);
+                                        },
+                                        _ => break
+                                    }   }
+                                Err(_) => println!("Милорд, это не число!")
+                        }   }
                         "Атаковать" => {
-                            let inputed = &*input(&mut mio, "Напишите номер ячейки персонажа, который и ударит и номер персонажа, которого будут атаковать через пробел:");
-                            let probably_values : Vec<Result<usize, ParseIntError>> = inputed.split(" ").take(2).collect::<Vec<&str>>().iter().map(|&el| el.parse::<usize>()).collect();
+                            let inputed = &*input(&mut mio, "Напишите номер ячейки персонажа, который ударит и номер персонажа, которого будут атаковать через пробел:");
+                            let probably_values : Vec<Result<usize, ParseIntError>> = inputed.split(" ").take(2).map(|el| el.parse::<usize>()).collect();
                             match probably_values.iter().all(|el| el.is_ok()) {
                                 true => {
                                     let numbers: Vec<usize> = probably_values.iter().map(|el| *el.as_ref().unwrap() - 1).collect();
                                     match numbers.iter().map(|&el| army.troops.get(el)).all(|el| el.is_some()) {
                                         true => {
                                             if numbers[0] == numbers[1] {
-                                                println!("Нельзя ударить самого себя, глупышка, это статья!");
-                                                break
+                                                println!("Суицид не выход");
+                                                break;
                                             }
-                                            let mut troop0 = match army.get_troop(numbers[0]) {
-                                                Some(troop) => troop,
-                                                None => {
-                                                    break
-                                                }
-                                            };
-                                            let mut troop1 = match army.get_troop(numbers[1]) {
-                                                Some(troop) => troop,
-                                                None => {
-                                                    break
-                                                }
-                                            };
-                                            troop0.borrow_mut().as_mut().unwrap().unit.attack(&mut *troop1.borrow_mut().as_mut().unwrap().unit);
-                                        }
-                                        false => println!("Неправильные номера!")
-                                    }
-                                }
-                                false => {
-                                    println!("Это не цифры!");
-                                }
-                            }
-                        }
+                                            match numbers.iter().all(|num| army.get_troop(*num).is_some()) {
+                                                true => {
+                                                    let troop0 = army.get_troop(numbers[0]).unwrap();
+                                                    let troop1 = army.get_troop(numbers[1]).unwrap();
+                                                    troop0.borrow_mut().as_mut().unwrap().unit.attack(
+                                                        &mut *troop1.borrow_mut().as_mut().unwrap().unit);
+                                                },
+                                                false => println!("Вы ошиблись, попробуйте снова!")
+                                        }   },
+                                        false => println!("Ошибка!"),
+                                }   },
+                                false => print!("Это не целые числа!")
+                        }   }
                         "НАЗАД" => {
                             break
                         }
@@ -243,17 +165,10 @@ fn main() {
                             println!("Вы можете написать Статистика, Бойцы, Добавить персонажа, Статистика персонажа, Атаковать, СТОП");
                         }
                         T => println!("Ничего не понял в этих ваших \"{}\"!", T)
-                    }
-                }
-            }
-            "Справка" => {
-                println!("Вы можете написать Армия => [Статистика, Бойцы, Добавить персонажа, Статистика персонажа, Атаковать, Справка], Справка, СТОП");
-            }
-            "СТОП" => {
-                break
-            }
+            }   }   }
+            "Справка" => println!("Вы можете написать Армия => [Статистика, Бойцы, Добавить персонажа, Статистика персонажа, Атаковать, Справка], Справка, СТОП"),
+            "СТОП" => break,
             _ => println!("Ничего не понял!")
-        }
-    }
+        }   }
     pause();
 }

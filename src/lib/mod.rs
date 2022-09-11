@@ -6,3 +6,5 @@ pub mod bonuses;
 pub mod map;
 pub mod time;
 pub mod console;
+pub mod mutrc;
+pub mod math;
