@@ -5,13 +5,13 @@ use crate::lib:: {
 };
 
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ArmyStats {
     pub gold: u64,
     pub mana: u64,
     pub army_name: String
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Army {
     pub troops: Vec<TroopType>,
     pub stats: ArmyStats,

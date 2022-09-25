@@ -8,7 +8,6 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "dyn-clone",
- "polonius-the-crab",
  "rand",
 ]
 
@@ -59,12 +58,6 @@ name = "libc"
 version = "0.2.129"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64de3cc433455c14174d42e554d4027ee631c4d046d43e3ecc6efc4636cdc7a7"
-
-[[package]]
-name = "polonius-the-crab"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0119ad75060c93b2017796396280ab9c1870738bf3b66a8cb20deb3c9075426"
 
 [[package]]
 name = "ppv-lite86"
@@ -137,9 +130,9 @@ checksum = "a2333e6df6d6598f2b1974829f853c2b4c5f4a6e503c10af918081aa6f8564e1"
 
 [[package]]
 name = "syn"
-version = "1.0.98"
+version = "1.0.99"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c50aef8a904de4c23c788f104b7dddc7d6f79c647c7c8ce4cc8f73eb0ca773dd"
+checksum = "58dbef6ec655055e20b86b15a8cc6d439cca19b667537ac6a1369572d151ab13"
 dependencies = [
  "proc-macro2",
  "quote",

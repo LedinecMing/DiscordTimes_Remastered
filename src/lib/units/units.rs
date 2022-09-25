@@ -8,7 +8,7 @@ use {
         bonuses::bonuses::*,
         effects::{
             effect::{Effect, EffectInfo, EffectKind},
-            effects::{DisableMagic, HealMagic}
+            effects::{DisableMagic, HealMagic, AttackMagic}
 }   }   };
 
 
@@ -160,7 +160,9 @@ impl Unit for Hand {
     fn attack(&mut self, target: &mut dyn Unit) -> bool {
         let stats = self.get_effected_stats();
         println!("Атакую цель {:?}", stats.damage);
-        target.being_attacked(&(stats.damage), self) > 0
+        let value = target.being_attacked(&(stats.damage), self);
+        if target.is_dead() { self.get_bonus().on_kill(target, self); }
+        value > 0
     }
     fn get_mut_data(&mut self) -> &mut UnitData {
         &mut self.data
@@ -383,7 +385,14 @@ impl Unit for AttackMage {
     fn attack(&mut self, target: &mut dyn Unit) -> bool {
         let stats = self.get_effected_stats();
         println!("Атакую цель {:?}", stats.damage);
-        target.being_attacked(&(stats.damage), self) > 0
+        if !target.has_effect_kind(EffectKind::MageCurse) {
+            target.add_effect(Box::new(AttackMagic { info: EffectInfo { lifetime: 1 },
+                magic_power: target.correct_damage(&self.data.stats.damage).magic}));
+            return false;
+        }
+        let value = target.being_attacked(&(stats.damage), self);
+        if target.is_dead() { self.get_bonus().on_kill(target, self); }
+        value > 0
     }
     fn get_mut_data(&mut self) -> &mut UnitData {
         &mut self.data
@@ -434,7 +443,9 @@ impl Unit for DisablerMage {
                 magic_power: target.correct_damage(&self.data.stats.damage).magic}));
             return false;
         }
-        target.being_attacked(&(stats.damage), self) > 0
+        let value = target.being_attacked(&(stats.damage), self);
+        if target.is_dead() { self.get_bonus().on_kill(target, self); }
+        value > 0
     }
     fn get_mut_data(&mut self) -> &mut UnitData {
         &mut self.data

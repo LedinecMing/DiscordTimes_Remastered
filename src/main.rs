@@ -1,3 +1,4 @@
+#![feature(slice_flatten)]
 mod lib;
 
 
@@ -5,9 +6,10 @@ use {
     std:: {
         collections::HashMap,
         num::ParseIntError,
+        fmt::Write,
         io:: {
             stdout,
-            Stdout
+            Stdout,
     }   },
     lib:: {
         units::units::*,
@@ -19,12 +21,25 @@ use {
         mutrc::MutRc,
         map::{
             map::{GameMap, MAP_SIZE},
-            tile::Tile
+            tile::Tile,
+            object::MapObject
 }   }   };
 
 
-fn insert_unit(hashmap: &mut HashMap<String, Box<dyn Unit>>, unit: Box<dyn Unit>) {
-    hashmap.insert(unit.get_info().name.clone(), unit);
+fn register_units() -> HashMap<String, Box<dyn Unit>>) {
+    let units: [Box<dyn Unit>;8] = [
+        Box::new(Hand::Knight()),
+        Box::new(Hand::Recruit()),
+        Box::new(Ranged::Sniper()),
+        Box::new(Ranged::Hunter()),
+        Box::new(Ranged::Pathfinder()),
+        Box::new(HealMage::Maidservant()),
+        Box::new(HealMage::Nun()),
+        Box::new(DisablerMage::Archimage()),
+    ];
+    units.into_iter().for_each(|unit| {
+        hashmap.insert(unit.get_info().name.clone(), unit;
+    })
 }
 
 fn add_character(your_io: &mut Stdout, army: &mut Army, characters: &HashMap<String, Box<dyn Unit>>) {
@@ -48,24 +63,15 @@ fn add_character(your_io: &mut Stdout, army: &mut Army, characters: &HashMap<Str
 }   }   }
 
 fn main() {
-    let gamemap = GameMap {
+    let mut gamemap = GameMap {
         time: Time {minutes: 0},
-        tilemap: [[Tile {walkspeed: 1}; MAP_SIZE]; MAP_SIZE],
-        objectmap: [[None; MAP_SIZE]; MAP_SIZE],
-        decomap: [[vec![]; MAP_SIZE]; MAP_SIZE],
+        tilemap: [[Tile::new(1, '#'); MAP_SIZE]; MAP_SIZE],
+        decomap: [[None; MAP_SIZE]; MAP_SIZE],
         armys: vec![]
     };
     let mut mio = stdout();
     let army_name = input(&mut mio, "Название вашей армии: ");
-    let mut characters: HashMap<String, Box<dyn Unit>> = HashMap::new();
-    insert_unit(&mut characters, Box::new(Hand::Knight()));
-    insert_unit(&mut characters, Box::new(Hand::Recruit()));
-    insert_unit(&mut characters, Box::new(Ranged::Sniper()));
-    insert_unit(&mut characters, Box::new(Ranged::Hunter()));
-    insert_unit(&mut characters, Box::new(Ranged::Pathfinder()));
-    insert_unit(&mut characters, Box::new(HealMage::Maidservant()));
-    insert_unit(&mut characters, Box::new(HealMage::Nun()));
-    insert_unit(&mut characters, Box::new(DisablerMage::Archimage()));
+    let mut characters: HashMap<String, Box<dyn Unit>> = register_units(&mut characters);
 
     let character: Box<dyn Unit>;
     {
@@ -75,8 +81,7 @@ fn main() {
         playable_characters.insert("Архимаг".into(), Box::new(DisablerMage::Archimage()));
         let mut ch_string: &str = &*input(&mut mio, "Тип персонажа(Рыцарь, Егерь, Архимаг): ");
 
-        match playable_characters.contains_key(ch_string)
-        {
+        match playable_characters.contains_key(ch_string) {
             true => character = playable_characters.get(ch_string).unwrap().clone(),
             _ => {
                 character = Box::new(Hand::Knight());
@@ -96,12 +101,14 @@ fn main() {
         vec![],
         [0, 0]
     );
+    gamemap.armys.push(army);
     println!("Вы можете написать Армия => [Статистика, Бойцы, Добавить персонажа, Статистика персонажа, Атаковать, Справка], Справка, СТОП");
     loop {
         let user_choice = input(&mut mio, "Что делать? ");
         match &*user_choice {
             "Армия" => {
                 loop {
+                    let army = &mut gamemap.armys[0];
                     match &*input(&mut mio, "Что желаете делать?") {
                         "Статистика" => {
                             println!("Ваша армия \"{}\"| Золото⛀⛁⛃⛂: {}⛃ | Мана✧: {}✧ |", army.stats.army_name, army.stats.gold, army.stats.mana);
@@ -118,7 +125,7 @@ fn main() {
                             println!();
                         }
                         "Добавить персонажа" => {
-                            add_character(&mut mio, &mut army, &characters)
+                            add_character(&mut mio, army, &characters)
                         }
                         "Статистика персонажа" => {
                             match input(&mut mio, "Введите номер ячейки вашего персонажа:").parse::<usize>() {
@@ -145,14 +152,12 @@ fn main() {
                                                 println!("Суицид не выход");
                                                 break;
                                             }
-                                            match numbers.iter().all(|num| army.get_troop(*num).is_some()) {
-                                                true => {
-                                                    let troop0 = army.get_troop(numbers[0]).unwrap();
-                                                    let troop1 = army.get_troop(numbers[1]).unwrap();
+                                            match (army.get_troop(numbers[0]), army.get_troop(numbers[1])) {
+                                                (Some(troop0), Some(troop1)) => {
                                                     troop0.borrow_mut().as_mut().unwrap().unit.attack(
                                                         &mut *troop1.borrow_mut().as_mut().unwrap().unit);
                                                 },
-                                                false => println!("Вы ошиблись, попробуйте снова!")
+                                                _ => println!("Вы ошиблись, попробуйте снова!")
                                         }   },
                                         false => println!("Ошибка!"),
                                 }   },
@@ -166,6 +171,24 @@ fn main() {
                         }
                         T => println!("Ничего не понял в этих ваших \"{}\"!", T)
             }   }   }
+            "Карта" => {
+                match &*input(&mut mio, "") {
+                    "Показать" => {
+                        let tilemap_ref = gamemap.tilemap.flatten();
+                        let decomap_ref = gamemap.decomap.flatten();
+                        let mut out = String::new();
+                        for i in 0..MAP_SIZE.pow(2) {
+                            if i % MAP_SIZE == 0 { write!(&mut out, "\n").unwrap(); }
+                            if let Some(deco) = decomap_ref[i] {
+                                write!(&mut out, "{}", deco.get_symbol()).unwrap();
+                                continue;
+                            };
+                            write!(&mut out, "{}", tilemap_ref[i].get_symbol()).unwrap();
+                        }
+                        println!("{}", out);
+                    }
+                    _ => {}
+            }   }
             "Справка" => println!("Вы можете написать Армия => [Статистика, Бойцы, Добавить персонажа, Статистика персонажа, Атаковать, Справка], Справка, СТОП"),
             "СТОП" => break,
             _ => println!("Ничего не понял!")

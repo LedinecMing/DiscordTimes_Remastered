@@ -13,17 +13,18 @@ use {
     crate::MutRc
 };
 
-
+#[derive(Clone)]
 pub struct MapObjectData {
-    pub event: Option<Event>,
+    pub event: Option<Vec<Event>>,
     pub market: Option<Market>,
     pub recruitment: Option<Recruitment>,
-    pub owner: MutRc<Army>
+    pub owner: Option<MutRc<Army>>
 }
 
 const RECRUIT_COST: f64 = 2.0;
+#[derive(Clone)]
 pub struct Market {
-    pub itemcost_range: [i32; 2],
+    pub itemcost_range: [u64; 2],
     pub items: Vec<Item>,
     pub max_items: usize
 }
@@ -35,7 +36,7 @@ impl Market {
     }
     fn buy(&mut self, buyer: &mut Army, item_num: usize) {
         if self.can_buy(buyer, item_num) {
-            buyer.stats.gold -= self.get_item_cost(item_num);
+            buyer.stats.gold = buyer.stats.gold.saturating_sub(self.get_item_cost(item_num));
             buyer.add_item(self.items.remove(item_num));
         }
     }
@@ -50,10 +51,12 @@ impl Market {
         self.items.get(item_num).expect("Trying to get item at unknown place").info.cost
     }
 }
+#[derive(Clone)]
 pub struct RecruitUnit {
     pub unit: Box<dyn Unit>,
     pub count: usize
 }
+#[derive(Clone)]
 pub struct Recruitment {
     pub units: Vec<RecruitUnit>,
     pub cost_modify: f64,
@@ -74,6 +77,14 @@ impl Recruitment {
 dyn_clone::clone_trait_object!(MapObject);
 pub trait MapObject : DynClone {
     fn on_step(&self) {}
-    fn get_data(&self) {}
+    fn get_data(&self) -> MapObjectData;
 }
 
+#[derive(Clone)]
+struct Building {
+    data: MapObjectData
+}
+impl MapObject for Building {
+    fn get_data(&self) -> MapObjectData {
+        self.data.clone()
+}   }

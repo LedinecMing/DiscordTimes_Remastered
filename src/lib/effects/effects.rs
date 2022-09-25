@@ -106,11 +106,46 @@ impl Effect for DisableMagic {
         if self.magic_power < 20 {
             return unitstats
         }
-        unitstats.moves -= 1 + self.magic_power / 50;
+        unitstats.moves = unitstats.moves.saturating_sub(1 + self.magic_power / 50);
         unitstats
     }
     fn on_tick(&mut self) -> bool {
         self.info.lifetime -= 1;
+        true
+    }
+    fn on_battle_end(&mut self) -> bool {
+        self.info.lifetime = 0;
+        true
+    }
+    fn is_dead(&self) -> bool { self.info.lifetime < 1 }
+    fn get_kind(&self) -> EffectKind { EffectKind::MageCurse }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct AttackMagic {
+    pub info: EffectInfo,
+    pub magic_power: u64
+}
+impl Default for AttackMagic {
+    fn default() -> Self {
+        Self {
+            info: EffectInfo {lifetime: 1},
+            magic_power: 15
+}   }   }
+impl Effect for AttackMagic {
+    fn update_stats(&self, mut unitstats: UnitStats) -> UnitStats {
+        unitstats.damage.hand = unitstats.damage.hand.saturating_sub(1 + self.magic_power / 10);
+        unitstats.damage.ranged = unitstats.damage.ranged.saturating_sub(1 + self.magic_power / 10);
+        unitstats.defence.hand_units = unitstats.defence.hand_units.saturating_sub(1 + self.magic_power / 5);
+        unitstats.defence.ranged_units = unitstats.defence.ranged_units.saturating_sub(1 + self.magic_power / 5);
+        unitstats
+    }
+    fn on_tick(&mut self) -> bool {
+        self.info.lifetime -= 1;
+        true
+    }
+    fn on_battle_end(&mut self) -> bool {
+        self.info.lifetime = 0;
         true
     }
     fn is_dead(&self) -> bool { self.info.lifetime < 1 }

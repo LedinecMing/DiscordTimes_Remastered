@@ -7,10 +7,8 @@ use {
             effects::*
         },
         units::unit::{Defence, Power, UnitStats, Unit}
-    }
-};
+}   };
 use crate::lib::effects::effect::EffectKind;
-use crate::Time;
 
 #[derive(Copy, Clone, Debug)]
 pub struct DefencePiercing {}
