@@ -26,8 +26,8 @@ impl Item {
                 ..UnitStats::empty()
             } }),
             info: ItemInfo {
-                name: "Cool Sword".to_string(),
-                description: "really cool".to_string(),
+                name: "Cool Sword",
+                description: "really cool",
                 cost: 100,
                 sells: true
             },
@@ -39,8 +39,8 @@ impl Item {
             bonus: None,
             effect: Box::new(ItemEffect { info: EffectInfo { lifetime: -1 }, additions: UnitStats::empty() }),
             info: ItemInfo {
-                name: "".to_string(),
-                description: "".to_string(),
+                name: "",
+                description: "",
                 cost: 0,
                 sells: false
             }

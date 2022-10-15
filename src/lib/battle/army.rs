@@ -41,12 +41,10 @@ impl Army {
                 if probably_troop_ref.borrow().as_ref().is_some() {
                     return Some(probably_troop_ref.clone())
                 } else {
-                    println!("В этом месте никого нет");
                     None
                 }
             }
             None => {
-                println!("Вы вышли за границы клеточек вашей армии");
                 return None
     }   }   }
 

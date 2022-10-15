@@ -7,8 +7,9 @@ use {
     crate::lib:: {
         battle::army::{Army, TroopType},
         mutrc::MutRc,
+        bonuses::bonuses::NoBonus,
         units:: {
-            unit::Unit,
+            unit::*,
             units::Hand,
 }  }  };
 
@@ -40,7 +41,13 @@ impl Troop {
             is_free: false,
             is_main: false,
             custom_name: None,
-            unit: Box::new(Hand::Recruit())
+            unit: Box::new(Hand::new(UnitData {
+                stats: UnitStats::empty(),
+                info: UnitInfo::empty(),
+                inventory: UnitInventory::empty(),
+                bonus: Box::new(NoBonus {}),
+                effects: vec![]
+            }))
 }   }   }
 impl Display for Troop {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

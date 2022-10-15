@@ -5,6 +5,7 @@ use crate::lib::{
         unit::UnitStats,
         unit::Unit
 }   };
+use crate::lib::math::Percent;
 
 
 #[derive(Copy, Clone, Debug)]
@@ -152,7 +153,7 @@ impl Effect for AttackMagic {
     fn get_kind(&self) -> EffectKind { EffectKind::MageCurse }
 }
 
-const POISON_PERCENT: u64 = 15;
+const POISON_PERCENT: Percent = Percent::const_new(15);
 #[derive(Copy, Clone, Debug)]
 pub struct Poison {
     pub info: EffectInfo,
@@ -160,7 +161,7 @@ pub struct Poison {
 impl Effect for Poison {
     fn update_stats(&self, unitstats: UnitStats) -> UnitStats {
         let mut unitstats = unitstats;
-        unitstats.hp -= percent(&unitstats.hp, POISON_PERCENT);
+        unitstats.hp -= POISON_PERCENT.calc(unitstats.hp);
         unitstats
     }
     fn on_battle_end(&mut self) -> bool {
@@ -176,8 +177,8 @@ impl Default for Poison {
             info: EffectInfo { lifetime: -1 }
 }   }   }
 
-const FIRE_PERCENT: u64 = 10;
-const FIRE_SLOWNESS_PERCENT: u64 = 10;
+const FIRE_PERCENT: Percent = Percent::const_new(10);
+const FIRE_SLOWNESS_PERCENT: Percent = Percent::const_new(10);
 #[derive(Copy, Clone, Debug)]
 pub struct Fire {
     pub info: EffectInfo,
@@ -185,8 +186,8 @@ pub struct Fire {
 impl Effect for Fire {
     fn update_stats(&self, unitstats: UnitStats) -> UnitStats {
         let mut unitstats = unitstats;
-        unitstats.hp -= percent(&unitstats.hp, FIRE_PERCENT);
-        unitstats.speed -= percent(&unitstats.speed, FIRE_SLOWNESS_PERCENT);
+        unitstats.hp -= FIRE_PERCENT.calc(unitstats.hp);
+        unitstats.speed -= FIRE_SLOWNESS_PERCENT.calc(unitstats.speed);
         unitstats
     }
     fn on_tick(&mut self) -> bool {
@@ -217,4 +218,21 @@ impl Effect for ItemEffect {
         unitstats + self.additions
     }
     fn get_kind(&self) -> EffectKind { EffectKind::Item }
+}
+
+
+#[derive(Copy, Clone, Debug)]
+pub struct ToEndEffect {
+    pub info: EffectInfo,
+    pub additions: UnitStats
+}
+impl Effect for ToEndEffect {
+    fn update_stats(&self, unitstats: UnitStats) -> UnitStats {
+        unitstats + self.additions
+    }
+    fn on_battle_end(&mut self) -> bool {
+        self.info.lifetime = 0;
+        true
+    }
+    fn get_kind(&self) -> EffectKind { EffectKind::Bonus }
 }

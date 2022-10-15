@@ -7,10 +7,10 @@ use {
         },
         items::item::Item,
         units::unit::Unit,
+        mutrc::MutRc,
         map::event::Event,
     },
     rand::seq::SliceRandom,
-    crate::MutRc
 };
 
 #[derive(Clone)]

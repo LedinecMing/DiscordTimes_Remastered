@@ -9,8 +9,8 @@ use {
 
 #[derive(Clone, Debug)]
 pub struct ItemInfo {
-    pub name: String,
-    pub description: String,
+    pub name: &'static str,
+    pub description: &'static str,
     pub cost: u64,
     pub sells: bool
 }

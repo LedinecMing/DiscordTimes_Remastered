@@ -6,14 +6,17 @@ use {
         items::item::Item,
         bonuses::bonus::Bonus
     },
-    derive_more::{Add, Sub}
+    derive_more::{Add, Sub, BitOr},
+    math::Percent,
 };
+use crate::lib::math;
+use crate::lib::units::unit::MagicType::NoMagic;
 
 #[derive(Copy, Clone, Debug, Add, Sub)]
 pub struct Defence {
-    pub magic_percent: i32,
-    pub hand_percent: i32,
-    pub ranged_percent: i32,
+    pub magic_percent: Percent,
+    pub hand_percent: Percent,
+    pub ranged_percent: Percent,
     pub magic_units: u64,
     pub hand_units: u64,
     pub ranged_units: u64
@@ -21,9 +24,9 @@ pub struct Defence {
 impl Defence {
     pub fn empty() -> Self {
         Self {
-            magic_percent: 0,
-            hand_percent: 0,
-            ranged_percent: 0,
+            magic_percent: Percent::new(0),
+            hand_percent: Percent::new(0),
+            ranged_percent: Percent::new(0),
             magic_units: 0,
             hand_units: 0,
             ranged_units: 0
@@ -51,49 +54,49 @@ pub struct UnitStats {
     pub moves: u64,
     pub max_moves: u64,
     pub speed: u64,
-    pub vamp: u32,
-    pub regen: u32
+    pub vamp: Percent,
+    pub regen: Percent
 }
 impl UnitStats {
     pub fn empty() -> Self {
         Self {
             hp: 0,
             max_hp: 0,
-            damage: Power {
-                magic: 0,
-                ranged: 0,
-                hand: 0
-            },
-            defence: Defence {
-                magic_percent: 0,
-                hand_percent: 0,
-                ranged_percent: 0,
-                magic_units: 0,
-                hand_units: 0,
-                ranged_units: 0
-            },
+            damage: Power::empty(),
+            defence: Defence::empty(),
             moves: 0,
             max_moves: 0,
             speed: 0,
-            vamp: 0,
-            regen: 0
+            vamp: Percent::new(0),
+            regen: Percent::new(0)
 }   }   }
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum MagicType {
+    Life,
+    Death,
+    Elemental,
+    NoMagic
+}
 #[derive(Clone, Debug)]
 pub struct UnitInfo {
     pub name: String,
     pub cost: u64,
-    pub unit_type: UnitType
+    pub unit_type: UnitType,
+    pub magic_type: MagicType,
+    pub surrender: Option<u64>
 }
 impl UnitInfo {
     pub fn empty() -> Self {
         Self {
             name: "".into(),
             cost: 0,
-            unit_type: UnitType::Unidentified
+            unit_type: UnitType::Unidentified,
+            magic_type: NoMagic,
+            surrender: None
 }   }   }
 #[derive(Clone, Debug)]
 pub struct UnitInventory {
-    pub items: Vec<Item>
+    pub items: Vec<Option<Item>>
 }
 impl UnitInventory {
     pub fn empty() -> Self {
@@ -114,6 +117,7 @@ pub struct UnitData {
 pub enum UnitType {
     Alive,
     Undead,
+    Rogue,
     Unidentified
 }
 
@@ -136,17 +140,17 @@ pub trait Unit : DynClone + Debug {
             });
         let inventory = &self.get_data().inventory;
         inventory.items.iter().for_each(|item| {
+            if let Some(item) = item {
                 previous = item.effect.update_stats(previous);
-            });
+        }   });
         previous
     }
     fn get_mut_data(&mut self) -> &mut UnitData;
     fn get_data(&self) -> &UnitData;
     fn get_info(&self) -> &UnitInfo { &self.get_data().info }
     fn get_bonus(&self) -> Box<dyn Bonus>;
-    fn get_unittype(&self) -> UnitType {
-        self.get_info().unit_type
-    }
+    fn get_unittype(&self) -> UnitType { self.get_info().unit_type }
+    fn get_magictype(&self) -> MagicType { self.get_info().magic_type }
     fn is_dead(&self) -> bool { self.get_effected_stats().hp < 1 }
     fn has_effect_kind(&self, kind: EffectKind) -> bool {
         self.get_data().effects.iter().map(|effect| effect.get_kind()).collect::<Vec<EffectKind>>().contains(&kind)
@@ -157,17 +161,18 @@ pub trait Unit : DynClone + Debug {
         true
     }
     fn add_item(&mut self, item: Item) -> bool {
-        self.get_mut_data().inventory.items.push(item);
+        self.get_mut_data().inventory.items.push(Some(item));
         true
     }
     fn being_attacked(&mut self, damage: &Power, sender: &mut dyn Unit) -> u64;
     fn correct_damage(&self, damage: &Power) -> Power {
         let defence: Defence = self.get_effected_stats().defence;
         println!("Использую защиту {:?}", defence);
+        let percent_100 = Percent::new(100);
         Power {
-            ranged: (damage.ranged.saturating_sub(defence.ranged_units) as f32 * (1.0 - defence.ranged_percent as f32 / 100.0)) as u64,
-            magic: (damage.magic.saturating_sub(defence.magic_units) as f32 * (1.0 - defence.magic_percent as f32 / 100.0)) as u64,
-            hand: (damage.hand.saturating_sub(defence.hand_units) as f32 * (1.0 - defence.hand_percent as f32 / 100.0)) as u64
+            ranged: (percent_100 - defence.ranged_percent).calc(damage.ranged.saturating_sub(defence.ranged_units)),
+            magic: (percent_100 - defence.magic_percent).calc(damage.magic.saturating_sub(defence.magic_units)),
+            hand: (percent_100 - defence.hand_percent).calc(damage.hand.saturating_sub(defence.hand_units))
     }   }
     fn tick(&mut self) -> bool;
 }

@@ -3,12 +3,12 @@ use {
     crate::lib::{
         bonuses::bonus::Bonus,
         effects::{
-            effect::EffectInfo,
+            effect::{EffectInfo, EffectKind},
             effects::*
         },
-        units::unit::{Defence, Power, UnitStats, Unit}
+        units::unit::{Defence, Power, UnitStats, Unit},
+        math::Percent
 }   };
-use crate::lib::effects::effect::EffectKind;
 
 #[derive(Copy, Clone, Debug)]
 pub struct DefencePiercing {}
@@ -33,14 +33,12 @@ impl Bonus for DefencePiercing {
 pub struct Dodging {}
 impl Bonus for Dodging {
     fn on_attacked(&self, damage: Power, receiver: &mut dyn Unit, sender: &mut dyn Unit) -> Power {
-        println!("Бонус: кто-то атакует, пропускаю 75%");
+        let percent_75 = Percent::new(75);
         Power {
-            magic: damage.magic / 4 * 3,
-            ranged: damage.ranged / 4 * 3,
-            hand: damage.hand / 4 * 3
-        }
-    }
-}
+            magic: percent_75.calc(damage.magic),
+            ranged: percent_75.calc(damage.ranged),
+            hand: percent_75.calc(damage.hand)
+}   }   }
 
 #[derive(Copy, Clone, Debug)]
 pub struct FastGoing {}
@@ -55,14 +53,15 @@ pub struct Berserk {}
 impl Bonus for Berserk {
     fn on_kill(&self, receiver: &mut dyn Unit, sender: &mut dyn Unit) -> bool {
         let receiver_stats = receiver.get_data().stats;
+        let percent_10 = Percent::new(10);
         sender.add_effect(
-            Box::new(ItemEffect {
+            Box::new(ToEndEffect {
                 info: EffectInfo { lifetime: i32::MAX },
                 additions: UnitStats {
                     damage: Power {
-                        hand: receiver_stats.damage.hand / 100 * 10,
-                        ranged: receiver_stats.damage.ranged / 100 * 10,
-                        magic: receiver_stats.damage.magic / 100 * 10,
+                        hand: percent_10.calc(receiver_stats.damage.hand),
+                        ranged: percent_10.calc(receiver_stats.damage.ranged),
+                        magic: percent_10.calc(receiver_stats.damage.magic),
                     },
                     ..UnitStats::empty()
             }   }));
@@ -79,9 +78,9 @@ impl Bonus for Block {
                 info: EffectInfo { lifetime: 1 },
                 additions: UnitStats {
                     defence: Defence {
-                        ranged_percent: 0,
-                        hand_percent: 0,
-                        magic_percent: 0,
+                        ranged_percent: Percent::new(0),
+                        hand_percent: Percent::new(0),
+                        magic_percent: Percent::new(0),
                         ..unit.get_effected_stats().defence
                     },
                     ..UnitStats::empty()
@@ -108,12 +107,28 @@ impl Bonus for FireAttack {
     fn on_attacking(&self, damage: Power, receiver: &mut dyn Unit, sender: &mut dyn Unit) -> Power {
         let receiver_stats = receiver.get_effected_stats();
         if !receiver.has_effect_kind(EffectKind::Fire) {
-            if !(receiver_stats.defence.hand_percent > 99 && receiver.get_effected_stats().defence.ranged_percent > 99) {
+            if !(receiver_stats.defence.hand_percent.get() >= 99 && receiver.get_effected_stats().defence.ranged_percent.get() >= 99) {
                 receiver.add_effect(Box::new(Fire::default()));
-            }   }
+        }   }
         damage
-    }   }
+}   }
 
 #[derive(Copy, Clone, Debug)]
 pub struct NoBonus {}
 impl Bonus for NoBonus {}
+
+pub fn match_bonus(bonus: Option<&str>) -> Box<dyn Bonus> {
+    match bonus {
+        Some(name) => match name {
+            "Berserk" => Box::new(Berserk {}) as Box<dyn Bonus>,
+            "FireAttack" => Box::new(FireAttack {}),
+            "PoisonAttack" => Box::new(PoisonAttack {}),
+            "Block" => Box::new(Block {}),
+            "FastGoing" => Box::new(FastGoing {}),
+            "DefencePiercing" => Box::new(DefencePiercing {}),
+            "Dodging" => Box::new(Dodging {}),
+            _ => Box::new(NoBonus {})
+        }
+        None => Box::new(NoBonus {})
+    }
+}
