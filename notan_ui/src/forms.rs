@@ -1,5 +1,7 @@
-use std::marker::PhantomData;
 use {
+    std::{
+        marker::PhantomData
+    },
     notan::{
         prelude::{AppState, Color, Graphics, Plugins, App},
         app::Event,
@@ -10,18 +12,26 @@ use {
 };
 
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum AlignHorizontal {
     Left,
     Center,
     Right
 }
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum AlignVertical {
     Top,
     Center,
     Bottom
 }
+#[derive(Copy, Clone, PartialEq)]
+pub enum Direction {
+    Right,
+    Left,
+    Top,
+    Bottom
+}
+
 pub trait UIState: AppState {
     fn mut_fonts(&mut self) -> &mut Vec<Font>;
     fn fonts(&self) -> &Vec<Font>;
@@ -29,12 +39,14 @@ pub trait UIState: AppState {
     fn draw(&self) -> &Draw;
 }
 pub trait Positionable {
-    fn add_pos(&mut self, to_add: Position) -> Self;
+    fn with_pos(&self, to_add: Position) -> Self;
+    fn add_pos(&mut self, to_add: Position);
+    fn get_size(&self) -> Position;
 }
 pub trait Form<State: UIState>: DynClone {
-    fn draw(&mut self, gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App);
-    fn after(&mut self, _gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App);
-    fn on_event(&mut self, event: Event, _gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App) {}
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state:&mut State);
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State);
+    fn on_event(&mut self, event: Event, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
 }
 impl<State: UIState> Clone for Box<dyn Form<State>> {
     fn clone(&self) -> Self {
@@ -49,19 +61,20 @@ impl From<usize> for FontId {
 }   }
 #[derive(Clone)]
 pub struct Text<State: UIState> {
-    text: String,
-    font: FontId,
-    align_h: AlignHorizontal,
-    align_v: AlignVertical,
-    pos: Position,
-    size: f32,
-    color: Color,
-    boo: PhantomData<State>
+    pub text: String,
+    pub font: FontId,
+    pub align_h: AlignHorizontal,
+    pub align_v: AlignVertical,
+    pub pos: Position,
+    pub size: f32,
+    pub max_width: Option<f32>,
+    pub color: Color,
+    pub boo: PhantomData<State>
 }
-impl<State: UIState> Form<State> for Text<State> where State: Clone {
-    fn draw(&mut self, gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App) {
-        let font = _state.fonts().get(self.font.0).expect("Cant find font with index 011").clone();
-        let mut draw = _state.mut_draw();
+impl<State: UIState + 'static> Form<State> for Text<State> where State: Clone {
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        let font = state.fonts().get(self.font.0).expect(&*format!("Cant find font with index {}", self.font.0)).clone();
+        let mut draw = state.mut_draw();
         let mut text_builder = draw.text(&font, &*self.text);
         let mut text_builder = match self.align_h {
             AlignHorizontal::Left => text_builder.h_align_left(),
@@ -77,15 +90,24 @@ impl<State: UIState> Form<State> for Text<State> where State: Clone {
             .position(self.pos.0, self.pos.1)
             .size(self.size)
             .color(self.color);
+        if let Some(width) = self.max_width { text_builder.max_width(width); }
     }
-    fn after(&mut self, _gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App) {}
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
 }
-impl<State: UIState> Positionable for Text<State> where State: Clone {
-    fn add_pos(&mut self, to_add: Position) -> Self {
+impl<State: UIState + 'static> Positionable for Text<State> where State: Clone {
+    fn with_pos(&self, to_add: Position) -> Self {
         Self { pos: self.pos + to_add, ..self.clone() }
     }
-}
-impl<State: UIState> Default for Text<State> {
+    fn add_pos(&mut self, to_add: Position) {
+        self.pos+=to_add;
+    }
+    fn get_size(&self) -> Position {
+        if let Some(width) = self.max_width {
+            return Position(width, self.size);
+        }
+        Position(self.size * (self.text.chars().count() as f32), self.size)
+}   }
+impl<State: UIState + 'static> Default for Text<State> {
     fn default() -> Self {
         Self {
             text: "".into(),
@@ -94,63 +116,212 @@ impl<State: UIState> Default for Text<State> {
             align_v: AlignVertical::Top,
             pos: Position(0., 0.),
             size: 0.,
+            max_width: None,
             color: Color::BLACK,
             boo: PhantomData
 }   }   }
-impl<State: UIState> Text<State> {
+impl<State: UIState + 'static> Text<State> {
     pub fn new(text: impl Into<String>, font: impl Into<FontId>,
            align_h: AlignHorizontal,
            align_v: AlignVertical,
            pos: Position,
            size: f32,
+           max_width: Option<f32>,
            color: Color) -> Self {
         Self {
-            text: text.into(), font: font.into(), align_h, align_v, pos, size, color,
+            text: text.into(), font: font.into(), align_h, align_v, pos, size, max_width, color,
             boo: PhantomData
 }   }   }
 #[derive(Clone)]
 pub struct Button<State: UIState, T: Form<State> + Positionable> where State: Clone, T: Clone {
-    inside: Option<T>,
+    pub inside: Option<T>,
     pub rect: Rect,
-    if_hovered: Option<fn(&mut Self, _gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App)>,
-    if_clicked: Option<fn(&mut Self, _gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App)>,
-    focused: bool,
-    selected: bool
+    pub if_hovered: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
+    pub if_clicked: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
+    pub focused: bool,
+    pub selected: bool
 }
 impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for Button<State, T> {
-    fn draw(&mut self, gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App) {
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         if let Some(form) = &mut self.inside {
-            form.draw(gfx, _plugins, _state, _app);
+            form.with_pos(self.rect.pos).draw( app, gfx, plugins, state);
     }   }
-    fn after(&mut self, _gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App) {
-        let mouse_pos = Position(_app.mouse.x, _app.mouse.y);
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        let mouse_pos = Position(app.mouse.x, app.mouse.y);
         self.focused = self.rect.collides(mouse_pos);
-        self.selected = _app.mouse.left_was_released() && self.focused;
+        self.selected = app.mouse.left_was_released() && self.focused;
         if self.focused {
-            if let Some(func) = self.if_hovered { func(self, _gfx, _plugins, _state, _app); }
+            if let Some(func) = self.if_hovered { func(self, app, gfx, plugins, state); }
             if self.selected {
-                if let Some(func) = self.if_clicked { func(self, _gfx, _plugins, _state, _app); }
+                if let Some(func) = self.if_clicked { func(self, app, gfx, plugins, state); }
         }   }
         if let Some(form) = &mut self.inside {
-            form.after(_gfx, _plugins, _state, _app);
+            form.after( app, gfx, plugins, state);
 }    }   }
 impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable for Button<State, T> {
-    fn add_pos(&mut self, to_add: Position) -> Self {
-        Self { rect: Rect { pos: self.rect.pos + to_add, size: self.rect.size}, ..self.clone() }
+    fn with_pos(&self, to_add: Position) -> Self {
+        Self { rect: Rect { pos: self.rect.pos + to_add, size: self.rect.size }, ..self.clone() }
+    }
+    fn add_pos(&mut self, to_add: Position) {
+        self.rect.pos += to_add;
+    }
+    fn get_size(&self) -> Position {
+        self.rect.size
 }   }
 impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Button<State, T> {
     pub fn new(mut inside: Option<T>, rect: Rect,
-        if_hovered: Option<fn(&mut Self, _gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App)>,
-        if_clicked: Option<fn(&mut Self, _gfx: &mut Graphics, _plugins: &mut Plugins, _state: &mut State, _app: &mut App)>
+        if_hovered: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
+        if_clicked: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>
     ) -> Self {
-        Button { inside: match &mut inside {
-                Some(inside) => Some(inside.add_pos(rect.pos)),
-                None => None
-            },
+        Self {
+            inside,
             rect,
             if_hovered,
             if_clicked,
             focused: false,
             selected: false
-        }
+}   }   }
+
+#[derive(Clone)]
+pub struct Container<State: UIState + Clone, T: Form<State> + Positionable + Clone> {
+    pub inside: Vec<T>,
+    pub pos: Position,
+    pub align_direction: Direction,
+    pub interval: Position,
+    pub boo: PhantomData<State>
+}
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for Container<State, T> {
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.calc_insides().iter_mut().for_each(|form| form.draw(app, gfx, plugins, state));
+    }
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        let inside_len = self.inside.len();
+        let inside_sizes = self.inside.iter().map(|form| form.get_size()).collect::<Vec<Position>>();
+        self.inside.iter_mut().zip(0..inside_len).for_each(|(inside, i): (&mut T, usize)| {
+            let sizes = &inside_sizes[0..i];
+            let interval = self.interval * ((i - 1) as f32);
+            let pos = self.pos;
+            let to_add = match self.align_direction {
+                Direction::Right => {
+                    Position(sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + pos.0, pos.1 + interval.1)
+                }
+                Direction::Left => {
+                    Position(-sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + pos.0, pos.1 + interval.1)
+                }
+                Direction::Top => {
+                    Position(pos.0 + interval.0, sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + pos.1)
+                }
+                Direction::Bottom => {
+                    Position(pos.0 + interval.0, -sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + pos.1)
+                }
+            };
+            inside.add_pos(to_add);
+            inside.after(app, gfx, plugins, state);
+            inside.add_pos(-to_add);
+        });
 }   }
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Container<State, T> {
+    pub fn calc_insides(&self) -> Vec<T> {
+        let inside_sizes = self.inside.iter().map(|form| form.get_size()).collect::<Vec<Position>>();
+
+        self.inside.iter().zip(0..(self.inside.len())).map(|(inside, i): (&T, usize)| {
+            let sizes = &inside_sizes[0..i];
+            let interval = self.interval * ((i - 1) as f32);
+            let to_add = match self.align_direction {
+                Direction::Right => {
+                    Position(sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + self.pos.0, self.pos.1 + interval.1)
+                }
+                Direction::Left => {
+                    Position(-sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + self.pos.0, self.pos.1 + interval.1)
+                }
+                Direction::Top => {
+                    Position(self.pos.0 + interval.0, -sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + self.pos.1)
+                }
+                Direction::Bottom => {
+                    Position(self.pos.0 + interval.0, sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + self.pos.1)
+                }
+            };
+            inside.with_pos(to_add)
+        }).collect()
+}   }
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable for Container<State, T> {
+    fn with_pos(&self, to_add: Position) -> Self {
+        Self { pos: self.pos + to_add, ..self.clone() }
+    }
+    fn add_pos(&mut self, to_add: Position) {
+        self.pos += to_add;
+    }
+    fn get_size(&self) -> Position {
+        if self.inside.is_empty() {
+            Position(0., 0.);
+        }
+        let sizes = self.calc_insides().iter().map(|form| form.get_size()).collect::<Vec<Position>>();
+        let (sizes_h, sizes_v) = (
+            sizes.iter().map(|form| form.0),
+            sizes.iter().map(|form| form.1));
+
+        let (mut summed_h, mut summed_v) = (0., 0.);
+        match self.align_direction {
+            Direction::Left | Direction::Right => {
+                summed_h = sizes_h.clone().sum::<f32>();
+            }
+            Direction::Bottom | Direction::Top => {
+                summed_v = sizes_v.clone().sum::<f32>();
+        }   }
+        let interval = self.interval * (sizes.len() - 1) as f32;
+        Position(
+            match self.align_direction {
+                Direction::Right => {
+                    summed_h + interval.0
+                }
+                Direction::Left => {
+                    -summed_h + interval.0
+                },
+                _ => sizes_v.max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
+            },
+            match self.align_direction {
+                Direction::Top => {
+                    -summed_v + interval.1
+                }
+                Direction::Bottom => {
+                    summed_v + interval.1
+                },
+                _ => sizes_h.max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
+            }
+        )
+}   }
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Default for Container<State, T> {
+    fn default() -> Self {
+        Self {
+            inside: vec![],
+            pos: Position(0., 0.),
+            align_direction: Direction::Right,
+            interval: Position(0., 0.),
+            boo: PhantomData
+}   }   }
+
+#[derive(Clone)]
+pub struct SingleContainer<State: UIState + Clone, T: Form<State> + Positionable + Clone> {
+    pub inside: Option<T>,
+    pub on_draw: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
+    pub after_draw: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
+    pub pos: Position
+}
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for SingleContainer<State, T> {
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        if let Some(func) = self.on_draw {
+            func(self, app, gfx, plugins, state);
+    }   }
+
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        if let Some(func) = self.after_draw {
+            func(self, app, gfx, plugins, state);
+}   }   }
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Default for SingleContainer<State, T> {
+    fn default() -> Self {
+        Self {
+            inside: None,
+            on_draw: None,
+            after_draw: None,
+            pos: Position(0., 0.)
+}   }   }

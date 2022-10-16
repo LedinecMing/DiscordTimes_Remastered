@@ -2,3 +2,4 @@
 /.idea
 /*.html
 /.ts
+*.lock

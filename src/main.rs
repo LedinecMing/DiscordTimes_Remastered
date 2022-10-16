@@ -9,7 +9,7 @@ use {
         prelude::*,
         app::AppState,
         draw::*,
-        text::*
+        text::{TextConfig, TextExtension}
     },
     notan_ui::{
         forms::{self, *},
@@ -23,6 +23,7 @@ use {
         battle::troop::Troop,
         time::time::Time,
         mutrc::MutRc,
+        parse::parse_units,
         map::{
             map::{GameMap, MAP_SIZE},
             tile::Tile,
@@ -37,20 +38,34 @@ struct State {
 }
 static mut forms: Lazy<Vec<Box<dyn Form<State>>>> = Lazy::new(||
   vec![
-      Box::new(forms::Text::new("Говно залупа пенис хер!",
-                                 0, AlignHorizontal::Left, AlignVertical::Bottom, Position(400., 30.), 10.0, Color::WHITE)),
-      Box::new(forms::Button::new(
-          Some(forms::Text::new("Я люблю кушать кексики", 0, AlignHorizontal::Center, AlignVertical::Center, Position(10., 10.), 10., Color::RED)),
-                Rect { pos: Position(400., 30.), size: Position(200., 30.) },
-          Some(|button, gfx, plugins, state, app| {
-              let mut state: &mut State = state;
-              state.value = 2;
-            }),
-          Some(|button, gfx, plugins, state, app| {
-              button.rect.pos.0 += 10.;
-              state.value = 3;
-          })
-      ))
+      Box::new(Container {
+          inside: (0..10).map(move |i|
+            Button::new(
+                  Some(Text {
+                    text: "Абоба".into(),
+                    size: 10.0,
+                    max_width: Some(80.),
+                    ..Text::default()
+                }),
+                Rect {
+                    pos: Position(0., 0.),
+                    size: Position(100., 100.)
+                },
+                None,
+                Some(|button, app, gfx, plugins, state| {
+                    button.inside = Some(Text::<State> {
+                        text: "Клик!".into(),
+                        size: 10.0,
+                        max_width: Some(80.),
+                        ..Text::default()
+                    })
+                })
+            )
+          ).collect(),
+          interval: Position(10., 10.),
+          align_direction: Direction::Right,
+          ..Container::default()
+      })
   ]
 );
 
@@ -72,20 +87,19 @@ fn setup(gfx: &mut Graphics) -> State {
         value: 0
 }   }
 fn draw(app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-    state.mut_draw().clear(Color::BLACK);
+    state.draw = gfx.create_draw();
+    state.mut_draw().clear(Color::WHITE);
     unsafe {
-        forms.iter_mut().for_each(|form: &mut Box<dyn Form<State>>| form.draw(gfx, plugins, state, app))
-    }
-    if state.value != 0 {
-        forms::Text::new(if state.value == 2 { "Ты навел" } else if state.value == 3 { "Ты нажал" } else { "Че ты наделал??" }, 0, AlignHorizontal::Left, AlignVertical::Top, Position(500., 300.), 30., Color::MAGENTA).draw(gfx, plugins, state, app);
+        forms.iter_mut().for_each(|form: &mut Box<dyn Form<State>>| form.draw(app, gfx, plugins, state));
     }
     gfx.render(state.draw());
     unsafe {
-        forms.iter_mut().for_each(|form: &mut Box<dyn Form<State>>| form.after(gfx, plugins, state, app))
+        forms.iter_mut().for_each(|form: &mut Box<dyn Form<State>>| form.after(app, gfx, plugins, state))
     }
 }
 #[notan_main]
 fn main() -> Result<(), String> {
+    dbg!(parse_units());
     let win = WindowConfig::new()
         .vsync(true)
         .lazy_loop(true)

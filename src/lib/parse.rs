@@ -110,7 +110,7 @@ use {
         bonuses::bonuses::*,
         math::Percent,
         units::{
-            unit::{Unit, *},
+            unit::*,
             units::*
         }
     },
@@ -123,10 +123,9 @@ fn collect_errors<T, K: Display>(for_check: Result<T, K>, collector: &mut Vec<St
             collector.push(format!("Error: {}; additional: {}", info.to_string(), additional));
             None
 }   }   }
-fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
+pub fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
     let mut units = HashMap::new();
     let sections = ini!("Units.ini");
-    assert!(!sections.is_empty());
     let mut counter : usize = 0;
     for (sec, prop) in sections.iter() {
         println!("Section: {:?}", sec);
@@ -137,8 +136,10 @@ fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
         let mut nature = "";
         let mut cost = None;
         let mut surrender = None;
-        let mut start_xp = Some(0);
         let mut hp = Some(0);
+
+        let mut max_xp = None;
+        let mut xp_up = None;
 
         let mut damage_hand = Some(0);
         let mut damage_ranged = Some(0);
@@ -150,54 +151,61 @@ fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
 
         let mut error_collector: Vec<String> = Vec::new();
         for (k, value) in prop.iter() {
-            let v = &**value.as_ref().unwrap();
-            match &**k {
-                "Name" => { name = v; },
-                "Descript" => { description = v; },
-                "Nature" => { nature = v; },
-                "Cost" => {
-                    cost = collect_errors(v.parse::<u64>(), &mut error_collector,
-                                          "Value of field cost omitted as non-u64");
-                },
-                "Surrender" => {
-                    surrender = collect_errors(v.parse::<u64>(), &mut error_collector,
-                                               "Value of field surrender omitted as non-u64");
-                },
-                "StartExperience" => {
-                    start_xp = collect_errors(v.parse::<u64>(), &mut error_collector,
-                                              "Value of field start_xp omitted as non-u64");
-                },
-                "Hits" => {
-                    hp = collect_errors(v.parse::<u64>(), &mut error_collector,
-                                              "Value of field hp omitted as non-u64");
-                },
-                "AttackBlow" => {
-                    damage_hand = collect_errors(v.parse::<u64>(), &mut error_collector,
-                                               "Value of field damage_hand omitted as non-u64");
-                }
-                "AttackShot" => {
-                    damage_ranged = collect_errors(v.parse::<u64>(), &mut error_collector,
-                                                   "Value of field damage_ranged omitted as non-u64");
-                }
-                "Magic" => {
-                    magic_type = v;
-                }
-                "Vampirism" => {
-                    vamp = collect_errors(v.parse::<i16>(), &mut error_collector,
-                                          "Value of field vamp omitted as non-i16");
-                },
-                "Regen" => {
-                    regen = collect_errors(v.parse::<i16>(), &mut error_collector,
-                                          "Value of field vamp omitted as non-i16");
-                }
-                "Specialization" => { spec = v; }
-                "Bonus" => { bonus_name = Some(v); }
-                _ => {}
-            }
-        }
-        assert!(!error_collector.is_empty(), "{}", error_collector.join("\n"));
+            println!("{}: {:?}", k.clone(), value.clone());
+            if let Some(v) = value.as_ref() {
+                let v = &**v;
+                match &**k {
+                    "name" => { name = v; },
+                    "descript" => { description = v; },
+                    "nature" => { nature = v; },
+                    "cost" => {
+                        cost = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                              "Value of field cost omitted as non-u64");
+                    },
+                    "surrender" => {
+                        surrender = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                                   "Value of field surrender omitted as non-u64");
+                    },
+                    "hits" => {
+                        hp = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                            "Value of field hp omitted as non-u64");
+                    },
+                    "attackblow" => {
+                        damage_hand = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                                     "Value of field damage_hand omitted as non-u64");
+                    }
+                    "attackshot" => {
+                        damage_ranged = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                                       "Value of field damage_ranged omitted as non-u64");
+                    }
+                    "magic" => {
+                        magic_type = v;
+                    }
+                    "vampirism" => {
+                        vamp = collect_errors(v.parse::<i16>(), &mut error_collector,
+                                              "Value of field vamp omitted as non-i16");
+                    },
+                    "regen" => {
+                        regen = collect_errors(v.parse::<i16>(), &mut error_collector,
+                                               "Value of field vamp omitted as non-i16");
+                    },
+                    "levelmultipler" => {
+                        xp_up = collect_errors(v.parse::<i16>(), &mut error_collector,
+                                               "Value of field xp_up omitted as non-i16");
+                    },
+                    "startexperience" => {
+                        max_xp = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                               "Value of field max_xp omitted as non-u64");
+                    },
+                    "specialization" => { spec = v; }
+                    "bonus" => { bonus_name = Some(v); }
+                    _ => {}
+        }   }   }
+        assert!(error_collector.is_empty(), "{}", error_collector.join("\n"));
         let bonus = match_bonus(bonus_name);
         let hp = hp.unwrap();
+        let xp_up = Percent::new(xp_up.unwrap());
+        let max_xp = max_xp.unwrap();
         let data: UnitData = UnitData {
             stats: UnitStats {
                 hp,
@@ -215,7 +223,8 @@ fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
                 regen: Percent::new(regen.unwrap())
             },
             info: UnitInfo {
-                name: name.to_string(),
+                name: name.into(),
+                descript: description.into(),
                 cost: cost.unwrap(),
                 unit_type: match nature {
                     "Alive" => UnitType::Alive,
@@ -230,7 +239,15 @@ fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
                     _ => MagicType::Death
                 },
                 surrender,
-
+                lvl: LevelUpInfo {
+                    stats: UnitStats::empty(),
+                    xp_up,
+                    max_xp
+            }   },
+            lvl: UnitLvl {
+                lvl: 0,
+                max_xp,
+                xp: 0
             },
             inventory: UnitInventory::empty(),
             bonus,
@@ -240,7 +257,8 @@ fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
                 "Hand" => Box::new(Hand::new(data)) as Box<dyn Unit>,
                 "Ranged" => Box::new(Ranged::new(data)),
                 "HealMage" => Box::new(HealMage::new(data)),
-                _ => panic!("Unknown unit type")
+                "DisablerMage" => Box::new(DisablerMage::new(data)),
+                _ => panic!("Unknown unit type: {}", spec)
             };
         units.insert(counter,
             unit
