@@ -1,11 +1,11 @@
 use {
-    derive_more::{Add, Sub}
+    derive_more::{Add, Sub, Mul, Neg, AddAssign, SubAssign}
 };
 
 
-#[derive(Add, Sub, Copy, Clone, Debug)]
+#[derive(Add, AddAssign, Sub, SubAssign, Neg, Mul, Copy, Clone, Debug)]
 pub struct Position(pub f32, pub f32);
-#[derive(Add, Sub, Copy, Clone, Debug)]
+#[derive(Add, AddAssign, Sub, SubAssign, Neg, Mul, Copy, Clone, Debug)]
 pub struct Rect {
     pub pos: Position,
     pub size: Position

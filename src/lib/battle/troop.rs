@@ -44,6 +44,7 @@ impl Troop {
             unit: Box::new(Hand::new(UnitData {
                 stats: UnitStats::empty(),
                 info: UnitInfo::empty(),
+                lvl: UnitLvl::empty(),
                 inventory: UnitInventory::empty(),
                 bonus: Box::new(NoBonus {}),
                 effects: vec![]

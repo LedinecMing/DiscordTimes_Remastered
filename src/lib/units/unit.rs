@@ -78,21 +78,38 @@ pub enum MagicType {
     NoMagic
 }
 #[derive(Clone, Debug)]
+pub struct LevelUpInfo {
+    pub stats: UnitStats,
+    pub xp_up: Percent,
+    pub max_xp: u64,
+}
+impl LevelUpInfo {
+    pub fn empty() -> Self {
+        Self {
+            stats: UnitStats::empty(),
+            xp_up: Percent::new(0),
+            max_xp: 0
+}   }   }
+#[derive(Clone, Debug)]
 pub struct UnitInfo {
     pub name: String,
+    pub descript: String,
     pub cost: u64,
     pub unit_type: UnitType,
     pub magic_type: MagicType,
-    pub surrender: Option<u64>
+    pub surrender: Option<u64>,
+    pub lvl: LevelUpInfo
 }
 impl UnitInfo {
     pub fn empty() -> Self {
         Self {
             name: "".into(),
+            descript: "".into(),
             cost: 0,
             unit_type: UnitType::Unidentified,
             magic_type: NoMagic,
-            surrender: None
+            surrender: None,
+            lvl: LevelUpInfo::empty()
 }   }   }
 #[derive(Clone, Debug)]
 pub struct UnitInventory {
@@ -103,11 +120,24 @@ impl UnitInventory {
         Self {
             items: vec![]
 }   }   }
-
+#[derive(Clone, Debug)]
+pub struct UnitLvl {
+    pub lvl: u64,
+    pub max_xp: u64,
+    pub xp: u64
+}
+impl UnitLvl {
+    pub fn empty() -> Self {
+        Self {
+            lvl: 0,
+            max_xp: 0,
+            xp: 0
+}   }   }
 #[derive(Clone, Debug)]
 pub struct UnitData {
     pub stats: UnitStats,
     pub info: UnitInfo,
+    pub lvl: UnitLvl,
     pub inventory: UnitInventory,
     pub bonus: Box<dyn Bonus>,
     pub effects: Vec<Box<dyn Effect>>
