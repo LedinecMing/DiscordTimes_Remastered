@@ -4,6 +4,7 @@ mod lib;
 use {
     std:: {
         collections::HashMap,
+        mem::size_of,
     },
     notan:: {
         prelude::*,
@@ -40,30 +41,35 @@ static mut forms: Lazy<Vec<Box<dyn Form<State>>>> = Lazy::new(||
   vec![
       Box::new(Container {
           inside: (0..10).map(move |i|
-            Button::new(
-                  Some(Text {
-                    text: "Абоба".into(),
-                    size: 10.0,
-                    max_width: Some(80.),
-                    ..Text::default()
-                }),
-                Rect {
-                    pos: Position(0., 0.),
-                    size: Position(100., 100.)
-                },
-                None,
-                Some(|button, app, gfx, plugins, state| {
-                    button.inside = Some(Text::<State> {
-                        text: "Клик!".into(),
-                        size: 10.0,
-                        max_width: Some(80.),
+              SingleContainer {
+                inside: Some(Button::new(
+                      Some(Text {
+                        text: "Click!".into(),
+                        size: 20.0,
+                        max_width: Some(100.),
+                        align_h: AlignHorizontal::Center,
+                        align_v: AlignVertical::Top,
                         ..Text::default()
-                    })
-                })
-            )
+                    }),
+                    Rect {
+                        pos: Position(0., 0.),
+                        size: Position(100., 100.)
+                    },
+                    None,
+                    Some(|button, app, gfx, plugins, state: &mut State| {
+                        button.inside.as_mut().unwrap().text = "Clicked!".into();
+
+                    }))),
+                  on_draw: Some(|container, app, gfx, plugins, state: &mut State| {
+                      let rect = container.inside.as_ref().unwrap().rect;
+                      state.mut_draw().rect(rect.pos.into(), rect.size.into()).color(Color::YELLOW);
+                  }),
+                  after_draw: None,
+                  pos: Position(0., 0.)
+              }
           ).collect(),
           interval: Position(10., 10.),
-          align_direction: Direction::Right,
+          align_direction: Direction::Bottom,
           ..Container::default()
       })
   ]
@@ -100,10 +106,13 @@ fn draw(app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut St
 #[notan_main]
 fn main() -> Result<(), String> {
     dbg!(parse_units());
+    dbg!(size_of::<Button<State, Text<State>>>(), size_of::<Text<State>>(), size_of::<Container<State, Text<State>>>());
     let win = WindowConfig::new()
+        .title("notan_ui test")
         .vsync(true)
         .lazy_loop(true)
-        .high_dpi(false);
+        .high_dpi(false)
+        .fullscreen(true).max_size(1600, 1200);
 
     notan::init_with(setup)
         .add_config(win)

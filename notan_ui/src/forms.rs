@@ -71,7 +71,7 @@ pub struct Text<State: UIState> {
     pub color: Color,
     pub boo: PhantomData<State>
 }
-impl<State: UIState + 'static> Form<State> for Text<State> where State: Clone {
+impl<State: UIState> Form<State> for Text<State> where State: Clone {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         let font = state.fonts().get(self.font.0).expect(&*format!("Cant find font with index {}", self.font.0)).clone();
         let mut draw = state.mut_draw();
@@ -86,15 +86,23 @@ impl<State: UIState + 'static> Form<State> for Text<State> where State: Clone {
             AlignVertical::Center => text_builder.v_align_middle(),
             AlignVertical::Top => text_builder.v_align_top()
         };
+        let text_size = self.get_size();
+        let mut pos = self.pos;
+        if self.align_v == AlignVertical::Center || true {
+            pos.1 += text_size.1 / 2.;
+        }
+        if self.align_h == AlignHorizontal::Center || true {
+            pos.0 += text_size.0 / 2.;
+        }
         text_builder
-            .position(self.pos.0, self.pos.1)
+            .position(pos.0, pos.1)
             .size(self.size)
             .color(self.color);
         if let Some(width) = self.max_width { text_builder.max_width(width); }
     }
     fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
 }
-impl<State: UIState + 'static> Positionable for Text<State> where State: Clone {
+impl<State: UIState> Positionable for Text<State> where State: Clone {
     fn with_pos(&self, to_add: Position) -> Self {
         Self { pos: self.pos + to_add, ..self.clone() }
     }
@@ -107,7 +115,7 @@ impl<State: UIState + 'static> Positionable for Text<State> where State: Clone {
         }
         Position(self.size * (self.text.chars().count() as f32), self.size)
 }   }
-impl<State: UIState + 'static> Default for Text<State> {
+impl<State: UIState> Default for Text<State> {
     fn default() -> Self {
         Self {
             text: "".into(),
@@ -120,7 +128,7 @@ impl<State: UIState + 'static> Default for Text<State> {
             color: Color::BLACK,
             boo: PhantomData
 }   }   }
-impl<State: UIState + 'static> Text<State> {
+impl<State: UIState> Text<State> {
     pub fn new(text: impl Into<String>, font: impl Into<FontId>,
            align_h: AlignHorizontal,
            align_v: AlignVertical,
@@ -209,10 +217,10 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> 
                     Position(-sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + pos.0, pos.1 + interval.1)
                 }
                 Direction::Top => {
-                    Position(pos.0 + interval.0, sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + pos.1)
+                    Position(pos.0 + interval.0, -sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + pos.1)
                 }
                 Direction::Bottom => {
-                    Position(pos.0 + interval.0, -sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + pos.1)
+                    Position(pos.0 + interval.0, sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + pos.1)
                 }
             };
             inside.add_pos(to_add);
@@ -309,14 +317,43 @@ pub struct SingleContainer<State: UIState + Clone, T: Form<State> + Positionable
 }
 impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for SingleContainer<State, T> {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        if let Some(form) = &mut self.inside {
+            form.add_pos(self.pos);
+        }
         if let Some(func) = self.on_draw {
             func(self, app, gfx, plugins, state);
+        }
+        if let Some(form) = &mut self.inside {
+            form.draw(app, gfx, plugins, state);
+            form.add_pos(-self.pos);
     }   }
 
     fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        if let Some(func) = self.after_draw {
+        if let Some(form) = &mut self.inside {
+            form.add_pos(self.pos);
+        }
+        if let Some(func) = &mut self.after_draw {
             func(self, app, gfx, plugins, state);
+        }
+        if let Some(form) = &mut self.inside {
+            form.after(app, gfx, plugins, state);
+            form.add_pos(-self.pos);
 }   }   }
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable for SingleContainer<State, T> {
+    fn with_pos(&self, to_add: Position) -> Self {
+        let mut cloned = self.clone();
+        cloned.add_pos(to_add);
+        cloned
+    }
+    fn add_pos(&mut self, to_add: Position) {
+        self.pos += to_add;
+    }
+    fn get_size(&self) -> Position {
+        if let Some(form) = &self.inside {
+            return form.get_size();
+        }
+        Position(0., 0.)
+}   }
 impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Default for SingleContainer<State, T> {
     fn default() -> Self {
         Self {
@@ -325,3 +362,64 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Default for 
             after_draw: None,
             pos: Position(0., 0.)
 }   }   }
+
+#[derive(Clone)]
+struct Slider<State: UIState + Clone, T: Form<State> + Positionable + Clone> {
+    pub rect: Rect,
+    pub slider_inside: T,
+    pub scroll: f32,
+    pub boo: PhantomData<State>
+}
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for Slider<State, T> {
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.slider_inside.with_pos(self.rect.size + Position(0.,self.scroll)).draw(app, gfx, plugins, state);
+    }
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.slider_inside.with_pos(self.rect.size + Position(0., self.scroll)).after(app, gfx, plugins, state);
+}   }
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable for Slider<State, T> {
+    fn with_pos(&self, to_add: Position) -> Self {
+        let mut cloned = self.clone();
+        cloned.add_pos(to_add);
+        cloned
+    }
+    fn add_pos(&mut self, to_add: Position) {
+        self.rect.pos += to_add;
+    }
+    fn get_size(&self) -> Position {
+        self.rect.size
+}   }
+
+#[derive(Clone)]
+struct SliderContainer<State: UIState + Clone, T: Form<State> + Positionable + Clone> {
+    pub inside: T,
+    pub slider: Slider<State, T>
+}
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for SliderContainer<State, T> {
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.slider.draw(app, gfx, plugins, state);
+        self.inside.with_pos(Position(0.,self.slider.scroll)).draw(app, gfx, plugins, state);
+    }
+
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.inside.add_pos(Position(0.,self.slider.scroll));
+        self.inside.after(app, gfx, plugins, state);
+        self.inside.add_pos(-Position(0.,self.slider.scroll));
+    }
+    fn on_event(&mut self, event: Event, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        match event {
+            Event::MouseWheel { delta_x: _delta_x, delta_y } => {
+                self.slider.scroll = delta_y;
+            },
+            _ => {}
+}   }   }
+impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable for SliderContainer<State, T> {
+    fn with_pos(&self, to_add: Position) -> Self {
+        Self { inside: self.inside.clone(), slider: self.slider.with_pos(to_add) }
+    }
+    fn add_pos(&mut self, to_add: Position) {
+        self.slider.add_pos(to_add);
+    }
+    fn get_size(&self) -> Position {
+        self.inside.get_size()
+}   }
