@@ -15,6 +15,10 @@ impl Rect {
         pos.0 >= self.pos.0 && pos.0 <= self.pos.0 + self.size.0 &&
            pos.1 >= self.pos.1 && pos.1 <= self.pos.1 + self.size.1
 }   }
+impl Default for Rect {
+    fn default() -> Self {
+        Self { pos: Position::default(), size: Position::default() }
+}   }
 impl Into<(f32, f32)> for Position {
     fn into(self) -> (f32, f32) {
         (self.0, self.1)
@@ -22,4 +26,8 @@ impl Into<(f32, f32)> for Position {
 impl From<(f32, f32)> for Position {
     fn from(values: (f32, f32)) -> Self {
         Self(values.0, values.1)
+}   }
+impl Default for Position {
+    fn default() -> Self {
+        Self(0., 0.)
 }   }

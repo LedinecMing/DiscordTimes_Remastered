@@ -11,6 +11,8 @@ use {
     super::rect::*
 };
 
+pub trait PosForm<State: UIState> = Form<State> + Positionable + Clone;
+pub trait UIStateCl = UIState + Clone;
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum AlignHorizontal {
@@ -42,6 +44,7 @@ pub trait Positionable {
     fn with_pos(&self, to_add: Position) -> Self;
     fn add_pos(&mut self, to_add: Position);
     fn get_size(&self) -> Position;
+    fn get_pos(&self) -> Position;
 }
 pub trait Form<State: UIState>: DynClone {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state:&mut State);
@@ -60,7 +63,7 @@ impl From<usize> for FontId {
         Self(value)
 }   }
 #[derive(Clone)]
-pub struct Text<State: UIState> {
+pub struct Text<State: UIStateCl> {
     pub text: String,
     pub font: FontId,
     pub align_h: AlignHorizontal,
@@ -71,7 +74,7 @@ pub struct Text<State: UIState> {
     pub color: Color,
     pub boo: PhantomData<State>
 }
-impl<State: UIState> Form<State> for Text<State> where State: Clone {
+impl<State: UIStateCl> Form<State> for Text<State> {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         let font = state.fonts().get(self.font.0).expect(&*format!("Cant find font with index {}", self.font.0)).clone();
         let mut draw = state.mut_draw();
@@ -88,10 +91,10 @@ impl<State: UIState> Form<State> for Text<State> where State: Clone {
         };
         let text_size = self.get_size();
         let mut pos = self.pos;
-        if self.align_v == AlignVertical::Center || true {
+        if self.align_v == AlignVertical::Center {
             pos.1 += text_size.1 / 2.;
         }
-        if self.align_h == AlignHorizontal::Center || true {
+        if self.align_h == AlignHorizontal::Center {
             pos.0 += text_size.0 / 2.;
         }
         text_builder
@@ -102,7 +105,7 @@ impl<State: UIState> Form<State> for Text<State> where State: Clone {
     }
     fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
 }
-impl<State: UIState> Positionable for Text<State> where State: Clone {
+impl<State: UIStateCl> Positionable for Text<State> {
     fn with_pos(&self, to_add: Position) -> Self {
         Self { pos: self.pos + to_add, ..self.clone() }
     }
@@ -111,11 +114,17 @@ impl<State: UIState> Positionable for Text<State> where State: Clone {
     }
     fn get_size(&self) -> Position {
         if let Some(width) = self.max_width {
-            return Position(width, self.size);
+            return Position(width, if width != 0. {
+                self.size * (self.text.chars().count() as f32) / width * self.size
+            } else {
+                self.size
+            });
         }
         Position(self.size * (self.text.chars().count() as f32), self.size)
-}   }
-impl<State: UIState> Default for Text<State> {
+    }
+    fn get_pos(&self) -> Position { self.pos }
+}
+impl<State: UIStateCl> Default for Text<State> {
     fn default() -> Self {
         Self {
             text: "".into(),
@@ -128,7 +137,7 @@ impl<State: UIState> Default for Text<State> {
             color: Color::BLACK,
             boo: PhantomData
 }   }   }
-impl<State: UIState> Text<State> {
+impl<State: UIStateCl> Text<State> {
     pub fn new(text: impl Into<String>, font: impl Into<FontId>,
            align_h: AlignHorizontal,
            align_v: AlignVertical,
@@ -140,8 +149,45 @@ impl<State: UIState> Text<State> {
             text: text.into(), font: font.into(), align_h, align_v, pos, size, max_width, color,
             boo: PhantomData
 }   }   }
+
 #[derive(Clone)]
-pub struct Button<State: UIState, T: Form<State> + Positionable> where State: Clone, T: Clone {
+pub struct TextChain<State: UIStateCl> {
+    pub texts: Vec<Text<State>>,
+    pub pos: Position,
+    pub max_width: f32
+}
+impl<State: UIStateCl> Form<State> for TextChain<State> {
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        let max_width = self.max_width;
+        let mut add_pos = Position(0., 0.);
+        self.texts.iter_mut().for_each(|text| {
+            if text.max_width > Some(self.max_width) || text.max_width.is_none() {
+               text.max_width = Some(max_width);
+            }
+            text.with_pos(self.pos + add_pos).draw(app, gfx, plugins, state);
+            if *text.max_width.as_ref().unwrap() == text.get_size().0 {
+                add_pos.0 = 0.;
+                add_pos.1 += text.get_size().1;
+            } else {
+                add_pos.0 += text.get_size().0;
+            }
+        });
+    }
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.texts.iter_mut().for_each(|text| {
+            text.add_pos(self.pos);
+            text.after(app, gfx, plugins, state);
+            text.add_pos(-self.pos);
+        })
+}   }
+impl<State: UIStateCl> Positionable for TextChain<State> {
+    fn with_pos(&self, to_add: Position) -> Self { Self { pos: self.pos + to_add, ..self.clone() } }
+    fn add_pos(&mut self, to_add: Position) { self.pos += to_add; }
+    fn get_size(&self) -> Position { Position(self.max_width, self.texts.iter().map(|text| text.get_size().1).sum()) }
+    fn get_pos(&self) -> Position { self.pos }
+}
+#[derive(Clone)]
+pub struct Button<State: UIStateCl, T: PosForm<State>> {
     pub inside: Option<T>,
     pub rect: Rect,
     pub if_hovered: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
@@ -149,7 +195,7 @@ pub struct Button<State: UIState, T: Form<State> + Positionable> where State: Cl
     pub focused: bool,
     pub selected: bool
 }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for Button<State, T> {
+impl<State: UIStateCl + Clone, T: PosForm<State>> Form<State> for Button<State, T> {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         if let Some(form) = &mut self.inside {
             form.with_pos(self.rect.pos).draw( app, gfx, plugins, state);
@@ -166,17 +212,17 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> 
         if let Some(form) = &mut self.inside {
             form.after( app, gfx, plugins, state);
 }    }   }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable for Button<State, T> {
+impl<State: UIStateCl + Clone, T: PosForm<State>> Positionable for Button<State, T> {
     fn with_pos(&self, to_add: Position) -> Self {
         Self { rect: Rect { pos: self.rect.pos + to_add, size: self.rect.size }, ..self.clone() }
     }
     fn add_pos(&mut self, to_add: Position) {
         self.rect.pos += to_add;
     }
-    fn get_size(&self) -> Position {
-        self.rect.size
-}   }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Button<State, T> {
+    fn get_size(&self) -> Position { self.rect.size }
+    fn get_pos(&self) -> Position { self.rect.pos }
+}
+impl<State: UIStateCl + Clone, T: PosForm<State>> Button<State, T> {
     pub fn new(mut inside: Option<T>, rect: Rect,
         if_hovered: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
         if_clicked: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>
@@ -191,14 +237,14 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Button<State
 }   }   }
 
 #[derive(Clone)]
-pub struct Container<State: UIState + Clone, T: Form<State> + Positionable + Clone> {
+pub struct Container<State: UIStateCl, T: PosForm<State>> {
     pub inside: Vec<T>,
     pub pos: Position,
     pub align_direction: Direction,
     pub interval: Position,
     pub boo: PhantomData<State>
 }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for Container<State, T> {
+impl<State: UIStateCl, T: PosForm<State>> Form<State> for Container<State, T> {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         self.calc_insides().iter_mut().for_each(|form| form.draw(app, gfx, plugins, state));
     }
@@ -228,7 +274,7 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> 
             inside.add_pos(-to_add);
         });
 }   }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Container<State, T> {
+impl<State: UIStateCl, T: PosForm<State>> Container<State, T> {
     pub fn calc_insides(&self) -> Vec<T> {
         let inside_sizes = self.inside.iter().map(|form| form.get_size()).collect::<Vec<Position>>();
 
@@ -252,7 +298,7 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Container<St
             inside.with_pos(to_add)
         }).collect()
 }   }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable for Container<State, T> {
+impl<State: UIStateCl, T: PosForm<State>> Positionable for Container<State, T> {
     fn with_pos(&self, to_add: Position) -> Self {
         Self { pos: self.pos + to_add, ..self.clone() }
     }
@@ -275,7 +321,8 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable
             }
             Direction::Bottom | Direction::Top => {
                 summed_v = sizes_v.clone().sum::<f32>();
-        }   }
+            }
+        }
         let interval = self.interval * (sizes.len() - 1) as f32;
         Position(
             match self.align_direction {
@@ -297,8 +344,10 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable
                 _ => sizes_h.max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
             }
         )
-}   }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Default for Container<State, T> {
+    }
+    fn get_pos(&self) -> Position { self.pos }
+}
+impl<State: UIStateCl, T: PosForm<State>> Default for Container<State, T> {
     fn default() -> Self {
         Self {
             inside: vec![],
@@ -309,13 +358,13 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Default for 
 }   }   }
 
 #[derive(Clone)]
-pub struct SingleContainer<State: UIState + Clone, T: Form<State> + Positionable + Clone> {
+pub struct SingleContainer<State: UIStateCl, T: PosForm<State>> {
     pub inside: Option<T>,
     pub on_draw: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
     pub after_draw: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
     pub pos: Position
 }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for SingleContainer<State, T> {
+impl<State: UIStateCl, T: PosForm<State>> Form<State> for SingleContainer<State, T> {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         if let Some(form) = &mut self.inside {
             form.add_pos(self.pos);
@@ -339,7 +388,7 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> 
             form.after(app, gfx, plugins, state);
             form.add_pos(-self.pos);
 }   }   }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable for SingleContainer<State, T> {
+impl<State: UIStateCl, T: PosForm<State>> Positionable for SingleContainer<State, T> {
     fn with_pos(&self, to_add: Position) -> Self {
         let mut cloned = self.clone();
         cloned.add_pos(to_add);
@@ -353,8 +402,10 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable
             return form.get_size();
         }
         Position(0., 0.)
-}   }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Default for SingleContainer<State, T> {
+    }
+    fn get_pos(&self) -> Position { self.pos }
+}
+impl<State: UIStateCl, T: PosForm<State>> Default for SingleContainer<State, T> {
     fn default() -> Self {
         Self {
             inside: None,
@@ -364,20 +415,23 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Default for 
 }   }   }
 
 #[derive(Clone)]
-struct Slider<State: UIState + Clone, T: Form<State> + Positionable + Clone> {
+pub struct Slider<State: UIStateCl, T: PosForm<State>> {
     pub rect: Rect,
     pub slider_inside: T,
     pub scroll: f32,
+    pub max_scroll: f32,
+    pub scroll_percent: f32,
     pub boo: PhantomData<State>
 }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for Slider<State, T> {
+impl<State: UIStateCl, T: PosForm<State>> Form<State> for Slider<State, T> {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        self.slider_inside.with_pos(self.rect.size + Position(0.,self.scroll)).draw(app, gfx, plugins, state);
+        self.scroll_percent = self.scroll/(app.window().size().1 as f32)*self.max_scroll;
+        self.slider_inside.with_pos(Position(self.rect.size.0, 0.) + Position(0., self.scroll_percent)).draw(app, gfx, plugins, state);
     }
     fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        self.slider_inside.with_pos(self.rect.size + Position(0., self.scroll)).after(app, gfx, plugins, state);
+        self.slider_inside.with_pos(self.rect.size + Position(0., self.scroll_percent)).after(app, gfx, plugins, state);
 }   }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable for Slider<State, T> {
+impl<State: UIStateCl, T: PosForm<State>> Positionable for Slider<State, T> {
     fn with_pos(&self, to_add: Position) -> Self {
         let mut cloned = self.clone();
         cloned.add_pos(to_add);
@@ -388,14 +442,27 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable
     }
     fn get_size(&self) -> Position {
         self.rect.size
-}   }
+    }
+    fn get_pos(&self) -> Position { self.rect.pos }
+}
+impl<State: UIStateCl, T: PosForm<State> + Default> Default for Slider<State, T> {
+    fn default() -> Self {
+        Self {
+            rect: Rect::default(),
+            slider_inside: T::default(),
+            scroll: 0.,
+            max_scroll: 0.,
+            scroll_percent: 0.,
+            boo: PhantomData
+}   }   }
 
 #[derive(Clone)]
-struct SliderContainer<State: UIState + Clone, T: Form<State> + Positionable + Clone> {
+pub struct SliderContainer<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> {
     pub inside: T,
-    pub slider: Slider<State, T>
+    pub slider: Slider<State, K>,
+    pub slide_speed: f32,
 }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> for SliderContainer<State, T> {
+impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Form<State> for SliderContainer<State, T, K> {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         self.slider.draw(app, gfx, plugins, state);
         self.inside.with_pos(Position(0.,self.slider.scroll)).draw(app, gfx, plugins, state);
@@ -403,23 +470,25 @@ impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Form<State> 
 
     fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         self.inside.add_pos(Position(0.,self.slider.scroll));
+        let mouse = &app.mouse;
+        let mouse_pos = (mouse.x, mouse.y).into();
+        let inside_rect = Rect { pos: self.inside.get_pos(), size: self.inside.get_size() };
+        let slider_rect = Rect { pos: self.slider.slider_inside.get_pos(), size: self.slider.slider_inside.get_size()};
         self.inside.after(app, gfx, plugins, state);
         self.inside.add_pos(-Position(0.,self.slider.scroll));
-    }
-    fn on_event(&mut self, event: Event, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        match event {
-            Event::MouseWheel { delta_x: _delta_x, delta_y } => {
-                self.slider.scroll = delta_y;
-            },
-            _ => {}
-}   }   }
-impl<State: UIState + Clone, T: Form<State> + Positionable + Clone> Positionable for SliderContainer<State, T> {
+        if inside_rect.collides(mouse_pos) || slider_rect.collides(mouse_pos) {
+            self.slider.scroll += app.mouse.wheel_delta.y * self.slide_speed;
+        }
+}   }
+impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Positionable for SliderContainer<State, T, K> {
     fn with_pos(&self, to_add: Position) -> Self {
-        Self { inside: self.inside.clone(), slider: self.slider.with_pos(to_add) }
+        Self { inside: self.inside.clone(), slider: self.slider.with_pos(to_add), slide_speed: self.slide_speed }
     }
     fn add_pos(&mut self, to_add: Position) {
         self.slider.add_pos(to_add);
     }
     fn get_size(&self) -> Position {
         self.inside.get_size()
-}   }
+    }
+    fn get_pos(&self) -> Position { self.inside.get_pos() }
+}
