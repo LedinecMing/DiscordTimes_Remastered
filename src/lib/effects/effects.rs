@@ -1,11 +1,10 @@
 use crate::lib::{
     effects::effect::{Effect, EffectInfo, EffectKind},
-    math::{add_if_nat, percent},
     units::{
         unit::UnitStats,
         unit::Unit
 }   };
-use crate::lib::math::Percent;
+use math_thingies::{nat, Percent, add_if_nat};
 
 
 #[derive(Copy, Clone, Debug)]

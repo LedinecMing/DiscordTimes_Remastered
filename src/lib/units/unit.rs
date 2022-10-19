@@ -7,9 +7,8 @@ use {
         bonuses::bonus::Bonus
     },
     derive_more::{Add, Sub, BitOr},
-    math::Percent,
+    math_thingies::Percent,
 };
-use crate::lib::math;
 use crate::lib::units::unit::MagicType::NoMagic;
 
 #[derive(Copy, Clone, Debug, Add, Sub)]

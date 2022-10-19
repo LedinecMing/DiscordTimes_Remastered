@@ -1,0 +1,172 @@
+use {
+    std::{
+        cmp::{Ordering, min, max},
+        ops::{Add, AddAssign, Sub, SubAssign, Div, Mul, Range},
+        fmt::{Display, Formatter}
+    },
+    boolinator::Boolinator,
+    num::{Num, NumCast, ToPrimitive}
+};
+
+pub trait PartOrdNum = Num + PartialOrd;
+pub trait CopyPartOrdNum = PartOrdNum + Copy;
+pub trait OrdNum = Num + Ord;
+pub trait CopyOrdNum = OrdNum + Copy;
+
+pub trait IsInRange<V: CopyPartOrdNum> {
+    fn is_in_range(value: V, range: &Range<V>) -> bool { value >= range.start || value <= range.end }
+    fn is_in_self_range(&self, value: V) -> bool;
+
+    fn get(&self) -> V;
+    fn range(&self) -> Range<V>;
+
+    fn set(&mut self, value: V) -> Result<(), ()>;
+    fn set_unchecked(&mut self, value: V) {
+        self.set(value).unwrap()
+}   }
+
+pub struct InRange<V: CopyPartOrdNum>{
+    value: V,
+    range: Range<V>
+}
+impl<V: CopyPartOrdNum> InRange<V> {
+    pub fn new(value: V, range: Range<V>) -> Result<Self, ()> {
+        Self::is_in_range(value, &range).as_result(Self {value, range}, ())
+    }
+    pub fn new_unchecked(value: V, range: Range<V>) -> Self { Self::new(value, range).unwrap() }
+}
+impl<V: CopyPartOrdNum> IsInRange<V> for InRange<V> {
+    fn is_in_self_range(&self, value: V) -> bool { Self::is_in_range(value, &self.range()) }
+    fn get(&self) -> V { self.value }
+    fn range(&self) -> Range<V> { self.range.clone() }
+    fn set(&mut self, value: V) -> Result<(), ()> {
+        self.value = self.is_in_self_range(value).as_result(value, ())?;
+        Ok(())
+}   }
+
+pub trait InConstRange<V: PartOrdNum> {
+    const RANGE: Range<V>;
+    fn is_in_range(value: V) -> bool {
+        value < Self::RANGE.start || value > Self::RANGE.end
+}   }
+
+pub struct InUnsignedRange<V: CopyPartOrdNum + NumCast + ToPrimitive> {
+    value: V,
+    end: V
+}
+impl<V: CopyPartOrdNum + NumCast + ToPrimitive> InUnsignedRange<V> {
+    const START: u8 = 0;
+    fn end(&self) -> V { self.end }
+    fn new(value: V, end: V) -> Result<Self, ()> {
+        Self::is_in_range(value, &(NumCast::from(Self::START).unwrap()..end)).as_result(Self {value, end}, ())
+    }
+    fn new_unchecked(value: V, end: V) -> Self { Self::new(value, end).unwrap() }
+}
+impl<V: CopyPartOrdNum + NumCast> IsInRange<V> for InUnsignedRange<V> {
+    fn is_in_self_range(&self, value: V) -> bool { Self::is_in_range(value, &self.range()) }
+    fn get(&self) -> V { self.value }
+    fn range(&self) -> Range<V> { NumCast::from(Self::START).unwrap()..self.end }
+    fn set(&mut self, value: V) -> Result<(), ()> {
+        self.value = self.is_in_self_range(value).as_result(value, ())?;
+        Ok(())
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub struct Percent(i16);
+impl Percent {
+    pub fn new(value: i16) -> Self {
+        assert!(Self::is_in_range(value));
+        Self(value)
+    }
+    pub const fn const_new(value: i16) -> Self {
+        assert!(Self::is_in_const_range(value));
+        Self(value)
+    }
+    pub const fn is_in_const_range(value: i16) -> bool { value >= Self::RANGE.start || value <= Self::RANGE.end  }
+    pub fn get(self) -> i16 { self.0 }
+    pub fn calc<V: Num + NumCast>(self, all: V) -> V {
+        all * NumCast::from(self.0).unwrap() / NumCast::from(100).unwrap()
+}   }
+impl InConstRange<i16> for Percent { const RANGE: Range<i16> = -99..100; }
+
+impl PartialEq<i16> for Percent {
+    fn eq(&self, other: &i16) -> bool { self.0 == *other }
+}
+impl PartialOrd<i16> for Percent {
+    fn partial_cmp(&self, other: &i16) -> Option<Ordering> { Some(self.0.cmp(other)) }
+}
+impl Sub<Percent> for Percent {
+    type Output = Percent;
+    fn sub(self, rhs: Percent) -> Self::Output {
+        Percent(saturating(self.0 - rhs.get(), Self::RANGE))
+}   }
+impl Add<Percent> for Percent {
+    type Output = Percent;
+    fn add(self, rhs: Percent) -> Self::Output {
+        Percent(saturating(self.0 + rhs.get(), Self::RANGE))
+}   }
+impl Display for Percent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}%", self.0)
+}   }
+macro_rules! percent_ops_impl {
+    ($($t:ty), *) => {
+        $(
+            impl Add<Percent> for $t {
+                type Output = Self;
+                fn add(self, _rhs: Percent) -> Self::Output {
+                    self.saturating_add(_rhs.calc(self))
+            }   }
+            impl Sub<Percent> for $t {
+                type Output = Self;
+                fn sub(self, _rhs: Percent) -> Self::Output {
+                    self.saturating_sub(_rhs.calc(self))
+            }   }
+            impl AddAssign<Percent> for $t {
+                fn add_assign(&mut self, _rhs: Percent) {
+                    *self = self.saturating_add(_rhs.calc(*self));
+            }   }
+            impl SubAssign<Percent> for $t {
+                fn sub_assign(&mut self, _rhs: Percent) {
+                    *self = self.saturating_sub(_rhs.calc(*self));
+            }   }
+        )*
+}   }
+macro_rules! percent_float_ops_impl {
+    ($($t:ty), *) => {
+        $(
+            impl Add<Percent> for $t {
+                type Output = Self;
+                fn add(self, _rhs: Percent) -> Self::Output {
+                    self - _rhs.calc(self)
+            }   }
+            impl Sub<Percent> for $t {
+                type Output = Self;
+                fn sub(self, _rhs: Percent) -> Self::Output {
+                    self - _rhs.calc(self)
+            }   }
+            impl AddAssign<Percent> for $t {
+                fn add_assign(&mut self, _rhs: Percent) {
+                    *self = *self - _rhs.calc(*self);
+            }   }
+            impl SubAssign<Percent> for $t {
+                fn sub_assign(&mut self, _rhs: Percent) {
+                    *self = *self - _rhs.calc(*self);
+            }   }
+        )*
+}   }
+percent_ops_impl![i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, usize, isize];
+percent_float_ops_impl![f32, f64];
+
+
+#[inline(always)]
+pub fn nat<T: OrdNum + NumCast>(a: T) -> T {
+    max(a, NumCast::from(0).unwrap())
+}
+#[inline(always)]
+pub fn saturating<T: Ord>(value: T, range: Range<T>) -> T { max(min(value, range.end), range.start) }
+
+pub fn add_if_nat<T: AddAssign + PartialOrd + From<u8>>(value: &mut T, amount: T){
+    if value >= &mut T::from(0) {
+        *value += amount;
+}   }

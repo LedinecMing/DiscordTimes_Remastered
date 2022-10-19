@@ -1,6 +1,8 @@
+use dyn_clone::clone_trait_object;
 use {
     std::{
-        marker::PhantomData
+        marker::PhantomData,
+        collections::HashMap,
     },
     notan::{
         prelude::{AppState, Color, Graphics, Plugins, App},
@@ -223,7 +225,7 @@ impl<State: UIStateCl + Clone, T: PosForm<State>> Positionable for Button<State,
     fn get_pos(&self) -> Position { self.rect.pos }
 }
 impl<State: UIStateCl + Clone, T: PosForm<State>> Button<State, T> {
-    pub fn new(mut inside: Option<T>, rect: Rect,
+    pub fn new(inside: Option<T>, rect: Rect,
         if_hovered: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
         if_clicked: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>
     ) -> Self {
@@ -425,7 +427,7 @@ pub struct Slider<State: UIStateCl, T: PosForm<State>> {
 }
 impl<State: UIStateCl, T: PosForm<State>> Form<State> for Slider<State, T> {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        self.scroll_percent = self.scroll/(app.window().size().1 as f32)*self.max_scroll;
+        self.scroll_percent = -self.scroll / (self.rect.size.1 as f32) * self.max_scroll;
         self.slider_inside.with_pos(Position(self.rect.size.0, 0.) + Position(0., self.scroll_percent)).draw(app, gfx, plugins, state);
     }
     fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
@@ -478,8 +480,7 @@ impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Form<State> for Sli
         self.inside.add_pos(-Position(0.,self.slider.scroll));
         if inside_rect.collides(mouse_pos) || slider_rect.collides(mouse_pos) {
             self.slider.scroll += app.mouse.wheel_delta.y * self.slide_speed;
-        }
-}   }
+}   }   }
 impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Positionable for SliderContainer<State, T, K> {
     fn with_pos(&self, to_add: Position) -> Self {
         Self { inside: self.inside.clone(), slider: self.slider.with_pos(to_add), slide_speed: self.slide_speed }
@@ -492,3 +493,117 @@ impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Positionable for Sl
     }
     fn get_pos(&self) -> Position { self.inside.get_pos() }
 }
+
+#[derive(Clone)]
+pub struct Data<State: UIStateCl, K: Clone, V: Clone> {
+    pub data: HashMap<K, V>,
+    pub boo: PhantomData<State>
+}
+impl<State: UIStateCl, K: Clone, V: Clone> Form<State> for Data<State, K, V> {
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
+}
+impl<State: UIStateCl, K: Clone, V: Clone> Default for Data<State, K, V> {
+    fn default() -> Self { Self { data: HashMap::new(), boo: PhantomData } }
+}
+impl<State: UIStateCl, K: Clone, V: Clone> Positionable for Data<State, K, V> {
+    fn with_pos(&self, to_add: Position) -> Self { self.clone() }
+    fn add_pos(&mut self, to_add: Position) {}
+    fn get_size(&self) -> Position { Position::default() }
+    fn get_pos(&self) -> Position { Position::default() }
+}
+pub trait PartPositional {
+    fn add_pos_obj(&mut self, to_add: Position);
+    fn get_size_obj(&self) -> Position;
+    fn get_pos_obj(&self) -> Position;
+}
+impl<T: Positionable> PartPositional for T {
+    fn add_pos_obj(&mut self, to_add: Position) {
+        Positionable::add_pos(self, to_add);
+    }
+    fn get_size_obj(&self) -> Position { Positionable::get_size(self) }
+    fn get_pos_obj(&self) -> Position { Positionable::get_pos(self) }
+}
+pub trait ObjPosForm<State: UIStateCl>: Form<State> + PartPositional {}
+impl<State: UIStateCl> Clone for Box<dyn ObjPosForm<State>> {
+    fn clone(&self) -> Self {
+        clone_box(&**self)
+}   }
+#[derive(Clone)]
+pub struct DynContainer<State: UIStateCl> {
+    pub inside: Vec<Box<dyn ObjPosForm<State>>>,
+    pub pos: Position,
+    pub align_direction: Direction,
+    pub interval: Position
+}
+impl<State: UIStateCl> Form<State> for DynContainer<State> {
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.calc_insides().iter_mut().for_each(|form| form.draw(app, gfx, plugins, state));
+    }
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        let inside_len = self.inside.len();
+        let inside_sizes = self.inside.iter().map(|form| form.get_size_obj()).collect::<Vec<Position>>();
+        self.inside.iter_mut().zip(0..inside_len).for_each(|(inside, i): (&mut Box<dyn ObjPosForm<State>>, usize)| {
+            let sizes = &inside_sizes[0..i];
+            let interval = self.interval * ((i - 1) as f32);
+            let pos = self.pos;
+            let to_add = match self.align_direction {
+                Direction::Right => {
+                    Position(sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + pos.0, pos.1 + interval.1)
+                }
+                Direction::Left => {
+                    Position(-sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + pos.0, pos.1 + interval.1)
+                }
+                Direction::Top => {
+                    Position(pos.0 + interval.0, -sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + pos.1)
+                }
+                Direction::Bottom => {
+                    Position(pos.0 + interval.0, sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + pos.1)
+                }
+            };
+            inside.add_pos_obj(to_add);
+            inside.after(app, gfx, plugins, state);
+            inside.add_pos_obj(-to_add);
+        });
+}   }
+impl<State: UIStateCl> DynContainer<State> {
+    pub fn calc_insides(&self) -> Vec<Box<dyn ObjPosForm<State>>> {
+        let inside_sizes = self.inside.iter().map(|form| form.get_size_obj()).collect::<Vec<Position>>();
+
+        self.inside.iter().zip(0..(self.inside.len())).map(|(inside, i): (&Box<dyn ObjPosForm<State>>, usize)| {
+            let sizes = &inside_sizes[0..i];
+            let interval = self.interval * ((i - 1) as f32);
+            let to_add = match self.align_direction {
+                Direction::Right => {
+                    Position(sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + self.pos.0, self.pos.1 + interval.1)
+                }
+                Direction::Left => {
+                    Position(-sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + self.pos.0, self.pos.1 + interval.1)
+                }
+                Direction::Top => {
+                    Position(self.pos.0 + interval.0, -sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + self.pos.1)
+                }
+                Direction::Bottom => {
+                    Position(self.pos.0 + interval.0, sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + self.pos.1)
+                }
+            };
+            let mut clonned = inside.clone();
+            clonned.add_pos_obj(to_add);
+            clonned
+        }).collect()
+}   }
+impl<State: UIStateCl> Positionable for DynContainer<State> {
+    fn with_pos(&self, to_add: Position) -> Self { self.clone() }
+    fn add_pos(&mut self, to_add: Position) {
+        self.pos += to_add;
+    }
+    fn get_size(&self) -> Position { Position::default() }
+    fn get_pos(&self) -> Position { Position::default() }
+}
+impl<State: UIStateCl> Default for DynContainer<State> {
+    fn default() -> Self { Self {
+        inside: vec![],
+        pos: Position(0., 0.),
+        align_direction: Direction::Right,
+        interval: Position(0., 0.)
+}   }   }

@@ -6,9 +6,10 @@ use {
             effect::{EffectInfo, EffectKind},
             effects::*
         },
-        units::unit::{Defence, Power, UnitStats, Unit},
-        math::Percent
-}   };
+        units::unit::{Defence, Power, UnitStats, Unit}
+    },
+    math_thingies::Percent
+};
 
 #[derive(Copy, Clone, Debug)]
 pub struct DefencePiercing {}

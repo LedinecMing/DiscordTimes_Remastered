@@ -106,9 +106,9 @@ use {
         fmt::Display,
         collections::HashMap
     },
+    math_thingies::Percent,
     super::{
         bonuses::bonuses::*,
-        math::Percent,
         units::{
             unit::*,
             units::*
