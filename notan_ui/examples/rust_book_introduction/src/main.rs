@@ -9,8 +9,11 @@ use {
         draw::*,
         text::TextConfig
     },
+    math_thingies::VecMove,
     notan_ui::{
-        forms::*,
+        text::*,
+        wrappers::Slider,
+        containers::{SingleContainer, SliderContainer},
         rect::*
 }   };
 
@@ -20,26 +23,15 @@ struct State {
     pub draw: Draw
 }
 impl AppState for State {}
-impl UIState for State {
-    fn mut_fonts(&mut self) -> &mut Vec<Font> { &mut self.fonts }
-    fn fonts(&self) -> &Vec<Font> { &self.fonts }
-    fn mut_draw(&mut self) -> &mut Draw { &mut self.draw }
-    fn draw(&self) -> &Draw { &self.draw }
+impl AppState for State {}
+impl Access<Vec<Font>> for State {
+    fn get_mut(&mut self) -> &mut Vec<Font> { &mut self.fonts }
+    fn get(&self) -> &Vec<Font> { &self.fonts }
 }
-
-trait VecMove<T, I: IntoIterator<Item = T>> {
-    fn push_mv(self: Self, value: T) -> Self;
-    fn extend_mv(self: Self, iter: I) -> Self;
+impl Access<Draw> for State {
+    fn get_mut(&mut self) -> &mut Draw { &mut self.draw }
+    fn get(&self) -> &Draw { &self.draw }
 }
-impl VecMove<Text<State>, Vec<Text<State>>> for Vec<Text<State>> {
-    fn push_mv(mut self: Self, value: Text<State>) -> Self {
-        self.push(value);
-        self
-    }
-    fn extend_mv(mut self: Self, iter: Vec<Text<State>>) -> Self {
-        self.extend(iter);
-        self
-}   }
 
 fn title(text: impl Into<String>) -> Text<State> {
     end_line(Text {
@@ -54,7 +46,7 @@ fn normal(text: impl Into<String>) -> Text<State> {
         size: 20.,
         color: Color::from_hex(0xbcbdd0ff),
         ..Text::default()
-    }   }
+}   }
 fn end_line(mut text: Text<State>) -> Text<State> {
     text.max_width = Some(text.get_size().0);
     text
@@ -142,7 +134,7 @@ In most situations, we’ll lead you to the correct version of any code that doe
                     slider: Slider {
                         rect: Rect {
                             pos: Position(0., 0.),
-                            size: Position(800., 800.)
+                            size: Size(800., 800.)
                         },
                         slider_inside: SingleContainer::<State, Text<State>> {
                             inside: None,
@@ -176,16 +168,17 @@ fn setup(gfx: &mut Graphics) -> State {
 }   }
 fn draw(app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
     state.draw = gfx.create_draw();
-    state.mut_draw().clear(Color::WHITE);
+    Access::<Draw>::get_mut(state).clear(Color::WHITE);
     unsafe {
         forms.iter_mut().for_each(|form: &mut Box<dyn Form<State>>| form.draw(app, gfx, plugins, state));
-        gfx.render(state.draw());
+        gfx.render(Access::<Draw>::get(state));
         forms.iter_mut().for_each(|form: &mut Box<dyn Form<State>>| form.after(app, gfx, plugins, state));
 }   }
+
 #[notan_main]
 fn main() -> Result<(), String> {
     let win = WindowConfig::new()
-        .title("notan_ui - RustBook Intro")
+        .title("notan_ui - Container Buttons")
         .vsync(true)
         .lazy_loop(true)
         .high_dpi(true)

@@ -1864,6 +1864,7 @@ dependencies = [
 name = "rust_book_introduction"
 version = "0.1.0"
 dependencies = [
+ "math_thingies",
  "notan",
  "notan_ui",
  "once_cell",

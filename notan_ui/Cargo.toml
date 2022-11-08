@@ -1,12 +1,13 @@
 [package]
 name = "notan_ui"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
-
+description = "UI implementation on top of notan APIs"
+license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 derive_more = "0.99.17"
 dyn-clone = "1.0.9"
 notan = {version = "0.7.1", features = ["text"]}
-math_thingies = {path = "../math_thingies"}
+math_thingies = {version = "0.1.0"}

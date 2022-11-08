@@ -10,7 +10,8 @@ use {
         text::TextConfig
     },
     notan_ui::{
-        forms::*,
+        wrappers::Button,
+        containers::{Container, SingleContainer},
         rect::*
 }   };
 
@@ -20,11 +21,13 @@ struct State {
     pub draw: Draw
 }
 impl AppState for State {}
-impl UIState for State {
-    fn mut_fonts(&mut self) -> &mut Vec<Font> { &mut self.fonts }
-    fn fonts(&self) -> &Vec<Font> { &self.fonts }
-    fn mut_draw(&mut self) -> &mut Draw { &mut self.draw }
-    fn draw(&self) -> &Draw { &self.draw }
+impl Access<Vec<Font>> for State {
+    fn get_mut(&mut self) -> &mut Vec<Font> { &mut self.fonts }
+    fn get(&self) -> &Vec<Font> { &self.fonts }
+}
+impl Access<Draw> for State {
+    fn get_mut(&mut self) -> &mut Draw { &mut self.draw }
+    fn get(&self) -> &Draw { &self.draw }
 }
 
 
@@ -44,7 +47,7 @@ static mut forms: Lazy<Vec<Box<dyn Form<State>>>> = Lazy::new(|| {
                         }),
                         Rect {
                             pos: Position(0., 0.),
-                            size: Position(100., 100.)
+                            size: Size(100., 100.)
                         },
                         None,
                         Some(|button, app, gfx, plugins, state: &mut State| {
@@ -52,7 +55,7 @@ static mut forms: Lazy<Vec<Box<dyn Form<State>>>> = Lazy::new(|| {
                         }))),
                     on_draw: Some(|container, app, gfx, plugins, state: &mut State| {
                         let rect = container.inside.as_ref().unwrap().rect;
-                        state.mut_draw().rect(rect.pos.into(), rect.size.into()).color(Color::YELLOW);
+                        Access::<Draw>::get_mut(state).rect(rect.pos.into(), rect.size.into()).color(Color::YELLOW);
                     }),
                     after_draw: None,
                     pos: Position(0., 0.)
@@ -75,10 +78,10 @@ fn setup(gfx: &mut Graphics) -> State {
 }   }
 fn draw(app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
     state.draw = gfx.create_draw();
-    state.mut_draw().clear(Color::WHITE);
+    get_mut::<State, Draw>(state).clear(Color::WHITE);
     unsafe {
         forms.iter_mut().for_each(|form: &mut Box<dyn Form<State>>| form.draw(app, gfx, plugins, state));
-        gfx.render(state.draw());
+        gfx.render(get::<State, Draw>(state));
         forms.iter_mut().for_each(|form: &mut Box<dyn Form<State>>| form.after(app, gfx, plugins, state));
 }   }
 

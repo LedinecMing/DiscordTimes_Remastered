@@ -1,0 +1,1 @@
+Some math thingies, traits and other, for self use.

@@ -7,3 +7,4 @@ edition = "2021"
 notan_ui = {path = "../.."}
 notan = {version = "0.7.1", features = ["text"]}
 once_cell = "1.15.0"
+math_thingies = {path = "../../../math_thingies"}

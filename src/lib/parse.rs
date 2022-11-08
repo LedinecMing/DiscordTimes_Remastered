@@ -27,7 +27,18 @@ LevelMultipler=[{число}; standard = 140] — множитель уровн�
 
 IconIndex=[{число}] — индекс иконки
 
-Bonus=[{отсутствие строки}/SpearDefense/HorseAtack/ArmorIgnore/ArmyMedic/Merchant/DeathCurse/GodAnger/GodStrike/Unvulnerabe/VampirsGist/OldVampirsGist/Evasive/Ghost/Artillery/Garrison/AddPayment/Poison/Dead/FastDead/Counterblow/FlankStrike] | Длинное Оружие/Быстрая Атака/Проникающий Удар/Лекарское Умение/Торговец-Эксперт/Проклятие Смерти/Кара Господня/Гнев Господен/Неуязвимость/Тёмный Дар/Тёмное Искусство/Увертливость/Яростный Дух/Шквальная Атака/Гарнизон/Тыловая Служба/Отравленное Оружие/Мертвец/Быстрый Мертвец/Контрудар/Фланговый удар — бонус
+Bonus=[{отсутствие строки}
+Dead, Fire,
+Ghost, Block, Poison,
+Evasive, Berserk,
+Merchant, GodAnger, Garrison, FastDead,
+ArmyMedic, GodStrike, Artillery,
+DeathCurse, AddPayment,
+HorseAttack, ArmorIgnore, Unvulnerabe, VampirsGist, Counterblow, FlankStrike,
+SpearDefense,
+OldVampirsGist
+
+/Длинное Оружие/Быстрая Атака/Проникающий Удар/Лекарское Умение/Торговец-Эксперт/Проклятие Смерти/Кара Господня/Гнев Господен/Неуязвимость/Тёмный Дар/Тёмное Искусство/Увертливость/Яростный Дух/Шквальная Атака/Гарнизон/Тыловая Служба/Отравленное Оружие/Мертвец/Быстрый Мертвец/Контрудар/Фланговый удар — бонус
 
 // развитие отряда
 
@@ -47,7 +58,7 @@ NextUnit3Level=[{число}; standard = 1] — необходимый уров�
 
 Hits=[{число}] — хиты
 
-AttackBlow=[{отсутствие строки}/{число}] — рукопашная атака
+AttackBlow=[{отсутствие строки}/{число}] — рукопашная атака+
 
 AttackShot=[{отсутствие строки}/{число}] — стрелковая атака
 
@@ -110,7 +121,7 @@ use {
     super::{
         bonuses::bonuses::*,
         units::{
-            unit::*,
+            unit::{*, MagicDirection::*, MagicType::*},
             units::*
         }
     },
@@ -123,7 +134,7 @@ fn collect_errors<T, K: Display>(for_check: Result<T, K>, collector: &mut Vec<St
             collector.push(format!("Error: {}; additional: {}", info.to_string(), additional));
             None
 }   }   }
-pub fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
+pub fn parse_units() -> HashMap<usize, Unit1> {
     let mut units = HashMap::new();
     let sections = ini!("Units.ini");
     let mut counter : usize = 0;
@@ -131,12 +142,15 @@ pub fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
         println!("Section: {:?}", sec);
         let mut name = "";
         let mut description = "";
-        let mut spec = "";
         let mut magic_type = "";
+        let mut magic_direction = "";
         let mut nature = "";
+        let mut bonus_name = "";
+
         let mut cost = None;
         let mut surrender = None;
-        let mut hp = Some(0);
+
+        let mut hp = None;
 
         let mut max_xp = None;
         let mut xp_up = None;
@@ -144,10 +158,21 @@ pub fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
         let mut damage_hand = Some(0);
         let mut damage_ranged = Some(0);
         let mut damage_magic = Some(0);
+
+        let mut defence_hand = Some(0);
+        let mut defence_ranged = Some(0);
+        let mut defence_magic = Some(0);
+
+        let mut defence_hand_percent = Some(0);
+        let mut defence_ranged_percent = Some(0);
+        let mut defence_death_magic = Some(0);
+        let mut defence_life_magic = Some(0);
+        let mut defence_elemental_magic = Some(0);
+
+        let mut moves = Some(0);
+        let mut speed = Some(0);
         let mut vamp = Some(0);
         let mut regen = Some(0);
-
-        let mut bonus_name: Option<&str> = None;
 
         let mut error_collector: Vec<String> = Vec::new();
         for (k, value) in prop.iter() {
@@ -167,19 +192,62 @@ pub fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
                                                    "Value of field surrender omitted as non-u64");
                     },
                     "hits" => {
-                        hp = collect_errors(v.parse::<u64>(), &mut error_collector,
-                                            "Value of field hp omitted as non-u64");
+                        hp = collect_errors(v.parse::<i64>(), &mut error_collector,
+                                            "Value of field hp omitted as non-i64");
                     },
-                    "attackblow" => {
+                    "attackblow" | "attackhand" => {
                         damage_hand = collect_errors(v.parse::<u64>(), &mut error_collector,
                                                      "Value of field damage_hand omitted as non-u64");
                     }
-                    "attackshot" => {
+                    "attackshot" | "attackranged" => {
                         damage_ranged = collect_errors(v.parse::<u64>(), &mut error_collector,
                                                        "Value of field damage_ranged omitted as non-u64");
                     }
-                    "magic" => {
+                    "magic" | "attackmagic" => {
                         magic_type = v;
+                    }
+                    "defenceblow" | "defencehand" => {
+                        defence_hand = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                                     "Value of field defence_hand omitted as non-u64");
+                    }
+                    "defenceshot" | "defenceranged" => {
+                        defence_ranged = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                                     "Value of field defence_ranged omitted as non-u64");
+                    }
+                    "defencemagic" => {
+                        defence_magic = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                                     "Value of field defence_magic omitted as non-u64");
+                    }
+                    "protectdeath" => {
+                        defence_death_magic = collect_errors(v.parse::<i16>(), &mut error_collector,
+                                                           "Value of field defence_death_magic omitted as non-i16");
+                    }
+                    "protectlife" => {
+                        defence_life_magic = collect_errors(v.parse::<i16>(), &mut error_collector,
+                                                           "Value of field defence_life_magic omitted as non-i16");
+                    }
+                    "protectelemental" => {
+                        defence_elemental_magic = collect_errors(v.parse::<i16>(), &mut error_collector,
+                                                           "Value of field defence_elemental_magic omitted as non-i16");
+                    }
+                    "protectblow" | "protecthand" => {
+                        defence_hand_percent = collect_errors(v.parse::<i16>(), &mut error_collector,
+                                                           "Value of field defence_hand_percent omitted as non-i16");
+                    }
+                    "protectshot" | "protectranged" => {
+                        defence_ranged_percent = collect_errors(v.parse::<i16>(), &mut error_collector,
+                                                           "Value of field defence_ranged_percent omitted as non-i16");
+                    }
+                    "magicdirection" => {
+                        magic_direction = v;
+                    },
+                    "manevres" | "moves" => {
+                        moves = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                               "Value of field defence_elemental_magic omitted as non-u64");
+                    },
+                    "intiative" | "speed" => {
+                        speed = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                               "Value of field speed omitted as non-u64");
                     }
                     "vampirism" => {
                         vamp = collect_errors(v.parse::<i16>(), &mut error_collector,
@@ -197,16 +265,60 @@ pub fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
                         max_xp = collect_errors(v.parse::<u64>(), &mut error_collector,
                                                "Value of field max_xp omitted as non-u64");
                     },
-                    "specialization" => { spec = v; }
-                    "bonus" => { bonus_name = Some(v); }
+                    "bonus" => { bonus_name = v; }
                     _ => {}
         }   }   }
+
+        let match_err: Result<(), &str> = Err("parse.rs: cant match field;");
+
+        let magic_direction = match magic_direction {
+            "ToAll" => ToAll,
+            "ToAlly" => ToAlly,
+            "ToEnemy" => ToEnemy,
+            "CurseOnly" => CurseOnly,
+            "CureOnly" => CureOnly,
+            "BlessOnly" => BlessOnly,
+            "StrikeOnly" => StrikeOnly,
+            "" => ToAll,
+            _ => {
+                collect_errors(match_err, &mut error_collector,
+                               &*format!("Field MagicDirection is invalid: {}", magic_direction));
+                ToAll
+        }   };
+        let magic_type = match magic_type {
+            "LifeMagic" => Some(Life(magic_direction)),
+            "ElementalMagic" => Some(Elemental(magic_direction)),
+            "DeathMagic" => Some(Death(magic_direction)),
+            "NoMagic" | "" => None,
+            _ => {
+                collect_errors(match_err, &mut error_collector,
+                               &*format!("Field MagicType is invalid: {}", magic_type));
+                None
+        }   };
+        let bonus = match match_bonus(bonus_name) {
+            Ok(bonus) => bonus,
+            Err(_) => {
+                collect_errors(match_err, &mut error_collector,
+                               &*format!("Field Bonus is invalid: {}", bonus_name));
+                Box::new(NoBonus {})
+        }   };
+        let unit_type = match nature {
+            "Alive" | "" => UnitType::Alive,
+            "Rogue" => UnitType::Rogue,
+            "Undead" => UnitType::Undead,
+            "Hero" => UnitType::Alive,
+            _ => {
+                collect_errors(match_err, &mut error_collector,
+                               &*format!("Field Nature is invalid: {}", nature));
+                UnitType::Alive
+        }   };
+
         assert!(error_collector.is_empty(), "{}", error_collector.join("\n"));
-        let bonus = match_bonus(bonus_name);
         let hp = hp.unwrap();
         let xp_up = Percent::new(xp_up.unwrap());
         let max_xp = max_xp.unwrap();
-        let data: UnitData = UnitData {
+
+        let unit = Unit1 {
             stats: UnitStats {
                 hp,
                 max_hp: hp,
@@ -215,10 +327,19 @@ pub fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
                     ranged: damage_ranged.unwrap(),
                     hand: damage_magic.unwrap()
                 },
-                defence: Defence::empty(),
-                moves: 0,
-                max_moves: 0,
-                speed: 0,
+                defence: Defence {
+                    death_magic: Percent::new(defence_death_magic.unwrap()),
+                    elemental_magic: Percent::new(defence_elemental_magic.unwrap()),
+                    life_magic: Percent::new(defence_life_magic.unwrap()),
+                    hand_percent: Percent::new(defence_hand_percent.unwrap()),
+                    ranged_percent: Percent::new(defence_ranged_percent.unwrap()),
+                    magic_units: defence_magic.unwrap(),
+                    hand_units: defence_hand.unwrap(),
+                    ranged_units: defence_ranged.unwrap()
+                },
+                moves: moves.unwrap(),
+                max_moves: moves.unwrap(),
+                speed: speed.unwrap(),
                 vamp: Percent::new(vamp.unwrap()),
                 regen: Percent::new(regen.unwrap())
             },
@@ -226,18 +347,8 @@ pub fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
                 name: name.into(),
                 descript: description.into(),
                 cost: cost.unwrap(),
-                unit_type: match nature {
-                    "Alive" => UnitType::Alive,
-                    "Rogue" => UnitType::Rogue,
-                    "Undead" => UnitType::Undead,
-                    _ => UnitType::Unidentified,
-                },
-                magic_type: match magic_type {
-                    "LifeMagic" => MagicType::Life,
-                    "ElementalMagic" => MagicType::Elemental,
-                    "DeathMagic" => MagicType::Death,
-                    _ => MagicType::Death
-                },
+                unit_type,
+                magic_type,
                 surrender,
                 lvl: LevelUpInfo {
                     stats: UnitStats::empty(),
@@ -250,16 +361,10 @@ pub fn parse_units() -> HashMap<usize, Box<dyn Unit>> {
                 xp: 0
             },
             inventory: UnitInventory::empty(),
+            army: 0,
             bonus,
             effects: vec![]
         };
-        let unit: Box<dyn Unit> = match spec {
-                "Hand" => Box::new(Hand::new(data)) as Box<dyn Unit>,
-                "Ranged" => Box::new(Ranged::new(data)),
-                "HealMage" => Box::new(HealMage::new(data)),
-                "DisablerMage" => Box::new(DisablerMage::new(data)),
-                _ => panic!("Unknown unit type: {}", spec)
-            };
         units.insert(counter,
             unit
         );

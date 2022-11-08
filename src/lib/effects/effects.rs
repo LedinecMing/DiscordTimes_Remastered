@@ -1,10 +1,13 @@
-use crate::lib::{
-    effects::effect::{Effect, EffectInfo, EffectKind},
-    units::{
-        unit::UnitStats,
-        unit::Unit
-}   };
-use math_thingies::{nat, Percent, add_if_nat};
+use {
+    crate::lib::{
+        effects::effect::{Effect, EffectInfo, EffectKind},
+        units::{
+            unit::UnitStats,
+            unit::Unit1
+        },
+    },
+    math_thingies::{nat, Percent, add_if_nat}
+};
 
 
 #[derive(Copy, Clone, Debug)]
@@ -24,6 +27,16 @@ impl Effect for MoreHealth {
 }   }
 
 #[derive(Copy, Clone, Debug)]
+pub struct JustAdd<const F: fn(&mut Unit1) -> UnitStats> {
+    pub info: EffectInfo
+}
+impl<const F: fn(&mut Unit1) -> UnitStats> Effect for JustAdd<F> {
+    fn update_stats(&self, unit: &mut Unit1) {
+        unit.stats+=F(unit);
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 pub struct MoreHandAttack {
     pub info: EffectInfo
 }
@@ -37,7 +50,7 @@ impl Effect for MoreHandAttack {
         add_if_nat(&mut unitstats.damage.hand, 5u64);
         unitstats
     }
-    fn tick(&mut self, unit: &mut dyn Unit) -> bool { false }
+    fn tick(&mut self, unit: &mut Unit1) -> bool { false }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -86,6 +99,13 @@ impl Effect for HealMagic {
         self.info.lifetime -= 1;
         true
     }
+    fn kill(&mut self, unit: &mut Unit1) {
+        let mut unitstats = unit.stats;
+        add_if_nat(&mut unitstats.defence.ranged_units, -self.magic_power / 5);
+        add_if_nat(&mut unitstats.defence.hand_units, -self.magic_power / 5);
+        add_if_nat(&mut unitstats.damage.ranged, -self.magic_power / 10);
+        add_if_nat(&mut unitstats.damage.hand, -self.magic_power / 10);
+    } 
     fn is_dead(&self) -> bool { self.info.lifetime < 1 }
     fn get_kind(&self) -> EffectKind { EffectKind::MageSupport }
 }
@@ -119,6 +139,37 @@ impl Effect for DisableMagic {
     }
     fn is_dead(&self) -> bool { self.info.lifetime < 1 }
     fn get_kind(&self) -> EffectKind { EffectKind::MageCurse }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct ElementalSupport {
+    pub info: EffectInfo,
+    pub magic_power: u64
+}
+impl Default for ElementalSupport {
+    fn default() -> Self {
+        Self {
+            info: EffectInfo {lifetime: 1},
+            magic_power: 15
+}   }   }
+impl Effect for ElementalSupport {
+    fn update_stats(&self, mut unitstats: UnitStats) -> UnitStats {
+        if self.magic_power < 20 {
+            return unitstats
+        }
+        unitstats.moves = unitstats.moves.saturating_add(1 + self.magic_power / 50);
+        unitstats
+    }
+    fn on_tick(&mut self) -> bool {
+        self.info.lifetime -= 1;
+        true
+    }
+    fn on_battle_end(&mut self) -> bool {
+        self.info.lifetime = 0;
+        true
+    }
+    fn is_dead(&self) -> bool { self.info.lifetime < 1 }
+    fn get_kind(&self) -> EffectKind { EffectKind::MageSupport }
 }
 
 #[derive(Copy, Clone, Debug)]

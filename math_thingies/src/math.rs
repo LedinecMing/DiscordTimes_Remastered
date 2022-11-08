@@ -2,7 +2,8 @@ use {
     std::{
         cmp::{Ordering, min, max},
         ops::{Add, AddAssign, Sub, SubAssign, Div, Mul, Range},
-        fmt::{Display, Formatter}
+        fmt::{Display, Formatter},
+        iter::Extend
     },
     boolinator::Boolinator,
     num::{Num, NumCast, ToPrimitive}
@@ -169,4 +170,18 @@ pub fn saturating<T: Ord>(value: T, range: Range<T>) -> T { max(min(value, range
 pub fn add_if_nat<T: AddAssign + PartialOrd + From<u8>>(value: &mut T, amount: T){
     if value >= &mut T::from(0) {
         *value += amount;
+}   }
+
+pub trait VecMove<T, I: IntoIterator<Item = T>> {
+    fn push_mv(self: Self, value: T) -> Self;
+    fn extend_mv(self: Self, iter: I) -> Self;
+}
+impl<T, I: IntoIterator<Item = T>> VecMove<T, I> for Vec<T> {
+    fn push_mv(mut self: Self, value: T) -> Self {
+        self.push(value);
+        self
+    }
+    fn extend_mv(mut self: Self, iter: I) -> Self {
+        self.extend(iter);
+        self
 }   }

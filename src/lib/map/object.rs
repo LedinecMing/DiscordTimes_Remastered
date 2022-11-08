@@ -6,7 +6,7 @@ use {
             troop::Troop
         },
         items::item::Item,
-        units::unit::Unit,
+        units::unit::{Unit1},
         mutrc::MutRc,
         map::event::Event,
     },
@@ -53,7 +53,7 @@ impl Market {
 }
 #[derive(Clone)]
 pub struct RecruitUnit {
-    pub unit: Box<dyn Unit>,
+    pub unit: Unit1,
     pub count: usize
 }
 #[derive(Clone)]
@@ -64,13 +64,13 @@ pub struct Recruitment {
 impl Recruitment {
     pub fn buy(&self, buyer: &mut Army, unit_num: usize) {
         if self.can_buy(buyer, unit_num) {
-            match buyer.add_troop(Troop { unit: self.units.get(unit_num).unwrap().unit.clone(), ..Troop::empty()}) {
+            match buyer.add_troop(Troop { unit: self.units[unit_num].clone().unit, ..Troop::empty()}) {
                 Ok(()) => println!("Успешно приобретён юнит"),
                 Err(()) => println!("Произошла ошибка")
             };
     }   }
     pub fn can_buy(&self, buyer: &Army, unit_num: usize) -> bool {
-        return buyer.stats.gold >= (self.units.get(unit_num).expect("Trying to get unit at unknown index").unit.get_data().info.cost as f64 * (RECRUIT_COST * self.cost_modify)) as u64
+        return buyer.stats.gold >= (self.units.get(unit_num).expect("Trying to get unit at unknown index").unit.info.cost as f64 * (RECRUIT_COST * self.cost_modify)) as u64
     }
 }
 
