@@ -120,6 +120,19 @@ impl LevelUpInfo {
 }   }   }
 
 #[derive(Clone, Debug)]
+pub struct LevelUpInfo {
+    pub stats: UnitStats,
+    pub xp_up: Percent,
+    pub max_xp: u64,
+}
+impl LevelUpInfo {
+    pub fn empty() -> Self {
+        Self {
+            stats: UnitStats::empty(),
+            xp_up: Percent::new(0),
+            max_xp: 0
+}   }   }
+#[derive(Clone, Debug)]
 pub struct UnitInfo {
     pub name: String,
     pub descript: String,
@@ -150,7 +163,19 @@ impl UnitInventory {
         Self {
             items: vec![]
 }   }   }
-
+#[derive(Clone, Debug)]
+pub struct UnitLvl {
+    pub lvl: u64,
+    pub max_xp: u64,
+    pub xp: u64
+}
+impl UnitLvl {
+    pub fn empty() -> Self {
+        Self {
+            lvl: 0,
+            max_xp: 0,
+            xp: 0
+}   }   }
 #[derive(Clone, Debug)]
 pub struct UnitLvl {
     pub lvl: u64,

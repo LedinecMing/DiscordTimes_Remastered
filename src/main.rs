@@ -74,6 +74,7 @@ fn menu_button(text: impl Into<String>,
     })
 }
 
+
 type FormsInside = dyn Form<State>;
 static mut forms: Lazy<HashMap<usize, Vec<SingleContainer<State, DynContainer<State>>>>> = Lazy::new(|| {
     let mut hashmap = HashMap::new();

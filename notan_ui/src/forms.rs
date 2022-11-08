@@ -26,8 +26,8 @@ impl<State: UIStateCl, K: Clone, V: Clone> Form<State> for Data<State, K, V> {
     fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
 }
 impl<State: UIStateCl, K: Clone, V: Clone> Default for Data<State, K, V> {
-    fn default() -> Self { Self { data: HashMap::new(), boo: PhantomData } }
-}
+    fn default() -> Self { Self { data: HashMap::new(), boo: PhantomData 
+} }
 impl<State: UIStateCl, K: Clone, V: Clone> Positionable for Data<State, K, V> {
     fn with_pos(&self, to_add: Position) -> Self { self.clone() }
     fn add_pos(&mut self, to_add: Position) {}
@@ -50,6 +50,7 @@ impl<State: UIStateCl> Form<State> for Image<'_, State> {
             .size(self.rect.size.0, self.rect.size.1)
             .crop(self.crop.pos.into(), self.crop.size.into())
             .color(self.color);
+        if let Some(width) = self.max_width { text_builder.max_width(width); }
     }
     fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
 }
@@ -63,3 +64,4 @@ impl<State: UIStateCl> Positionable for Image<'_, State> {
     fn get_size(&self) -> Size { self.rect.size }
     fn get_pos(&self) -> Position { self.rect.pos }
 }
+

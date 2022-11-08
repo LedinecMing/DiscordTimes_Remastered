@@ -122,7 +122,6 @@ use {
         bonuses::bonuses::*,
         units::{
             unit::{*, MagicDirection::*, MagicType::*},
-            units::*
         }
     },
 };
@@ -151,6 +150,9 @@ pub fn parse_units() -> HashMap<usize, Unit1> {
         let mut surrender = None;
 
         let mut hp = None;
+
+        let mut max_xp = None;
+        let mut xp_up = None;
 
         let mut max_xp = None;
         let mut xp_up = None;
