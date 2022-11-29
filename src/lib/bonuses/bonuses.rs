@@ -128,7 +128,7 @@ pub fn match_bonus(bonus: &str) -> Result<Box<dyn Bonus>, ()> {
         "FastGoing" | "HorseAtack" => Box::new(FastGoing {}),
         "DefencePiercing" | "ArmorIgnore" => Box::new(DefencePiercing {}),
         "Dodging" | "Evasive" => Box::new(Dodging {}),
-        "NoBonus" | "" => Box::new( NoBonus {}),
+        "NoBonus" | "" | _ => Box::new( NoBonus {}),
         _ => return Err(())
     })
 }

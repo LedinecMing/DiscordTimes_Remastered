@@ -1,14 +1,16 @@
+use notan::app::Color;
+
 #[derive(Copy, Clone)]
 pub struct Tile {
     pub walkspeed: u32,
-    symbol: char
+    color: Color
 }
 impl Tile {
-    pub fn new(walkspeed: u32, symbol: char) -> Self {
+    pub fn new(walkspeed: u32, color: Color) -> Self {
         Self {
             walkspeed,
-            symbol
+            color
     }   }
-    pub fn get_symbol(self) -> char {
-        self.symbol
+    pub fn get(self) -> Color {
+        self.color
 }   }

@@ -39,8 +39,7 @@ impl Time {
         self.get_years() % AGE
     }
 
-    pub fn new(_minutes: u64) -> Self {
-        todo!("This module is boilerplate shit and should be replaced when actually used\n\
-    Variants are: https://crates.io/crates/ticktime")
+    pub fn new(minutes: u64) -> Self {
+        Time{minutes}
     }
 }

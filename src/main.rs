@@ -1,3 +1,4 @@
+mod lib;
 use {
     std:: {
         collections::HashMap,
@@ -11,13 +12,21 @@ use {
     },
     notan_ui::{
         form::Form,
-        forms::Data,
+        forms::{Data, Drawing},
         defs::*,
         text::*,
-        containers::{SingleContainer, SliderContainer, DynContainer},
+        containers::{SingleContainer, SliderContainer, Container, DynContainer},
         wrappers::{Button, Checkbox},
         rect::*
     },
+    lib::{
+        map::{
+            map::*,
+            tile::Tile
+        },
+        time::time::Time,
+    },
+    rand::Rng,
     once_cell::sync::Lazy
 };
 
@@ -33,6 +42,7 @@ enum Menu {
 struct State {
     pub fonts: Vec<Font>,
     pub draw: Draw,
+    pub gamemap: GameMap,
     pub menu_id: usize
 }
 impl AppState for State {}
@@ -171,16 +181,77 @@ static mut forms: Lazy<HashMap<usize, Vec<SingleContainer<State, DynContainer<St
         after_draw: None,
         pos: Position(0., 0.)
     }]);
+    hashmap.insert(Menu::Start as usize, vec![
+        SingleContainer {
+            inside: Some(DynContainer {
+                    inside: vec![
+                        Box::new(
+                            SingleContainer {
+                                inside: Some(Drawing {
+                                    to_draw: |drawing, app, gfx, plugins, state: &mut State| {
+                                        // for i in 0..MAP_SIZE {
+                                        //     for j in 0..MAP_SIZE {
+                                        //         let color = TILES[state.gamemap.tilemap[i][j]].get();
+                                        //         get_mut::<State, Draw>(state)
+                                        //             .rect((drawing.pos + Position(i as f32 * 32., j as f32 * 32.)).into(), (32., 32.))
+                                        //             .color(color);
+                                        // }   }
+                                        // dbg!(drawing.pos);
+                                        get_mut::<State, Draw>(state)
+                                            .rect(drawing.pos.into(), (32., 32.))
+                                            .color(Color::GREEN);
+                                    },
+                                    pos: Position(0., 0.)
+                                }),
+                                on_draw: None,
+                                after_draw: Some(|container, app, gfx, plugins, state: &mut State| {
+                                    dbg!(container.pos);
+                                    if app.keyboard.is_down(KeyCode::W) { container.add_pos(Position(0., -8.)); dbg!("W"); }
+                                    if app.keyboard.is_down(KeyCode::A) { container.add_pos(Position(-8., 0.)); dbg!("A"); }
+                                    if app.keyboard.is_down(KeyCode::S) { container.add_pos(Position(0., 8.)); dbg!("S"); }
+                                    if app.keyboard.is_down(KeyCode::D) { container.add_pos(Position(8., 0.)); dbg!("D"); }
+                                    dbg!(container.pos);
+                                }),
+                                pos: Position(0., 0.)
+                            }
+                        )
+                    ],
+                    pos: Position(0., 0.),
+                    align_direction: Direction::Bottom,
+                    interval: Position(0., 50.)
+            }),
+            on_draw: Some(|container, app, gfx, plugins, state: &mut State| {
+                get_mut::<State, Draw>(state)
+                    .rect((0., 0.), (1000., 1200.))
+                    .color(Color::ORANGE);
+            }),
+            after_draw: None,
+            pos: Position(0., 0.)
+        }
+    ]);
     hashmap
 });
-
+static TILES: Lazy<[Tile; 3]> = Lazy::new(|| {
+    [
+        Tile::new(2, Color::GREEN),
+        Tile::new(1, Color::BLUE),
+        Tile::new(4, Color::from_bytes(128, 64, 28, 255))
+    ]
+});
 
 fn setup(gfx: &mut Graphics) -> State {
+    let mut rng = rand::thread_rng();
     State {
         fonts: vec![gfx
             .create_font(include_bytes!("UbuntuMono-RI.ttf"))
             .expect("shit happens")],
         draw: gfx.create_draw(),
+        gamemap: GameMap {
+            time: Time::new(0),
+            tilemap: [(0..MAP_SIZE).map(|_| rng.gen_range(0..3)).collect::<Vec<usize>>().try_into().unwrap(); MAP_SIZE],
+            decomap: [[None; MAP_SIZE]; MAP_SIZE],
+            armys: vec![]
+        },
         menu_id: 0
 }   }
 fn draw(app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {

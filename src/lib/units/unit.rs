@@ -202,15 +202,6 @@ pub trait Unit : DynClone + Debug {
     }
     fn get_effected_stats(&self) -> UnitStats {
         let mut previous: UnitStats = self.get_data().stats;
-        let effects = &self.get_data().effects;
-        effects.iter().for_each(|effect| {
-                previous = effect.update_stats(previous);
-            });
-        let inventory = &self.get_data().inventory;
-        inventory.items.iter().for_each(|item| {
-            if let Some(item) = item {
-                previous = item.effect.update_stats(previous);
-        }   });
         previous
     }
     fn get_mut_data(&mut self) -> &mut UnitData;
@@ -270,10 +261,7 @@ fn heal_unit(me: &mut Unit1, unit: &mut Unit1, damage: Power, magic_type: MagicT
 }
 fn bless_unit(me: &mut Unit1, target: &mut Unit1, damage: Power) -> bool {
     if !target.has_effect_kind(EffectKind::MageSupport) {
-        target.add_effect(Box::new(HealMagic {
-            info: EffectInfo { lifetime: 1 },
-            magic_power: damage.magic
-        }));
+        target.add_effect(Box::new(HealMagic::new(damage.magic)));
         return true
     }
     false
@@ -288,10 +276,7 @@ fn heal_bless(me: &mut Unit1, target: &mut Unit1, damage: Power, magic_type: Mag
 
 fn elemental_bless(me: &mut Unit1, target: &mut Unit1, damage: Power) -> bool {
     if !target.has_effect_kind(EffectKind::MageSupport) {
-        target.add_effect(Box::new(ElementalSupport {
-            info: EffectInfo { lifetime: 1 },
-            magic_power: damage.magic
-        }));
+        target.add_effect(Box::new(ElementalSupport::new(damage.magic)));
         return true
     };
     false
@@ -305,10 +290,7 @@ fn magic_curse(me: &mut Unit1, target: &mut Unit1, mut damage: Power, magic_type
         _ => {}
     }
     if !target.has_effect_kind(EffectKind::MageCurse) {
-        target.add_effect(Box::new(AttackMagic {
-            info: EffectInfo { lifetime: 1 },
-            magic_power: target.correct_damage(&damage, me.info.magic_type).magic
-        }));
+        target.add_effect(Box::new(AttackMagic::new(target.correct_damage(&damage, me.info.magic_type).magic)));
         true
     } else {
         false
@@ -316,10 +298,7 @@ fn magic_curse(me: &mut Unit1, target: &mut Unit1, mut damage: Power, magic_type
 
 fn elemental_curse(me: &mut Unit1, target: &mut Unit1, damage: Power) -> bool {
     if !target.has_effect_kind(EffectKind::MageCurse) {
-        target.add_effect(Box::new(DisableMagic {
-            info: EffectInfo { lifetime: 1 },
-            magic_power: target.correct_damage(&damage, me.info.magic_type).magic
-        }));
+        target.add_effect(Box::new(DisableMagic::new(target.correct_damage(&damage, me.info.magic_type).magic)));
         true
     } else {
         false
@@ -441,14 +420,6 @@ impl Unit1 {
 
     pub fn get_effected_stats(&self) -> UnitStats {
         let mut previous: UnitStats = self.stats;
-        let effects = &self.effects;
-        effects.iter().for_each(|effect| {
-            previous = effect.update_stats(previous);
-        });
-        &self.inventory.items.iter().for_each(|item| {
-            if let Some(item) = item {
-                previous = item.effect.update_stats(previous);
-        }   });
         previous
     }
     pub fn is_dead(&self) -> bool {
