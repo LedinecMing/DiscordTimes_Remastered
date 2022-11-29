@@ -12,13 +12,14 @@ pub enum EffectKind {
     MageSupport,
     Bonus,
     Item,
+    Potion,
     Poison,
     Fire
 }
 
 dyn_clone::clone_trait_object!(Effect);
 pub trait Effect : DynClone + Debug {
-    fn update_stats(&self, unitstats: UnitStats) -> UnitStats;
+    fn update_stats(&mut self, unit: &mut Unit1);
     fn on_tick(&mut self) -> bool { false }
     fn on_battle_end(&mut self) -> bool { false }
     fn tick(&mut self, unit: &mut Unit1) -> bool {

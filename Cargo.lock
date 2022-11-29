@@ -10,7 +10,7 @@ dependencies = [
  "derive_more",
  "dyn-clone",
  "ini",
- "math_thingies",
+ "math_thingies 0.1.0",
  "notan",
  "notan_ui",
  "num",
@@ -1158,6 +1158,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "math_thingies"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cf04c8ccaf2d31d0a33009d8d2a744078160557d2a731d6fc2a3b9914f78f0a"
+dependencies = [
+ "boolinator",
+ "num",
+]
+
+[[package]]
 name = "memchr"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1490,7 +1500,7 @@ version = "1.0.0"
 dependencies = [
  "derive_more",
  "dyn-clone",
- "math_thingies",
+ "math_thingies 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "notan",
 ]
 

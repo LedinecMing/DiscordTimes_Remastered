@@ -1,29 +1,24 @@
 use {
-    std::{
-        iter::Extend,
-    },
     once_cell::sync::Lazy,
     notan::{
         prelude::*,
-        app::AppState,
         draw::*,
         text::TextConfig
     },
-    math_thingies::VecMove,
     notan_ui::{
+        defs::*,
+        form::Form,
         text::*,
         wrappers::Slider,
         containers::{SingleContainer, SliderContainer},
         rect::*
 }   };
 
-#[derive(Clone)]
+#[derive(Clone, AppState)]
 struct State {
     pub fonts: Vec<Font>,
     pub draw: Draw
 }
-impl AppState for State {}
-impl AppState for State {}
 impl Access<Vec<Font>> for State {
     fn get_mut(&mut self) -> &mut Vec<Font> { &mut self.fonts }
     fn get(&self) -> &Vec<Font> { &self.fonts }
@@ -32,7 +27,6 @@ impl Access<Draw> for State {
     fn get_mut(&mut self) -> &mut Draw { &mut self.draw }
     fn get(&self) -> &Draw { &self.draw }
 }
-
 fn title(text: impl Into<String>) -> Text<State> {
     end_line(Text {
         text: text.into(),
@@ -55,16 +49,15 @@ fn split_and_normal(mut text: impl Into<String>) -> Vec<Text<State>> {
     text.into().lines().map(|line| end_line(normal(line))).collect()
 }
 static mut forms: Lazy<Vec<Box<dyn Form<State>>>> = Lazy::new(|| {
-    let texts: Vec<Text<State>> = Vec::new()
-        .push_mv(title("Introduction"))
+    let mut texts: Vec<Text<State>> = Vec::new();
+    texts.push(title("Introduction"));
+    texts.extend(split_and_normal("Note: This edition of the book is the same as The Rust Programming Language available in print and ebook format from No Starch Press.
 
-        .extend_mv(split_and_normal("Note: This edition of the book is the same as The Rust Programming Language available in print and ebook format from No Starch Press.
-
-Welcome to The Rust Programming Language, an introductory book about Rust. The Rust programming language helps you write faster, more reliable software. High-level ergonomics and low-level control are often at odds in programming language design; Rust challenges that conflict. Through balancing powerful technical capacity and a great developer experience, Rust gives you the option to control low-level details (such as memory usage) without all the hassle traditionally associated with such control."))
-        .push_mv(title("Who Rust Is For"))
-        .extend_mv(split_and_normal("Rust is ideal for many people for a variety of reasons. Let’s look at a few of the most important groups."))
-        .push_mv(title("Teams of Developers"))
-        .extend_mv(split_and_normal("Rust is proving to be a productive tool for collaborating among large teams of developers with varying levels of systems programming knowledge. Low-level code is prone to a variety of subtle bugs, which in most other languages can be caught only through extensive testing and careful code review by experienced developers. In Rust, the compiler plays a gatekeeper role by refusing to compile code with these elusive bugs, including concurrency bugs. By working alongside the compiler, the team can spend their time focusing on the program’s logic rather than chasing down bugs.
+Welcome to The Rust Programming Language, an introductory book about Rust. The Rust programming language helps you write faster, more reliable software. High-level ergonomics and low-level control are often at odds in programming language design; Rust challenges that conflict. Through balancing powerful technical capacity and a great developer experience, Rust gives you the option to control low-level details (such as memory usage) without all the hassle traditionally associated with such control."));
+    texts.push(title("Who Rust Is For"));
+    texts.extend(split_and_normal("Rust is ideal for many people for a variety of reasons. Let’s look at a few of the most important groups."));
+    texts.push(title("Teams of Developers"));
+    texts.extend(split_and_normal("Rust is proving to be a productive tool for collaborating among large teams of developers with varying levels of systems programming knowledge. Low-level code is prone to a variety of subtle bugs, which in most other languages can be caught only through extensive testing and careful code review by experienced developers. In Rust, the compiler plays a gatekeeper role by refusing to compile code with these elusive bugs, including concurrency bugs. By working alongside the compiler, the team can spend their time focusing on the program’s logic rather than chasing down bugs.
 
 Rust also brings contemporary developer tools to the systems programming world:
 
@@ -72,23 +65,23 @@ Rust also brings contemporary developer tools to the systems programming world:
     Rustfmt ensures a consistent coding style across developers.
     The Rust Language Server powers Integrated Development Environment (IDE) integration for code completion and inline error messages.
 
-By using these and other tools in the Rust ecosystem, developers can be productive while writing systems-level code."))
-        .push_mv(title("Students"))
-        .extend_mv(split_and_normal("Rust is for students and those who are interested in learning about systems concepts. Using Rust, many people have learned about topics like operating systems development. The community is very welcoming and happy to answer student questions. Through efforts such as this book, the Rust teams want to make systems concepts more accessible to more people, especially those new to programming."))
-        .push_mv(title("Companies"))
+By using these and other tools in the Rust ecosystem, developers can be productive while writing systems-level code."));
+    texts.push(title("Students"));
+    texts.extend(split_and_normal("Rust is for students and those who are interested in learning about systems concepts. Using Rust, many people have learned about topics like operating systems development. The community is very welcoming and happy to answer student questions. Through efforts such as this book, the Rust teams want to make systems concepts more accessible to more people, especially those new to programming."));
+    texts.push(title("Companies"));
 
-        .extend_mv(split_and_normal("Hundreds of companies, large and small, use Rust in production for a variety of tasks. Those tasks include command line tools, web services, DevOps tooling, embedded devices, audio and video analysis and transcoding, cryptocurrencies, bioinformatics, search engines, Internet of Things applications, machine learning, and even major parts of the Firefox web browser."))
-        .push_mv(title("Open Source Developers"))
+    texts.extend(split_and_normal("Hundreds of companies, large and small, use Rust in production for a variety of tasks. Those tasks include command line tools, web services, DevOps tooling, embedded devices, audio and video analysis and transcoding, cryptocurrencies, bioinformatics, search engines, Internet of Things applications, machine learning, and even major parts of the Firefox web browser."));
+    texts.push(title("Open Source Developers"));
 
-        .extend_mv(split_and_normal("Rust is for people who want to build the Rust programming language, community, developer tools, and libraries. We’d love to have you contribute to the Rust language.
+    texts.extend(split_and_normal("Rust is for people who want to build the Rust programming language, community, developer tools, and libraries. We’d love to have you contribute to the Rust language.
 People Who Value Speed and Stability
 
 Rust is for people who crave speed and stability in a language. By speed, we mean the speed of the programs that you can create with Rust and the speed at which Rust lets you write them. The Rust compiler’s checks ensure stability through feature additions and refactoring. This is in contrast to the brittle legacy code in languages without these checks, which developers are often afraid to modify. By striving for zero-cost abstractions, higher-level features that compile to lower-level code as fast as code written manually, Rust endeavors to make safe code be fast code as well.
 
-The Rust language hopes to support many other users as well; those mentioned here are merely some of the biggest stakeholders. Overall, Rust’s greatest ambition is to eliminate the trade-offs that programmers have accepted for decades by providing safety and productivity, speed and ergonomics. Give Rust a try and see if its choices work for you."))
-        .push_mv(title("Who This Book Is For"))
+The Rust language hopes to support many other users as well; those mentioned here are merely some of the biggest stakeholders. Overall, Rust’s greatest ambition is to eliminate the trade-offs that programmers have accepted for decades by providing safety and productivity, speed and ergonomics. Give Rust a try and see if its choices work for you."));
+    texts.push(title("Who This Book Is For"));
 
-        .extend_mv(split_and_normal("This book assumes that you’ve written code in another programming language but doesn’t make any assumptions about which one. We’ve tried to make the material broadly accessible to those from a wide variety of programming backgrounds. We don’t spend a lot of time talking about what programming is or how to think about it. If you’re entirely new to programming, you would be better served by reading a book that specifically provides an introduction to programming.
+    texts.extend(split_and_normal("This book assumes that you’ve written code in another programming language but doesn’t make any assumptions about which one. We’ve tried to make the material broadly accessible to those from a wide variety of programming backgrounds. We don’t spend a lot of time talking about what programming is or how to think about it. If you’re entirely new to programming, you would be better served by reading a book that specifically provides an introduction to programming.
 How to Use This Book
 
 In general, this book assumes that you’re reading it in sequence from front to back. Later chapters build on concepts in earlier chapters, and earlier chapters might not delve into details on a topic; we typically revisit the topic in a later chapter.
@@ -115,9 +108,9 @@ Finally, some appendices contain useful information about the language in a more
 
 There is no wrong way to read this book: if you want to skip ahead, go for it! You might have to jump back to earlier chapters if you experience any confusion. But do whatever works for you.
 
-An important part of the process of learning Rust is learning how to read the error messages the compiler displays: these will guide you toward working code. As such, we’ll provide many examples that don’t compile along with the error message the compiler will show you in each situation. Know that if you enter and run a random example, it may not compile! Make sure you read the surrounding text to see whether the example you’re trying to run is meant to error. Ferris will also help you distinguish code that isn’t meant to work:"))
-        .push_mv(title("Ferris	Meaning"))
-        .extend_mv(split_and_normal("Ferris with a question mark	This code does not compile!
+An important part of the process of learning Rust is learning how to read the error messages the compiler displays: these will guide you toward working code. As such, we’ll provide many examples that don’t compile along with the error message the compiler will show you in each situation. Know that if you enter and run a random example, it may not compile! Make sure you read the surrounding text to see whether the example you’re trying to run is meant to error. Ferris will also help you distinguish code that isn’t meant to work:"));
+    texts.push(title("Ferris	Meaning"));
+    texts.extend(split_and_normal("Ferris with a question mark	This code does not compile!
 Ferris throwing up their hands	This code panics!
 Ferris with one claw up, shrugging	This code does not produce the desired behavior.
 
@@ -139,7 +132,7 @@ In most situations, we’ll lead you to the correct version of any code that doe
                         slider_inside: SingleContainer::<State, Text<State>> {
                             inside: None,
                             on_draw: Some(|container, app, gfx, plugins, state: &mut State| {
-                                state.mut_draw().rect(container.pos.into(), (20., 80.)).color(Color::BLACK).corner_radius(12.);
+                                get_mut::<State, Draw>(state).rect(container.pos.into(), (20., 80.)).color(Color::BLACK).corner_radius(12.);
                             }),
                             after_draw: None,
                             pos: Position(0., 0.)
@@ -151,7 +144,7 @@ In most situations, we’ll lead you to the correct version of any code that doe
                 }),
                 on_draw: Some(|container, app, gfx, plugins, state: &mut State| {
                     let size = (app.window().size().0 as f32, app.window().size().1 as f32);
-                    state.mut_draw().rect((0., 0.), size).color(Color::from_hex(0x161923ff));
+                    get_mut::<State, Draw>(state).rect((0., 0.), size).color(Color::from_hex(0x161923ff));
                 }),
                 after_draw: None,
                 pos: Position(0., 0.)

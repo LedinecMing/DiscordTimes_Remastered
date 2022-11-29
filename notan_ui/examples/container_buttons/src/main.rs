@@ -10,6 +10,9 @@ use {
         text::TextConfig
     },
     notan_ui::{
+        defs::*,
+        form::Form,
+        text::Text,
         wrappers::Button,
         containers::{Container, SingleContainer},
         rect::*
@@ -41,7 +44,7 @@ static mut forms: Lazy<Vec<Box<dyn Form<State>>>> = Lazy::new(|| {
                             text: "Click!".into(),
                             size: 20.0,
                             max_width: Some(100.),
-                            align_h: AlignHorizontal::Center,
+                            align_h: AlignHorizontal::Left,
                             align_v: AlignVertical::Top,
                             ..Text::default()
                         }),
@@ -55,7 +58,7 @@ static mut forms: Lazy<Vec<Box<dyn Form<State>>>> = Lazy::new(|| {
                         }))),
                     on_draw: Some(|container, app, gfx, plugins, state: &mut State| {
                         let rect = container.inside.as_ref().unwrap().rect;
-                        Access::<Draw>::get_mut(state).rect(rect.pos.into(), rect.size.into()).color(Color::YELLOW);
+                        state.draw.rect(rect.pos.into(), rect.size.into()).color(Color::YELLOW);
                     }),
                     after_draw: None,
                     pos: Position(0., 0.)

@@ -146,6 +146,7 @@ pub struct SingleContainer<State: UIStateCl, T: PosForm<State>> {
 impl<State: UIStateCl, T: PosForm<State>> Form<State> for SingleContainer<State, T> {
     fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         if let Some(form) = &mut self.inside {
+            // dbg!(self.pos, -self.pos);
             form.add_pos(self.pos);
         }
         if let Some(func) = self.on_draw {
@@ -166,7 +167,7 @@ impl<State: UIStateCl, T: PosForm<State>> Form<State> for SingleContainer<State,
         if let Some(form) = &mut self.inside {
             form.after(app, gfx, plugins, state);
             form.add_pos(-self.pos);
-        }   }   }
+}   }   }
 impl<State: UIStateCl, T: PosForm<State>> Positionable for SingleContainer<State, T> {
     fn with_pos(&self, to_add: Position) -> Self {
         let mut cloned = self.clone();

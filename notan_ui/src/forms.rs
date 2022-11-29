@@ -63,3 +63,27 @@ impl<State: UIStateCl> Positionable for Image<'_, State> {
     fn get_size(&self) -> Size { self.rect.size }
     fn get_pos(&self) -> Position { self.rect.pos }
 }
+
+#[derive(Clone)]
+pub struct Drawing<State: UIStateCl> {
+    pub pos: Position,
+    pub to_draw: fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)
+}
+impl<State: UIStateCl> Form<State> for Drawing<State> {
+    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        (self.to_draw)(self, app, gfx, plugins, state);
+    }
+    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
+}
+impl<State: UIStateCl> Positionable for Drawing<State> {
+    fn with_pos(&self, to_add: Position) -> Self {
+        let mut cloned = self.clone();
+        cloned.add_pos(to_add);
+        cloned
+    }
+    fn add_pos(&mut self, to_add: Position) {
+        self.pos+=to_add;
+    }
+    fn get_size(&self) -> Size { Size::default() }
+    fn get_pos(&self) -> Position { self.pos }
+}

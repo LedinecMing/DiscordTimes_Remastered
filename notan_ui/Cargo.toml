@@ -1,7 +1,7 @@
 [package]
 authors = ["LedinecMing"]
 name = "notan_ui"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "UI implementation on top of notan APIs"
 license = "MIT"
@@ -11,5 +11,5 @@ repository = "https://github.com/LedinecMing/DiscordTimes_Remastered/tree/dev-ma
 [dependencies]
 derive_more = "0.99.17"
 dyn-clone = "1.0.9"
-notan = {version = "0.7.1", features = ["text"]}
+notan = {version = "0.7.1", features = ["text"]} # Cant use last version ( currently on git ) because it breaks all code. (Draw should impl Clone)
 math_thingies = {version = "0.1.0"}
