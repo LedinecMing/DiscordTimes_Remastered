@@ -1,10 +1,11 @@
+use std::fmt::{Debug, Formatter};
 use {
     std::{
         marker::PhantomData,
         collections::HashMap,
     },
     notan::{
-        prelude::{AppState, Color, Graphics, Plugins, App},
+        prelude::{AppState, Color, Graphics, Plugins, App, Assets},
         app::{Event, Texture},
         draw::*
     },
@@ -15,7 +16,7 @@ use {
         defs::*
 }   };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Container<State: UIStateCl, T: PosForm<State>> {
     pub inside: Vec<T>,
     pub pos: Position,
@@ -24,10 +25,10 @@ pub struct Container<State: UIStateCl, T: PosForm<State>> {
     pub boo: PhantomData<State>
 }
 impl<State: UIStateCl, T: PosForm<State>> Form<State> for Container<State, T> {
-    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        self.calc_insides().iter_mut().for_each(|form| form.draw(app, gfx, plugins, state));
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.calc_insides().iter_mut().for_each(|form| form.draw(app, assets, gfx, plugins, state));
     }
-    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         let inside_len = self.inside.len();
         let inside_sizes = self.inside.iter().map(|form| form.get_size()).collect::<Vec<Size>>();
         self.inside.iter_mut().zip(0..inside_len).for_each(|(inside, i): (&mut T, usize)| {
@@ -49,7 +50,7 @@ impl<State: UIStateCl, T: PosForm<State>> Form<State> for Container<State, T> {
                 }
             };
             inside.add_pos(to_add);
-            inside.after(app, gfx, plugins, state);
+            inside.after(app, assets, plugins, state);
             inside.add_pos(-to_add);
         });
     }   }
@@ -137,38 +138,44 @@ impl<State: UIStateCl, T: PosForm<State>> Default for Container<State, T> {
 }   }   }
 
 #[derive(Clone)]
-pub struct SingleContainer<State: UIStateCl, T: PosForm<State>> {
+pub struct SingleContainer<State: UIStateCl, T: PosForm<State> + Debug> {
     pub inside: Option<T>,
-    pub on_draw: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
-    pub after_draw: Option<fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)>,
+    pub on_draw: Option<fn(&mut Self, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)>,
+    pub after_draw: Option<fn(&mut Self, &mut App, &mut Assets, &mut Plugins, &mut State)>,
     pub pos: Position
 }
-impl<State: UIStateCl, T: PosForm<State>> Form<State> for SingleContainer<State, T> {
-    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+impl<State: UIStateCl, T: PosForm<State> + Debug> Debug for SingleContainer<State, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SingleContainer")
+            .field("inside", &self.inside)
+            .field("pos", &self.pos)
+            .finish()
+}   }
+impl<State: UIStateCl, T: PosForm<State> + Debug> Form<State> for SingleContainer<State, T> {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         if let Some(form) = &mut self.inside {
-            // dbg!(self.pos, -self.pos);
             form.add_pos(self.pos);
         }
         if let Some(func) = self.on_draw {
-            func(self, app, gfx, plugins, state);
+            func(self, app, assets, gfx, plugins, state);
         }
         if let Some(form) = &mut self.inside {
-            form.draw(app, gfx, plugins, state);
+            form.draw(app, assets, gfx, plugins, state);
             form.add_pos(-self.pos);
         }   }
 
-    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         if let Some(form) = &mut self.inside {
             form.add_pos(self.pos);
         }
         if let Some(func) = &mut self.after_draw {
-            func(self, app, gfx, plugins, state);
+            func(self, app, assets, plugins, state);
         }
         if let Some(form) = &mut self.inside {
-            form.after(app, gfx, plugins, state);
+            form.after(app, assets, plugins, state);
             form.add_pos(-self.pos);
 }   }   }
-impl<State: UIStateCl, T: PosForm<State>> Positionable for SingleContainer<State, T> {
+impl<State: UIStateCl, T: PosForm<State> + Debug> Positionable for SingleContainer<State, T> {
     fn with_pos(&self, to_add: Position) -> Self {
         let mut cloned = self.clone();
         cloned.add_pos(to_add);
@@ -185,38 +192,37 @@ impl<State: UIStateCl, T: PosForm<State>> Positionable for SingleContainer<State
     }
     fn get_pos(&self) -> Position { self.pos }
 }
-impl<State: UIStateCl, T: PosForm<State>> Default for SingleContainer<State, T> {
+impl<State: UIStateCl, T: PosForm<State> + Debug> Default for SingleContainer<State, T> {
     fn default() -> Self {
         Self {
             inside: None,
             on_draw: None,
             after_draw: None,
             pos: Position(0., 0.)
-        }   }   }
+}   }   }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SliderContainer<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> {
     pub inside: T,
     pub slider: Slider<State, K>,
     pub slide_speed: f32,
 }
 impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Form<State> for SliderContainer<State, T, K> {
-    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        self.slider.draw(app, gfx, plugins, state);
-        self.inside.with_pos(Position(0.,self.slider.scroll)).draw(app, gfx, plugins, state);
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.slider.draw(app, assets, gfx, plugins, state);
+        self.inside.with_pos(Position(0.,self.slider.scroll)).draw(app, assets, gfx, plugins, state);
     }
-
-    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         self.inside.add_pos(Position(0.,self.slider.scroll));
         let mouse = &app.mouse;
         let mouse_pos = (mouse.x, mouse.y).into();
         let inside_rect = Rect { pos: self.inside.get_pos(), size: self.inside.get_size() };
         let slider_rect = Rect { pos: self.slider.slider_inside.get_pos(), size: self.slider.slider_inside.get_size()};
-        self.inside.after(app, gfx, plugins, state);
+        self.inside.after(app, assets, plugins, state);
         self.inside.add_pos(-Position(0.,self.slider.scroll));
         if inside_rect.collides(mouse_pos) || slider_rect.collides(mouse_pos) {
             self.slider.scroll += app.mouse.wheel_delta.y * self.slide_speed;
-        }   }   }
+}   }   }
 impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Positionable for SliderContainer<State, T, K> {
     fn with_pos(&self, to_add: Position) -> Self {
         Self { inside: self.inside.clone(), slider: self.slider.with_pos(to_add), slide_speed: self.slide_speed }
@@ -229,8 +235,41 @@ impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Positionable for Sl
     }
     fn get_pos(&self) -> Position { self.inside.get_pos() }
 }
+#[derive(Clone, Debug)]
+pub struct StraightDynContainer<State: UIStateCl> {
+    pub inside: Vec<Box<dyn ObjPosForm<State>>>,
+    pub pos: Position
+}
+impl<State: UIStateCl> Form<State> for StraightDynContainer<State> {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets,  gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.inside.iter_mut().for_each(|form| form.draw(app, assets, gfx, plugins, state));
+    }
+    fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
+        self.inside.iter_mut().for_each(|inside: &mut Box<dyn ObjPosForm<State>>| {
+            inside.add_pos_obj(self.pos);
+            inside.after(app, assets, plugins, state);
+            inside.add_pos_obj(-self.pos);
+        });
+    }   }
+impl<State: UIStateCl> Positionable for StraightDynContainer<State> {
+    fn with_pos(&self, to_add: Position) -> Self {
+        let mut cloned = self.clone();
+        cloned.add_pos(to_add);
+        cloned
+    }
+    fn add_pos(&mut self, to_add: Position) {
+        self.pos += to_add;
+    }
+    fn get_size(&self) -> Size { Default::default() }
+    fn get_pos(&self) -> Position { self.pos }
+}
+impl<State: UIStateCl> Default for StraightDynContainer<State> {
+    fn default() -> Self { Self {
+        inside: vec![],
+        pos: Position(0., 0.),
+}   }   }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DynContainer<State: UIStateCl> {
     pub inside: Vec<Box<dyn ObjPosForm<State>>>,
     pub pos: Position,
@@ -238,10 +277,10 @@ pub struct DynContainer<State: UIStateCl> {
     pub interval: Position
 }
 impl<State: UIStateCl> Form<State> for DynContainer<State> {
-    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        self.calc_insides().iter_mut().for_each(|form| form.draw(app, gfx, plugins, state));
+    fn draw(&mut self, app: &mut App, assets: &mut Assets,  gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        self.calc_insides().iter_mut().for_each(|form| form.draw(app, assets, gfx, plugins, state));
     }
-    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         let inside_len = self.inside.len();
         let inside_sizes = self.inside.iter().map(|form| form.get_size_obj()).collect::<Vec<Size>>();
         self.inside.iter_mut().zip(0..inside_len).for_each(|(inside, i): (&mut Box<dyn ObjPosForm<State>>, usize)| {
@@ -263,10 +302,10 @@ impl<State: UIStateCl> Form<State> for DynContainer<State> {
                 }
             };
             inside.add_pos_obj(to_add);
-            inside.after(app, gfx, plugins, state);
+            inside.after(app, assets, plugins, state);
             inside.add_pos_obj(-to_add);
         });
-    }   }
+}   }
 impl<State: UIStateCl> DynContainer<State> {
     pub fn calc_insides(&self) -> Vec<Box<dyn ObjPosForm<State>>> {
         let inside_sizes = self.inside.iter().map(|form| form.get_size_obj()).collect::<Vec<Size>>();
@@ -294,12 +333,16 @@ impl<State: UIStateCl> DynContainer<State> {
         }).collect()
     }   }
 impl<State: UIStateCl> Positionable for DynContainer<State> {
-    fn with_pos(&self, to_add: Position) -> Self { self.clone() }
+    fn with_pos(&self, to_add: Position) -> Self {
+        let mut cloned = self.clone();
+        cloned.add_pos(to_add);
+        cloned
+    }
     fn add_pos(&mut self, to_add: Position) {
         self.pos += to_add;
     }
     fn get_size(&self) -> Size { Default::default() }
-    fn get_pos(&self) -> Position { Position::default() }
+    fn get_pos(&self) -> Position { self.pos }
 }
 impl<State: UIStateCl> Default for DynContainer<State> {
     fn default() -> Self { Self {

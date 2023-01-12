@@ -11,7 +11,7 @@ use {
 };
 
 pub const MAP_SIZE: usize = 50;
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GameMap {
     pub time: Time,
     pub tilemap: [[usize; MAP_SIZE]; MAP_SIZE],

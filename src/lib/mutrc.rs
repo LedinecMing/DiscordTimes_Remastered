@@ -1,37 +1,30 @@
-use std::{
-    rc::Rc,
-    cell::{RefCell, RefMut, Ref},
-};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 
 #[derive(Debug)]
-pub struct MutRc<T: ?Sized>{
-    rc: Rc<RefCell<T>>
+pub struct SendMut<T: ?Sized>{
+    inner: Arc<Mutex<T>>
 }
-impl<T> MutRc<T> where T: ?Sized + Clone{
-
+impl<T> SendMut<T> where T: ?Sized + Clone{
     pub fn new(value: T) -> Self {
         Self {
-            rc: Rc::new(RefCell::new(value))
-    }   }
-    pub fn borrow_mut(&self) -> RefMut<T> {
-        self.rc.borrow_mut()
-    }
-    pub fn borrow(&self) -> Ref<T> {
-        self.rc.borrow()
+            inner: Arc::new(Mutex::new(value))
+        }   }
+    pub fn get(&self) -> MutexGuard<'_, T> {
+        self.inner.lock().unwrap()
     }
     pub fn clone(&self) -> Self {
-        self.rc.clone().into()
-}   }
-impl<T> Clone for MutRc<T> where T: ?Sized + Clone {
-    fn clone(&self) -> MutRc<T> {
+        self.inner.clone().into()
+    }   }
+impl<T> Clone for SendMut<T> where T: ?Sized + Clone {
+    fn clone(&self) -> SendMut<T> {
         self.clone()
-}   }
-impl<T> From<Rc<RefCell<T>>> for MutRc<T> {
-    fn from(value: Rc<RefCell<T>>) -> Self {
-        Self { rc: value }
-}   }
-impl<T> From<T> for MutRc<T> where T: ?Sized + Clone {
+    }   }
+impl<T> From<Arc<Mutex<T>>> for SendMut<T> {
+    fn from(value: Arc<Mutex<T>>) -> Self {
+        Self { inner: value }
+    }   }
+impl<T> From<T> for SendMut<T> where T: ?Sized + Clone {
     fn from(value: T) -> Self {
         Self::new(value)
-}   }
+    }   }

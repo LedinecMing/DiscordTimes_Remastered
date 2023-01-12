@@ -1,41 +1,43 @@
+#![allow(unused_parens)]
+
+use std::fmt::{Debug, Formatter};
+use notan::prelude::Assets;
 use {
     std::{
-        ops::Not,
         marker::PhantomData,
         collections::HashMap,
     },
     notan::{
-        prelude::{AppState, Color, Graphics, Plugins, App},
-        app::{Event, Texture},
+        prelude::{Color, Graphics, Plugins, App},
+        app::{Texture},
         draw::*
     },
-    dyn_clone::{DynClone, clone_box},
     super::{
         form::Form,
         rect::*,
         defs::*
 }   };
 
-#[derive(Clone)]
-pub struct Data<State: UIStateCl, K: Clone, V: Clone> {
+#[derive(Clone, Debug)]
+pub struct Data<State: UIStateCl, K: Clone + Send, V: Clone + Send> {
     pub data: HashMap<K, V>,
     pub boo: PhantomData<State>
 }
-impl<State: UIStateCl, K: Clone, V: Clone> Form<State> for Data<State, K, V> {
-    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
-    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
+impl<State: UIStateCl, K: Clone + Send, V: Clone + Send> Form<State> for Data<State, K, V> {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
+    fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {}
 }
-impl<State: UIStateCl, K: Clone, V: Clone> Default for Data<State, K, V> {
+impl<State: UIStateCl, K: Clone + Send, V: Clone + Send> Default for Data<State, K, V> {
     fn default() -> Self { Self { data: HashMap::new(), boo: PhantomData } }
 }
-impl<State: UIStateCl, K: Clone, V: Clone> Positionable for Data<State, K, V> {
+impl<State: UIStateCl, K: Clone + Send, V: Clone + Send> Positionable for Data<State, K, V> {
     fn with_pos(&self, to_add: Position) -> Self { self.clone() }
     fn add_pos(&mut self, to_add: Position) {}
     fn get_size(&self) -> Size { Default::default() }
     fn get_pos(&self) -> Position { Position::default() }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Image<'a, State: UIStateCl> {
     pub image: &'a Texture,
     pub rect: Rect,
@@ -44,14 +46,14 @@ struct Image<'a, State: UIStateCl> {
     pub boo: PhantomData<State>
 }
 impl<State: UIStateCl> Form<State> for Image<'_, State> {
-    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         Access::<Draw>::get_mut(state).image(self.image)
             .position(self.rect.pos.0, self.rect.pos.1)
             .size(self.rect.size.0, self.rect.size.1)
             .crop(self.crop.pos.into(), self.crop.size.into())
             .color(self.color);
     }
-    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
+    fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {}
 }
 impl<State: UIStateCl> Positionable for Image<'_, State> {
     fn with_pos(&self, to_add: Position) -> Self {
@@ -67,13 +69,19 @@ impl<State: UIStateCl> Positionable for Image<'_, State> {
 #[derive(Clone)]
 pub struct Drawing<State: UIStateCl> {
     pub pos: Position,
-    pub to_draw: fn(&mut Self, &mut App, &mut Graphics, &mut Plugins, &mut State)
+    pub to_draw: fn(&mut Self, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)
 }
+impl<State: UIStateCl> Debug for Drawing<State> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Drawing")
+            .field("pos", &self.pos)
+            .finish()
+}   }
 impl<State: UIStateCl> Form<State> for Drawing<State> {
-    fn draw(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        (self.to_draw)(self, app, gfx, plugins, state);
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+        (self.to_draw)(self, app, assets, gfx, plugins, state);
     }
-    fn after(&mut self, app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
+    fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {}
 }
 impl<State: UIStateCl> Positionable for Drawing<State> {
     fn with_pos(&self, to_add: Position) -> Self {

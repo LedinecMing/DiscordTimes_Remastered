@@ -5,7 +5,7 @@ use {
             effect::{EffectInfo, EffectKind},
             effects::*
         },
-        units::unit::{Defence, Power, UnitStats, Unit1}
+        units::unit::{Defence, Power, UnitStats, Unit}
     },
     math_thingies::Percent
 };
@@ -14,7 +14,7 @@ use {
 pub struct DefencePiercing {}
 
 impl Bonus for DefencePiercing {
-    fn on_attacking(&self, damage: Power, receiver: &mut Unit1, sender: &mut Unit1) -> Power {
+    fn on_attacking(&self, damage: Power, receiver: &mut Unit, sender: &mut Unit) -> Power {
         let sender_damage: Power = sender.get_effected_stats().damage;
         println!("Бонус: Атакую, ручной и дальний урон проходит сквозь броню - {:?}", Power {
             magic: damage.magic,
@@ -32,7 +32,7 @@ impl Bonus for DefencePiercing {
 #[derive(Copy, Clone, Debug)]
 pub struct Dodging {}
 impl Bonus for Dodging {
-    fn on_attacked(&self, damage: Power, receiver: &mut Unit1, sender: &mut Unit1) -> Power {
+    fn on_attacked(&self, damage: Power, receiver: &mut Unit, sender: &mut Unit) -> Power {
         let percent_75 = Percent::new(75);
         Power {
             magic: percent_75.calc(damage.magic),
@@ -43,7 +43,7 @@ impl Bonus for Dodging {
 #[derive(Copy, Clone, Debug)]
 pub struct FastGoing {}
 impl Bonus for FastGoing {
-    fn on_battle_start(&self, unit: &mut Unit1) -> bool {
+    fn on_battle_start(&self, unit: &mut Unit) -> bool {
         unit.add_effect(Box::new(MoreMoves::default()));
         true
 }   }
@@ -51,7 +51,7 @@ impl Bonus for FastGoing {
 #[derive(Copy, Clone, Debug)]
 pub struct Berserk {}
 impl Bonus for Berserk {
-    fn on_kill(&self, receiver: &mut Unit1, sender: &mut Unit1) -> bool {
+    fn on_kill(&self, receiver: &mut Unit, sender: &mut Unit) -> bool {
         let receiver_stats = receiver.stats;
         let percent_10 = Percent::new(10);
         sender.add_effect(
@@ -71,7 +71,7 @@ impl Bonus for Berserk {
 #[derive(Copy, Clone, Debug)]
 pub struct Block {}
 impl Bonus for Block {
-    fn on_move_skip(&self, unit: &mut Unit1) -> bool {
+    fn on_move_skip(&self, unit: &mut Unit) -> bool {
         println!("Бонус: персонаж пропустил ход, увеличиваю защиту в 2 раза");
         unit.add_effect(
             Box::new(ItemEffect {
@@ -94,7 +94,7 @@ impl Bonus for Block {
 #[derive(Copy, Clone, Debug)]
 pub struct PoisonAttack {}
 impl Bonus for PoisonAttack {
-    fn on_attacking(&self, damage: Power, receiver: &mut Unit1, sender: &mut Unit1) -> Power {
+    fn on_attacking(&self, damage: Power, receiver: &mut Unit, sender: &mut Unit) -> Power {
         let receiver_stats = receiver.get_effected_stats();
         if !receiver.has_effect_kind(EffectKind::Poison) {
             if !(receiver_stats.defence.hand_percent > 99 && receiver.get_effected_stats().defence.ranged_percent > 99) {
@@ -106,7 +106,7 @@ impl Bonus for PoisonAttack {
 #[derive(Copy, Clone, Debug)]
 pub struct FireAttack {}
 impl Bonus for FireAttack {
-    fn on_attacking(&self, damage: Power, receiver: &mut Unit1, sender: &mut Unit1) -> Power {
+    fn on_attacking(&self, damage: Power, receiver: &mut Unit, sender: &mut Unit) -> Power {
         let receiver_stats = receiver.get_effected_stats();
         if !receiver.has_effect_kind(EffectKind::Fire) {
             if !(receiver_stats.defence.hand_percent.get() >= 99 && receiver.get_effected_stats().defence.ranged_percent.get() >= 99) {

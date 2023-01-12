@@ -1,21 +1,17 @@
 use {
     std::{
-        fmt::Debug,
+        fmt::{Debug, Display, Formatter},
         cmp::Ordering
     },
     dyn_clone::DynClone,
     derive_more::{AddAssign, DivAssign, MulAssign, SubAssign},
-    num::{
-        integer::sqrt,
-        pow
-    },
     crate::lib::{
         effects::{
             effect::{Effect, EffectKind, EffectInfo},
             effects::{AttackMagic, HealMagic, DisableMagic, ElementalSupport}
         },
         items::item::Item,
-        bonuses::bonus::Bonus,
+        bonuses::{bonuses::*, bonus::Bonus},
         battle::troop::Troop,
         units::unit::{
             MagicType::*,
@@ -108,14 +104,14 @@ pub enum MagicType {
 #[derive(Clone, Debug)]
 pub struct LevelUpInfo {
     pub stats: UnitStats,
-    pub xp_up: Percent,
+    pub xp_up: i16,
     pub max_xp: u64,
 }
 impl LevelUpInfo {
     pub fn empty() -> Self {
         Self {
             stats: UnitStats::empty(),
-            xp_up: Percent::new(0),
+            xp_up: 0,
             max_xp: 0
 }   }   }
 
@@ -124,7 +120,10 @@ pub struct UnitInfo {
     pub name: String,
     pub descript: String,
     pub cost: u64,
+    pub cost_hire: u64,
+    pub icon_index: usize,
     pub unit_type: UnitType,
+    pub next_unit: Vec<String>,
     pub magic_type: Option<MagicType>,
     pub surrender: Option<u64>,
     pub lvl: LevelUpInfo
@@ -135,7 +134,10 @@ impl UnitInfo {
             name: "".into(),
             descript: "".into(),
             cost: 0,
-            unit_type: UnitType::Alive,
+            cost_hire: 0,
+            icon_index: 0,
+            unit_type: UnitType::People,
+            next_unit: Vec::new(),
             magic_type: None,
             surrender: None,
             lvl: LevelUpInfo::empty()
@@ -184,60 +186,15 @@ impl Into<(usize, usize)> for UnitPos {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum UnitType {
-    Alive,
+    People,
+    Hero,
+    Animal,
     Undead,
     Rogue
 }
 
-dyn_clone::clone_trait_object!(Unit);
-pub trait Unit : DynClone + Debug {
-    fn attack(&mut self, target: &mut dyn Unit) -> bool;
-    fn heal(&mut self, amount: u64) -> bool {
-        if self.get_effected_stats().max_hp < self.get_effected_stats().hp + amount as i64 {
-            self.get_mut_data().stats.hp = self.get_effected_stats().max_hp;
-            return true;
-        }
-        self.get_mut_data().stats.hp += amount as i64;
-        return false;
-    }
-    fn get_effected_stats(&self) -> UnitStats {
-        let mut previous: UnitStats = self.get_data().stats;
-        previous
-    }
-    fn get_mut_data(&mut self) -> &mut UnitData;
-    fn get_data(&self) -> &UnitData;
-    fn get_info(&self) -> &UnitInfo { &self.get_data().info }
-    fn get_bonus(&self) -> Box<dyn Bonus>;
-    fn get_unittype(&self) -> UnitType { self.get_info().unit_type }
-    fn get_magictype(&self) -> Option<MagicType> { self.get_info().magic_type }
-    fn is_dead(&self) -> bool { self.get_effected_stats().hp < 1 }
-    fn has_effect_kind(&self, kind: EffectKind) -> bool {
-        self.get_data().effects.iter().map(|effect| effect.get_kind()).collect::<Vec<EffectKind>>().contains(&kind)
-    }
-    fn kill(&mut self) { self.get_mut_data().stats.hp = 0;}
-    fn add_effect(&mut self, effect: Box<dyn Effect>) -> bool {
-        self.get_mut_data().effects.push(effect);
-        true
-    }
-    fn add_item(&mut self, item: Item) -> bool {
-        self.get_mut_data().inventory.items.push(Some(item));
-        true
-    }
-    fn being_attacked(&mut self, damage: &Power, sender: &mut dyn Unit) -> u64;
-    fn correct_damage(&self, damage: &Power) -> Power {
-        let defence: Defence = self.get_effected_stats().defence;
-        println!("Использую защиту {:?}", defence);
-        let percent_100 = Percent::new(100);
-        Power {
-            ranged: (percent_100 - defence.ranged_percent).calc(damage.ranged.saturating_sub(defence.ranged_units)),
-            magic: (percent_100 - percent_100).calc(damage.magic.saturating_sub(defence.magic_units)),
-            hand: (percent_100 - defence.hand_percent).calc(damage.hand.saturating_sub(defence.hand_units))
-    }   }
-    fn tick(&mut self) -> bool;
-}
-
 #[derive(Clone, Debug)]
-pub struct Unit1 {
+pub struct Unit {
     pub stats: UnitStats,
     pub info: UnitInfo,
     pub lvl: UnitLvl,
@@ -247,26 +204,24 @@ pub struct Unit1 {
     pub effects: Vec<Box<dyn Effect>>
 }
 
-fn heal_unit(me: &mut Unit1, unit: &mut Unit1, damage: Power, magic_type: MagicType) -> bool {
-    match (unit.info.unit_type, magic_type) {
-        (UnitType::Rogue | UnitType::Alive, Death(_)) => {
-            return false
+fn heal_unit(me: &mut Unit, unit: &mut Unit, damage: Power, magic_type: MagicType) -> bool {
+    return match (unit.info.unit_type, magic_type) {
+        (UnitType::Rogue | UnitType::Hero | UnitType::People, Death(_)) => {
+            false
         }
         (UnitType::Undead, Life(_)) => {
-            return false
+            false
         }
-        _ => {}
-    }
-    return unit.heal(damage.magic)
-}
-fn bless_unit(me: &mut Unit1, target: &mut Unit1, damage: Power) -> bool {
+        _ => { unit.heal(damage.magic) }
+}   }
+fn bless_unit(me: &mut Unit, target: &mut Unit, damage: Power) -> bool {
     if !target.has_effect_kind(EffectKind::MageSupport) {
         target.add_effect(Box::new(HealMagic::new(damage.magic)));
         return true
     }
     false
 }
-fn heal_bless(me: &mut Unit1, target: &mut Unit1, damage: Power, magic_type: MagicType) -> bool {
+fn heal_bless(me: &mut Unit, target: &mut Unit, damage: Power, magic_type: MagicType) -> bool {
     if heal_unit(me, target, damage, magic_type) {
         bless_unit(me, target, damage);
         return true
@@ -274,7 +229,7 @@ fn heal_bless(me: &mut Unit1, target: &mut Unit1, damage: Power, magic_type: Mag
     false
 }
 
-fn elemental_bless(me: &mut Unit1, target: &mut Unit1, damage: Power) -> bool {
+fn elemental_bless(me: &mut Unit, target: &mut Unit, damage: Power) -> bool {
     if !target.has_effect_kind(EffectKind::MageSupport) {
         target.add_effect(Box::new(ElementalSupport::new(damage.magic)));
         return true
@@ -282,7 +237,7 @@ fn elemental_bless(me: &mut Unit1, target: &mut Unit1, damage: Power) -> bool {
     false
 }
 
-fn magic_curse(me: &mut Unit1, target: &mut Unit1, mut damage: Power, magic_type: MagicType) -> bool {
+fn magic_curse(me: &mut Unit, target: &mut Unit, mut damage: Power, magic_type: MagicType) -> bool {
     match (target.info.unit_type, magic_type) {
         (UnitType::Undead, Life(_)) => {
             damage.magic *= 2;
@@ -296,7 +251,7 @@ fn magic_curse(me: &mut Unit1, target: &mut Unit1, mut damage: Power, magic_type
         false
 }   }
 
-fn elemental_curse(me: &mut Unit1, target: &mut Unit1, damage: Power) -> bool {
+fn elemental_curse(me: &mut Unit, target: &mut Unit, damage: Power) -> bool {
     if !target.has_effect_kind(EffectKind::MageCurse) {
         target.add_effect(Box::new(DisableMagic::new(target.correct_damage(&damage, me.info.magic_type).magic)));
         true
@@ -304,7 +259,7 @@ fn elemental_curse(me: &mut Unit1, target: &mut Unit1, damage: Power) -> bool {
         false
 }   }
 
-fn magic_attack(me: &mut Unit1, target: &mut Unit1, mut damage: Power, magic_type: MagicType) -> bool {
+fn magic_attack(me: &mut Unit, target: &mut Unit, mut damage: Power, magic_type: MagicType) -> bool {
     match (target.info.unit_type, magic_type) {
         (UnitType::Undead, Life(_)) => {
             damage.magic *= 2;
@@ -317,7 +272,7 @@ fn magic_attack(me: &mut Unit1, target: &mut Unit1, mut damage: Power, magic_typ
     true
 }
 
-fn elemental_attack(me: &mut Unit1, target: &mut Unit1, damage: Power) -> bool {
+fn elemental_attack(me: &mut Unit, target: &mut Unit, damage: Power) -> bool {
     if !elemental_curse(me, target, damage) {
         target.being_attacked(&damage, me);
     }
@@ -331,8 +286,8 @@ fn get_magic_direction(magic_type: MagicType) -> MagicDirection {
         Elemental(direction) => direction
 }   }
 
-impl Unit1 {
-    pub fn attack(&mut self, target: &mut Unit1, target_pos: UnitPos, my_pos: UnitPos) -> bool {
+impl Unit {
+    pub fn attack(&mut self, target: &mut Unit, target_pos: UnitPos, my_pos: UnitPos) -> bool {
         let effected = self.get_effected_stats();
         let distance_vec: UnitPos = my_pos - target_pos;
         let distance: usize = distance_vec.0.max(distance_vec.1);
@@ -442,7 +397,7 @@ impl Unit1 {
         self.inventory.items.push(Some(item));
         true
     }
-    pub fn being_attacked(&mut self, damage: &Power, sender: &mut Unit1) -> u64 {
+    pub fn being_attacked(&mut self, damage: &Power, sender: &mut Unit) -> u64 {
         let corrected_damage = self.correct_damage(damage, sender.info.magic_type);
         let unit_bonus = sender.bonus.clone();
         let corrected_damage = unit_bonus.on_attacking(corrected_damage, self, sender);
@@ -481,5 +436,60 @@ impl Unit1 {
             }   }
         self.bonus.clone().on_tick(self);
         true
+    }
+}
+
+impl Display for Unit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let damage = self.stats.damage;
+        let attack = format!("Рукопашной атаки: {}\nДальней атаки: {}\nМагической атаки: {}", damage.hand, damage.ranged, damage.magic);
+        let defence = format!("Рукопашной защиты: {}\nДальней защиты: {}\nПроцент защиты от магии смерти: {}, жизни: {}, стихий: {}", self.stats.defence.hand_units, self.stats.defence.ranged_units, self.stats.defence.death_magic, self.stats.defence.life_magic, self.stats.defence.elemental_magic);
+        let mut magic_dir = None;
+        let magic_type = match &self.info.magic_type{
+            Some(magic_type) => {
+                match magic_type {
+                    Life(dir) => {
+                        magic_dir = Some(dir);
+                        "Магия жизни"
+                    }
+                    Death(dir) => {
+                        magic_dir = Some(dir);
+                        "Магия смерти"
+                    }
+                    Elemental(dir) => {
+                        magic_dir = Some(dir);
+                        "Магия стихий"
+                    }
+                    _ => "Отсутствует"
+                }
+            },
+            None => "Отсутствует"
+        }.to_string();
+        let magic_dir = match magic_dir {
+            Some(dir) => {
+                match dir {
+                    ToAll => "На всех",
+                    ToAlly => "На своих",
+                    ToEnemy => "На врагов",
+                    StrikeOnly => "Только атаковать врагов",
+                    BlessOnly => "Только благославлять союзников",
+                    CureOnly => "Только лечить союзников",
+                    CurseOnly => "ТОлько проклинать врагов",
+                }.to_string()
+            }
+            None => "Без магии.".to_string()
+        }.to_string();
+        let unit_type = match self.info.unit_type {
+            UnitType::Undead => "Нежить",
+            UnitType::People => "Человек",
+            UnitType::Hero => "Герой",
+            UnitType::Rogue => "Разбойник",
+            UnitType::Animal => "Животное"
+        }.to_string();
+        let surrender = if self.info.surrender > Some(0) {
+            format!("Сдаётся, даёт {} маны", self.info.surrender.unwrap())
+        } else {"Не сдаётся".to_string()};
+        f.write_fmt(format_args!("{} | {} опыта для развития\n{}\n Жизни: {}\nТип магии: {}|Направление магии: {}\n{}\n{}\nВампиризм: {}\nРеген: {}\nХоды: {}\nИнициатива: {}\nКто: {}\nСтоимость - {} для найма; {} золотых в день\nЭволюционирует в {};{}\nБонус: {}",
+                                 self.info.name, self.lvl.max_xp, self.info.descript, self.stats.hp, magic_type, magic_dir, attack, defence, self.stats.vamp, self.stats.regen, self.stats.moves, self.stats.speed, unit_type, self.info.cost_hire, self.info.cost, self.info.next_unit.join("|"), surrender, "aboba"))
     }
 }

@@ -6,7 +6,7 @@ use {
     }   },
     crate::lib:: {
         battle::army::{Army, TroopType},
-        mutrc::MutRc,
+        mutrc::SendMut,
         bonuses::bonuses::NoBonus,
         units:: {
             unit::*
@@ -18,7 +18,7 @@ pub struct Troop {
     pub is_free: bool,
     pub is_main: bool,
     pub custom_name: Option<String>,
-    pub unit: Unit1
+    pub unit: Unit
 }
 
 impl Troop {
@@ -40,7 +40,7 @@ impl Troop {
             is_free: false,
             is_main: false,
             custom_name: None,
-            unit: Unit1 {
+            unit: Unit {
                 stats: UnitStats::empty(),
                 info: UnitInfo::empty(),
                 lvl: UnitLvl::empty(),
@@ -81,5 +81,5 @@ impl Display for Troop {
 }   }
 impl From<Troop> for TroopType {
     fn from(troop: Troop) -> Self {
-        MutRc::new(Some(troop))
+        SendMut::new(Some(troop))
 }   }

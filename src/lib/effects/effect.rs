@@ -2,7 +2,7 @@ use {
     std::fmt::Debug,
     dyn_clone::DynClone,
     crate::lib::{
-        units::unit::{UnitStats, Unit1}
+        units::unit::{UnitStats, Unit}
     }
 };
 
@@ -18,15 +18,15 @@ pub enum EffectKind {
 }
 
 dyn_clone::clone_trait_object!(Effect);
-pub trait Effect : DynClone + Debug {
-    fn update_stats(&mut self, unit: &mut Unit1);
+pub trait Effect : DynClone + Debug + Send {
+    fn update_stats(&mut self, unit: &mut Unit);
     fn on_tick(&mut self) -> bool { false }
     fn on_battle_end(&mut self) -> bool { false }
-    fn tick(&mut self, unit: &mut Unit1) -> bool {
+    fn tick(&mut self, unit: &mut Unit) -> bool {
         self.on_tick();
         true
     }
-    fn kill(&mut self, unit: &mut Unit1) {
+    fn kill(&mut self, unit: &mut Unit) {
 
     }
     fn is_dead(&self) -> bool { false }

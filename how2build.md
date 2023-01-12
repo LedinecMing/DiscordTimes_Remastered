@@ -1,4 +1,4 @@
-To build this project you will need to install stable [rust](https://www.rust-lang.org/)
+To build this project you will need to install nightly [rust](https://www.rust-lang.org/)
 
 Target's linkers are mentioned in [config.toml](/.cargo/config.toml):
 * Windows - [x86_64-w64-mingw32-gcc](https://www.mingw-w64.org/downloads/)

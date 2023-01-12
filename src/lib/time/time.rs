@@ -9,7 +9,7 @@ const MONTH: u64 = 31;
 const YEAR: u64 = 12;
 const AGE: u64 = 100;
 
-#[derive(Add, Sub, Clone)]
+#[derive(Add, Sub, Clone, Debug)]
 pub struct Time {
     pub minutes: u64
 }

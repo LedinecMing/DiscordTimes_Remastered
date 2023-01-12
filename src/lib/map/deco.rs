@@ -1,4 +1,4 @@
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct MapDeco {
     pub can_be_passed: bool,
     symbol: char

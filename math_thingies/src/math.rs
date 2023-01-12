@@ -48,7 +48,7 @@ impl<V: CopyPartOrdNum> IsInRange<V> for InRange<V> {
 pub trait InConstRange<V: PartOrdNum> {
     const RANGE: Range<V>;
     fn is_in_range(value: V) -> bool {
-        value < Self::RANGE.start || value > Self::RANGE.end
+        value >= Self::RANGE.start || value <= Self::RANGE.end
 }   }
 
 pub struct InUnsignedRange<V: CopyPartOrdNum + NumCast + ToPrimitive> {
@@ -88,7 +88,7 @@ impl Percent {
     pub fn calc<V: Num + NumCast>(self, all: V) -> V {
         all * NumCast::from(self.0).unwrap() / NumCast::from(100).unwrap()
 }   }
-impl InConstRange<i16> for Percent { const RANGE: Range<i16> = -99..100; }
+impl InConstRange<i16> for Percent { const RANGE: Range<i16> = -100..200; }
 
 impl PartialEq<i16> for Percent {
     fn eq(&self, other: &i16) -> bool { self.0 == *other }

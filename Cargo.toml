@@ -8,8 +8,8 @@ edition = "2021"
 [dependencies]
 dyn-clone = "1.0.6"
 derive_more = {version="0.99.16"}
-rand = "0.8.5"
-notan = {version = "0.7.1", features = ["text"] }
+rand = "^0.8.0"
+notan = {git="https://github.com/Nazariglez/notan.git", features = ["text"]}
 notan_ui = {path = "notan_ui"}
 math_thingies = {path = "math_thingies"}
 num = "0.4.0"

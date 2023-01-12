@@ -6,8 +6,8 @@ use {
             troop::Troop
         },
         items::item::Item,
-        units::unit::{Unit1},
-        mutrc::MutRc,
+        units::unit::{Unit},
+        mutrc::SendMut,
         map::event::Event,
     },
     rand::seq::SliceRandom,
@@ -18,7 +18,7 @@ pub struct MapObjectData {
     pub event: Option<Vec<Event>>,
     pub market: Option<Market>,
     pub recruitment: Option<Recruitment>,
-    pub owner: Option<MutRc<Army>>
+    pub owner: Option<SendMut<Army>>
 }
 
 const RECRUIT_COST: f64 = 2.0;
@@ -53,7 +53,7 @@ impl Market {
 }
 #[derive(Clone)]
 pub struct RecruitUnit {
-    pub unit: Unit1,
+    pub unit: Unit,
     pub count: usize
 }
 #[derive(Clone)]

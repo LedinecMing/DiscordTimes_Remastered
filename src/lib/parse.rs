@@ -121,8 +121,7 @@ use {
     super::{
         bonuses::bonuses::*,
         units::{
-            unit::{*, MagicDirection::*, MagicType::*},
-            units::*
+            unit::{*, MagicDirection::*, MagicType::*}
         }
     },
 };
@@ -134,10 +133,10 @@ fn collect_errors<T, K: Display>(for_check: Result<T, K>, collector: &mut Vec<St
             collector.push(format!("Error: {}; additional: {}", info.to_string(), additional));
             None
 }   }   }
-pub fn parse_units() -> HashMap<usize, Unit1> {
+pub fn parse_units() -> HashMap<usize, Unit> {
     let mut units = HashMap::new();
     let sections = ini!("Units.ini");
-    let mut counter : usize = 0;
+    let mut counter = None;
     for (sec, prop) in sections.iter() {
         println!("Section: {:?}", sec);
         let mut name = "";
@@ -147,8 +146,10 @@ pub fn parse_units() -> HashMap<usize, Unit1> {
         let mut nature = "";
         let mut bonus_name = "";
 
-        let mut cost = None;
+        let mut cost_hire = None;
+        let mut cost = None::<u64>;
         let mut surrender = None;
+        let mut icon_index = None;
 
         let mut hp = None;
 
@@ -174,17 +175,20 @@ pub fn parse_units() -> HashMap<usize, Unit1> {
         let mut vamp = Some(0);
         let mut regen = Some(0);
 
+        let mut next_unit = Vec::new();
+
         let mut error_collector: Vec<String> = Vec::new();
         for (k, value) in prop.iter() {
-            println!("{}: {:?}", k.clone(), value.clone());
             if let Some(v) = value.as_ref() {
                 let v = &**v;
                 match &**k {
                     "name" => { name = v; },
                     "descript" => { description = v; },
                     "nature" => { nature = v; },
+                    "iconindex" => icon_index = collect_errors(v.parse::<usize>(), &mut error_collector,
+                                                  "Value of field iconindex ommited as non-usize"),
                     "cost" => {
-                        cost = collect_errors(v.parse::<u64>(), &mut error_collector,
+                        cost_hire = collect_errors(v.parse::<u64>(), &mut error_collector,
                                               "Value of field cost omitted as non-u64");
                     },
                     "surrender" => {
@@ -202,6 +206,10 @@ pub fn parse_units() -> HashMap<usize, Unit1> {
                     "attackshot" | "attackranged" => {
                         damage_ranged = collect_errors(v.parse::<u64>(), &mut error_collector,
                                                        "Value of field damage_ranged omitted as non-u64");
+                    }
+                    "magicpower" => {
+                        damage_magic = collect_errors(v.parse::<u64>(), &mut error_collector,
+                                                     "Value of field damage_ьфпшс omitted as non-u64");
                     }
                     "magic" | "attackmagic" => {
                         magic_type = v;
@@ -245,7 +253,7 @@ pub fn parse_units() -> HashMap<usize, Unit1> {
                         moves = collect_errors(v.parse::<u64>(), &mut error_collector,
                                                "Value of field defence_elemental_magic omitted as non-u64");
                     },
-                    "intiative" | "speed" => {
+                    "initiative" | "speed" => {
                         speed = collect_errors(v.parse::<u64>(), &mut error_collector,
                                                "Value of field speed omitted as non-u64");
                     }
@@ -261,11 +269,16 @@ pub fn parse_units() -> HashMap<usize, Unit1> {
                         xp_up = collect_errors(v.parse::<i16>(), &mut error_collector,
                                                "Value of field xp_up omitted as non-i16");
                     },
-                    "startexperience" => {
+                    "startexpirience" => {
                         max_xp = collect_errors(v.parse::<u64>(), &mut error_collector,
-                                               "Value of field max_xp omitted as non-u64");
+                                                "Value of field max_xp omitted as non-u64");
                     },
+                    "nextunit1" | "nextunit2" | "nextunit3" => next_unit.push(v.into()),
                     "bonus" => { bonus_name = v; }
+                    "globalindex" => {
+                        counter = collect_errors(v.parse::<usize>(), &mut error_collector,
+                                       "Value of field globalindex omitted as non-usize");
+                    },
                     _ => {}
         }   }   }
 
@@ -303,29 +316,40 @@ pub fn parse_units() -> HashMap<usize, Unit1> {
                 Box::new(NoBonus {})
         }   };
         let unit_type = match nature {
-            "Alive" | "" => UnitType::Alive,
+            "People" | "" => UnitType::People,
             "Rogue" => UnitType::Rogue,
             "Undead" => UnitType::Undead,
-            "Hero" => UnitType::Alive,
+            "Hero" => UnitType::Hero,
             _ => {
                 collect_errors(match_err, &mut error_collector,
                                &*format!("Field Nature is invalid: {}", nature));
-                UnitType::Alive
+                UnitType::People
         }   };
 
         assert!(error_collector.is_empty(), "{}", error_collector.join("\n"));
         let hp = hp.unwrap();
-        let xp_up = Percent::new(xp_up.unwrap());
+        let xp_up = xp_up.unwrap();
         let max_xp = max_xp.unwrap();
 
-        let unit = Unit1 {
+        let cost_hire = cost_hire.unwrap();
+        let cost = if cost_hire <= 50 {
+            cost_hire / 8
+        } else if cost_hire > 50 && cost_hire <= 100 {
+            cost_hire / 4
+        } else if cost_hire > 100 && cost_hire <= 150 {
+            (cost_hire as f64 / 2.65) as u64
+        } else {
+            cost_hire / 2
+        };
+
+        let unit = Unit {
             stats: UnitStats {
                 hp,
                 max_hp: hp,
                 damage: Power {
-                    magic: damage_hand.unwrap(),
+                    magic: damage_magic.unwrap(),
                     ranged: damage_ranged.unwrap(),
-                    hand: damage_magic.unwrap()
+                    hand: damage_hand.unwrap()
                 },
                 defence: Defence {
                     death_magic: Percent::new(defence_death_magic.unwrap()),
@@ -346,8 +370,11 @@ pub fn parse_units() -> HashMap<usize, Unit1> {
             info: UnitInfo {
                 name: name.into(),
                 descript: description.into(),
-                cost: cost.unwrap(),
+                cost,
+                cost_hire,
+                icon_index: counter.unwrap() - 1,
                 unit_type,
+                next_unit,
                 magic_type,
                 surrender,
                 lvl: LevelUpInfo {
@@ -365,10 +392,9 @@ pub fn parse_units() -> HashMap<usize, Unit1> {
             bonus,
             effects: vec![]
         };
-        units.insert(counter,
+        units.insert(counter.unwrap(),
             unit
         );
-        counter += 1;
     }
     units
 }

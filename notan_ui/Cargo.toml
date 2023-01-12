@@ -11,5 +11,5 @@ repository = "https://github.com/LedinecMing/DiscordTimes_Remastered/tree/dev-ma
 [dependencies]
 derive_more = "0.99.17"
 dyn-clone = "1.0.9"
-notan = {version = "0.7.1", features = ["text"]} # Cant use last version ( currently on git ) because it breaks all code. (Draw should impl Clone)
+notan = {git = "https://github.com/Nazariglez/notan.git", features=["text"]}
 math_thingies = {version = "0.1.0"}

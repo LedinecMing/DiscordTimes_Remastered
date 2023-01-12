@@ -1,7 +1,7 @@
 use {
+    std::fmt::Debug,
     notan::{
-        prelude::{AppState, Color, Graphics, Plugins, App},
-        app::{Event, Texture},
+        prelude::AppState,
         draw::*
     },
     super::{
@@ -11,7 +11,7 @@ use {
     dyn_clone::clone_box
 };
 
-pub trait UIState = AppState + Access<Draw> + Access<Vec<Font>>;
+pub trait UIState = AppState + Access<Draw> + Access<Vec<Font>> + Debug;
 pub trait Access<T> {
     fn get_mut(&mut self) -> &mut T;
     fn get(&self) -> &T;
@@ -44,30 +44,30 @@ impl<T: Positionable> PartPositional for T {
     fn get_size_obj(&self) -> Size { Positionable::get_size(self) }
     fn get_pos_obj(&self) -> Position { Positionable::get_pos(self) }
 }
-pub trait ObjPosForm<State: UIStateCl>: Form<State> + PartPositional {}
-impl<State: UIStateCl, T: Form<State> + PartPositional> ObjPosForm<State> for T {}
+pub trait ObjPosForm<State: UIStateCl>: Form<State> + PartPositional + Send + Debug {}
+impl<State: UIStateCl, T: Form<State> + PartPositional + Debug> ObjPosForm<State> for T {}
 
 impl<State: UIStateCl> Clone for Box<dyn ObjPosForm<State>> {
     fn clone(&self) -> Self {
         clone_box(&**self)
 }   }
 
-pub trait PosForm<State: UIState> = Form<State> + Positionable + Clone;
-pub trait UIStateCl = UIState + Clone;
+pub trait PosForm<State: UIState> = Form<State> + Positionable + Clone + Debug;
+pub trait UIStateCl = UIState + Clone + Send;
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum AlignHorizontal {
     Left,
     Center,
     Right
 }
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum AlignVertical {
     Top,
     Center,
     Bottom
 }
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Direction {
     Right,
     Left,

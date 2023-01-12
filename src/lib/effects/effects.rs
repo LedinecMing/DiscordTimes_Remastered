@@ -19,7 +19,7 @@ impl Default for MoreMoves {
 }   }   }
 impl Effect for MoreMoves
 {
-    fn update_stats(&mut self, unit: &mut Unit1) {
+    fn update_stats(&mut self, unit: &mut Unit) {
         unit.stats.max_moves+=1;
         unit.stats.moves+=1;
     }
@@ -27,7 +27,7 @@ impl Effect for MoreMoves
         self.info.lifetime -= 1;
         true
     }
-    fn kill(&mut self, unit: &mut Unit1) {
+    fn kill(&mut self, unit: &mut Unit) {
         unit.stats.max_moves -= 1;
     }
     fn is_dead(&self) -> bool {
@@ -56,7 +56,7 @@ impl Default for HealMagic {
             additional_defense: Defence::empty()
 }   }   }
 impl Effect for HealMagic {
-    fn update_stats(&mut self, unit: &mut Unit1) {
+    fn update_stats(&mut self, unit: &mut Unit) {
         let unitstats = unit.stats;
         let damage = unitstats.damage;
         let defence = unitstats.defence;
@@ -82,7 +82,7 @@ impl Effect for HealMagic {
         self.info.lifetime -= 1;
         true
     }
-    fn kill(&mut self, unit: &mut Unit1) {
+    fn kill(&mut self, unit: &mut Unit) {
         unit.stats.damage = unit.stats.damage - self.additional_damage;
         unit.stats.defence = unit.stats.defence - self.additional_defense;
     } 
@@ -112,7 +112,7 @@ impl Default for DisableMagic {
             additional_defense: Defence::empty()
 }   }   }
 impl Effect for DisableMagic {
-    fn update_stats(&mut self, unit: &mut Unit1) {
+    fn update_stats(&mut self, unit: &mut Unit) {
         if self.magic_power < 20 {
             return
         }
@@ -148,7 +148,7 @@ impl Default for ElementalSupport {
             magic_power: 15
 }   }   }
 impl Effect for ElementalSupport {
-    fn update_stats(&mut self, unit: &mut Unit1) {
+    fn update_stats(&mut self, unit: &mut Unit) {
         if self.magic_power < 20 {
             return
         }
@@ -162,7 +162,7 @@ impl Effect for ElementalSupport {
         self.info.lifetime = 0;
         true
     }
-    fn kill(&mut self, unit: &mut Unit1) {
+    fn kill(&mut self, unit: &mut Unit) {
 
     }
     fn is_dead(&self) -> bool { self.info.lifetime < 1 }
@@ -189,7 +189,7 @@ impl Default for AttackMagic {
             additions: UnitStats::empty()
 }   }   }
 impl Effect for AttackMagic {
-    fn update_stats(&mut self, unit: &mut Unit1)  {
+    fn update_stats(&mut self, unit: &mut Unit)  {
         let stats = unit.stats;
         let damage = stats.damage;
         let defence = stats.defence;
@@ -215,7 +215,7 @@ impl Effect for AttackMagic {
         self.info.lifetime = 0;
         true
     }
-    fn kill(&mut self, unit: &mut Unit1) {
+    fn kill(&mut self, unit: &mut Unit) {
         unit.stats = unit.stats - self.additions;
     }
     fn is_dead(&self) -> bool { self.info.lifetime < 1 }
@@ -228,7 +228,7 @@ pub struct Poison {
     pub info: EffectInfo,
 }
 impl Effect for Poison {
-    fn update_stats(&mut self, unit: &mut Unit1) {
+    fn update_stats(&mut self, unit: &mut Unit) {
         unit.stats.hp -= POISON_PERCENT.calc(unit.stats.hp);
     }
     fn on_battle_end(&mut self) -> bool {
@@ -253,7 +253,7 @@ pub struct Fire {
     addition_speed: u64
 }
 impl Effect for Fire {
-    fn update_stats(&mut self, unit: &mut Unit1) {
+    fn update_stats(&mut self, unit: &mut Unit) {
         let mut unitstats = unit.stats;
         unitstats.hp -= FIRE_PERCENT.calc(unitstats.hp);
         self.addition_speed = FIRE_SLOWNESS_PERCENT.calc(unitstats.speed);
@@ -267,7 +267,7 @@ impl Effect for Fire {
         self.info.lifetime = 0;
         true
     }
-    fn kill(&mut self, unit: &mut Unit1) {
+    fn kill(&mut self, unit: &mut Unit) {
         unit.stats.speed = unit.stats.speed - self.addition_speed;
     }
     fn is_dead(&self) -> bool { self.info.lifetime < 1 }
@@ -287,10 +287,10 @@ pub struct ItemEffect {
     pub additions: UnitStats
 }
 impl Effect for ItemEffect {
-    fn update_stats(&mut self, unit: &mut Unit1) {
+    fn update_stats(&mut self, unit: &mut Unit) {
         unit.stats = unit.stats + self.additions;
     }
-    fn kill(&mut self, unit: &mut Unit1) { unit.stats = unit.stats - self.additions; }
+    fn kill(&mut self, unit: &mut Unit) { unit.stats = unit.stats - self.additions; }
     fn get_kind(&self) -> EffectKind { EffectKind::Item }
 }
 
@@ -301,14 +301,14 @@ pub struct ToEndEffect {
     pub additions: UnitStats
 }
 impl Effect for ToEndEffect {
-    fn update_stats(&mut self, unit: &mut Unit1) {
+    fn update_stats(&mut self, unit: &mut Unit) {
         unit.stats = unit.stats + self.additions
     }
     fn on_battle_end(&mut self) -> bool {
         self.info.lifetime = 0;
         true
     }
-    fn kill(&mut self, unit: &mut Unit1) { unit.stats = unit.stats - self.additions; }
+    fn kill(&mut self, unit: &mut Unit) { unit.stats = unit.stats - self.additions; }
     fn is_dead(&self) -> bool { self.info.lifetime < 1 }
     fn get_kind(&self) -> EffectKind { EffectKind::Bonus }
 }
