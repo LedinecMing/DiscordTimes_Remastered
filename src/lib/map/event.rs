@@ -1,9 +1,8 @@
 use crate::lib::time::time::Time;
 
-
 #[derive(Clone)]
 pub struct Event {
-    time_activation: Time, 
+    time_activation: Time,
     next_event: Option<i32>,
     if_executed: Option<i32>,
     executed: bool,

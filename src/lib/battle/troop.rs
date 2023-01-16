@@ -1,16 +1,12 @@
 use {
-    std:: {
-        fmt::{
-            Display,
-            Formatter
-    }   },
-    crate::lib:: {
+    crate::lib::{
         battle::army::{Army, TroopType},
-        mutrc::SendMut,
         bonuses::bonuses::NoBonus,
-        units:: {
-            unit::*
-}  }  };
+        mutrc::SendMut,
+        units::unit::*,
+    },
+    std::fmt::{Display, Formatter},
+};
 
 #[derive(Clone, Debug)]
 pub struct Troop {
@@ -18,7 +14,7 @@ pub struct Troop {
     pub is_free: bool,
     pub is_main: bool,
     pub custom_name: Option<String>,
-    pub unit: Unit
+    pub unit: Unit,
 }
 
 impl Troop {
@@ -47,14 +43,16 @@ impl Troop {
                 inventory: UnitInventory::empty(),
                 army: 0,
                 bonus: Box::new(NoBonus {}),
-                effects: vec![]
-            }
-}   }   }
+                effects: vec![],
+            },
+        }
+    }
+}
 impl Display for Troop {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let custom_name = match &self.custom_name {
             Some(name) => name.clone(),
-            None => "".into()
+            None => "".into(),
         };
         let unitdata = &self.unit;
         let unit_name = &unitdata.info.name;
@@ -78,8 +76,10 @@ impl Display for Troop {
                speed = stats.speed,
                moves = stats.moves,
                max_moves = stats.max_moves)
-}   }
+    }
+}
 impl From<Troop> for TroopType {
     fn from(troop: Troop) -> Self {
         SendMut::new(Some(troop))
-}   }
+    }
+}

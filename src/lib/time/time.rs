@@ -1,7 +1,4 @@
-use {
-    derive_more::{Add, Sub}
-};
-
+use derive_more::{Add, Sub};
 
 const HOUR: u64 = 60;
 const DAY: u64 = 24;
@@ -11,7 +8,7 @@ const AGE: u64 = 100;
 
 #[derive(Add, Sub, Clone, Debug)]
 pub struct Time {
-    pub minutes: u64
+    pub minutes: u64,
 }
 impl Time {
     pub fn get_hours(&self) -> u64 {
@@ -40,6 +37,6 @@ impl Time {
     }
 
     pub fn new(minutes: u64) -> Self {
-        Time{minutes}
+        Time { minutes }
     }
 }

@@ -1,35 +1,32 @@
 #![allow(non_snake_case)]
 
-use {
-    crate::lib::{
-        effects::{
-            effect::EffectInfo,
-            effects::ItemEffect,
-        },
-        items::item::{Item, ItemInfo},
-        units::unit::{Power, UnitStats}
-    }
+use crate::lib::{
+    effects::{effect::EffectInfo, effects::ItemEffect},
+    items::item::{Item, ItemInfo},
+    units::unit::{Power, UnitStats},
 };
-
 
 impl Item {
     pub fn CoolSword() -> Self {
         Self {
-            effect: Box::new(ItemEffect { info: EffectInfo { lifetime: -1 }, additions: UnitStats {
-                damage: Power {
-                    magic: 0,
-                    ranged: 0,
-                    hand: 20,
+            effect: Box::new(ItemEffect {
+                info: EffectInfo { lifetime: -1 },
+                additions: UnitStats {
+                    damage: Power {
+                        magic: 0,
+                        ranged: 0,
+                        hand: 20,
+                    },
+                    max_moves: 1,
+                    speed: 10,
+                    ..UnitStats::empty()
                 },
-                max_moves: 1,
-                speed: 10,
-                ..UnitStats::empty()
-            } }),
+            }),
             info: ItemInfo {
                 name: "Cool Sword",
                 description: "really cool",
                 cost: 100,
-                sells: true
+                sells: true,
             },
             ..Item::empty()
         }
@@ -37,13 +34,16 @@ impl Item {
     fn empty() -> Self {
         Self {
             bonus: None,
-            effect: Box::new(ItemEffect { info: EffectInfo { lifetime: -1 }, additions: UnitStats::empty() }),
+            effect: Box::new(ItemEffect {
+                info: EffectInfo { lifetime: -1 },
+                additions: UnitStats::empty(),
+            }),
             info: ItemInfo {
                 name: "",
                 description: "",
                 cost: 0,
-                sells: false
-            }
+                sells: false,
+            },
         }
     }
 }

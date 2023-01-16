@@ -1,9 +1,7 @@
 use {
-    std::fmt::Debug,
+    crate::lib::units::unit::{Unit, UnitStats},
     dyn_clone::DynClone,
-    crate::lib::{
-        units::unit::{UnitStats, Unit}
-    }
+    std::fmt::Debug,
 };
 
 #[derive(PartialEq)]
@@ -14,28 +12,32 @@ pub enum EffectKind {
     Item,
     Potion,
     Poison,
-    Fire
+    Fire,
 }
 
 dyn_clone::clone_trait_object!(Effect);
-pub trait Effect : DynClone + Debug + Send {
+pub trait Effect: DynClone + Debug + Send {
     fn update_stats(&mut self, unit: &mut Unit);
-    fn on_tick(&mut self) -> bool { false }
-    fn on_battle_end(&mut self) -> bool { false }
+    fn on_tick(&mut self) -> bool {
+        false
+    }
+    fn on_battle_end(&mut self) -> bool {
+        false
+    }
     fn tick(&mut self, unit: &mut Unit) -> bool {
         self.on_tick();
         true
     }
-    fn kill(&mut self, unit: &mut Unit) {
-
+    fn kill(&mut self, unit: &mut Unit) {}
+    fn is_dead(&self) -> bool {
+        false
     }
-    fn is_dead(&self) -> bool { false }
     fn get_kind(&self) -> EffectKind {
         EffectKind::Bonus
-}   }
-
+    }
+}
 
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub struct EffectInfo {
-    pub lifetime: i32
+    pub lifetime: i32,
 }

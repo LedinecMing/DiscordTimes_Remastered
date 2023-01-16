@@ -1,9 +1,4 @@
-use std::io::{
-    prelude::*,
-    stdin, stdout,
-    Stdout
-};
-
+use std::io::{prelude::*, stdin, stdout, Stdout};
 
 pub fn pause() {
     let mut stdin = stdin();
