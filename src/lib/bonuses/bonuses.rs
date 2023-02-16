@@ -1,16 +1,19 @@
-use crate::LOCALE;
-use std::cmp::min;
-use {
-    crate::lib::{
+use crate::{
+    lib::{
         bonuses::bonus::Bonus,
         effects::{
             effect::{EffectInfo, EffectKind},
             effects::*,
         },
-        units::unit::{Defence, Power, Unit, UnitPos, UnitStats},
+        units::{
+            unit::{Defence, Power, Unit, UnitPos, UnitStats},
+            unitstats::{Modify, ModifyDefence, *},
+        },
     },
-    math_thingies::Percent,
+    LOCALE,
 };
+use math_thingies::Percent;
+use std::cmp::min;
 
 #[derive(Copy, Clone, Debug)]
 pub struct DefencePiercing {}
@@ -232,13 +235,13 @@ impl Bonus for Berserk {
         let percent_10 = Percent::new(10);
         sender.add_effect(Box::new(ToEndEffect {
             info: EffectInfo { lifetime: i32::MAX },
-            additions: UnitStats {
-                damage: Power {
-                    hand: percent_10.calc(receiver_stats.damage.hand),
-                    ranged: percent_10.calc(receiver_stats.damage.ranged),
-                    magic: percent_10.calc(receiver_stats.damage.magic),
+            modify: ModifyUnitStats {
+                damage: ModifyPower {
+                    hand: *Modify::default().percent_add(percent_10),
+                    ranged: *Modify::default().percent_add(percent_10),
+                    magic: *Modify::default().percent_add(percent_10),
                 },
-                ..UnitStats::empty()
+                ..Default::default()
             },
         }));
         true
@@ -247,23 +250,20 @@ impl Bonus for Berserk {
         "Berserk"
     }
 }
-
+const PERCENT0: Percent = Percent::const_new(0);
 #[derive(Copy, Clone, Debug)]
 pub struct Block {}
 impl Bonus for Block {
     fn on_move_skip(&self, unit: &mut Unit) -> bool {
         unit.add_effect(Box::new(ItemEffect {
             info: EffectInfo { lifetime: 1 },
-            additions: UnitStats {
-                defence: Defence {
-                    ranged_percent: Percent::new(0),
-                    hand_percent: Percent::new(0),
-                    death_magic: Percent::new(0),
-                    life_magic: Percent::new(0),
-                    elemental_magic: Percent::new(0),
-                    ..unit.get_effected_stats().defence
+            modify: ModifyUnitStats {
+                defence: ModifyDefence {
+                    hand_units: *Modify::default().percent_add(Percent::new(100)),
+                    ranged_units: *Modify::default().percent_add(Percent::new(100)),
+                    ..ModifyDefence::default()
                 },
-                ..UnitStats::empty()
+                ..ModifyUnitStats::default()
             },
         }));
         true
@@ -490,16 +490,18 @@ impl Bonus for Garrison {
     fn on_battle_start(&self, unit: &mut Unit) -> bool {
         unit.add_effect(Box::new(ToEndEffect {
             info: EffectInfo { lifetime: i32::MAX },
-            additions: UnitStats {
-                hp: 0,
-                max_hp: 0,
-                damage: unit.stats.damage,
-                defence: unit.stats.defence,
-                moves: 0,
-                max_moves: 0,
-                speed: 0,
-                vamp: Percent::new(0),
-                regen: Percent::new(0),
+            modify: ModifyUnitStats {
+                damage: ModifyPower {
+                    ranged: *Modify::default().percent_add(Percent::new(100)),
+                    hand: *Modify::default().percent_add(Percent::new(100)),
+                    ..Default::default()
+                },
+                defence: ModifyDefence {
+                    ranged_units: *Modify::default().percent_add(Percent::new(100)),
+                    hand_units: *Modify::default().percent_add(Percent::new(100)),
+                    ..Default::default()
+                },
+                ..Default::default()
             },
         }))
     }
@@ -515,7 +517,6 @@ impl Bonus for SpearDefence {
     fn on_battle_start(&self, unit: &mut Unit) -> bool {
         unit.add_effect(Box::new(SpearEffect {
             info: EffectInfo { lifetime: 1 },
-            added_defence: Defence::empty(),
         }));
         true
     }

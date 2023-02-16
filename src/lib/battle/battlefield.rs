@@ -1,9 +1,26 @@
-use crate::lib::battle::army::{Army, TroopType, MAX_TROOPS};
-use crate::lib::mutrc::SendMut;
-use crate::lib::units::unit::{Unit, UnitPos};
-use crate::State;
+use crate::{
+    lib::{
+        battle::army::{Army, TroopType, MAX_TROOPS},
+        mutrc::SendMut,
+        units::unit::{Unit, UnitPos},
+    },
+    State,
+};
 use std::cmp::Ordering::*;
 
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
+pub enum Field {
+    Front,
+    Back,
+    Reserve,
+}
+pub fn field_type(index: usize, max_troops: usize) -> Field {
+    match index {
+        index if index == 0 || index == max_troops / 2 - 1 => Field::Reserve,
+        index if index < max_troops / 2 => Field::Back,
+        _ => Field::Front,
+    }
+}
 #[derive(Clone, Debug)]
 pub struct BattleInfo {
     pub army1: usize,
@@ -18,63 +35,60 @@ impl BattleInfo {
     pub fn start(&mut self, state: &mut State) {
         let army1 = &mut state.gamemap.armys[self.army1];
 
-        army1
-            .troops
-            .iter()
-            .zip(0..*MAX_TROOPS.lock().unwrap())
-            .for_each(|(troop, i)| {
-                let mut troop = troop.get();
-                if let Some(troop) = troop.as_mut() {
-                    let unit = &mut troop.unit;
-                    let bonus = unit.bonus.clone();
-                    bonus.on_battle_start(unit);
-                    unit.bonus = bonus;
-                }
-            });
+        army1.troops.iter().for_each(|troop| {
+            let mut troop = troop.get();
+            if let Some(troop) = troop.as_mut() {
+                let unit = &mut troop.unit;
+                let bonus = unit.get_bonus();
+                bonus.on_battle_start(unit);
+                unit.bonus = bonus;
+                unit.recalc();
+            }
+        });
 
         let army2 = &mut state.gamemap.armys[self.army2];
-        army2
-            .troops
-            .iter()
-            .zip(0..*MAX_TROOPS.lock().unwrap())
-            .for_each(|(troop, i)| {
-                let mut troop = troop.get();
-                if let Some(troop) = troop.as_mut() {
-                    let unit = &mut troop.unit;
-                    let bonus = unit.bonus.clone();
-                    bonus.on_battle_start(unit);
-                    unit.bonus = bonus;
-                }
-            });
+        army2.troops.iter().for_each(|troop| {
+            let mut troop = troop.get();
+            if let Some(troop) = troop.as_mut() {
+                let unit = &mut troop.unit;
+                let bonus = unit.get_bonus();
+                bonus.on_battle_start(unit);
+                unit.bonus = bonus;
+                unit.recalc();
+            }
+        });
     }
     pub fn search_next_active(&self, state: &State) -> Option<(usize, usize)> {
         let army1 = &state.gamemap.armys[self.army1];
         let army2 = &state.gamemap.armys[self.army2];
 
         fn max_speed(army: &Army) -> Option<(&TroopType, usize)> {
-            army.troops.iter().zip(0..*MAX_TROOPS.lock().unwrap()).max_by(|inf1, inf2| {
-                let (temp1, temp2) = (inf1.0.get(), inf2.0.get());
-                let (troop1, troop2) = (temp1.as_ref(), temp2.as_ref());
-                if let Some(inf1) = troop1 {
-                    if let Some(inf2) = troop2 {
-                        if inf1.unit.stats.moves == 0 || inf1.unit.is_dead() {
-                            Less
-                        } else if inf2.unit.stats.moves == 0 || inf2.unit.is_dead() {
-                            Greater
+            army.troops
+                .iter()
+                .zip(0..*MAX_TROOPS.lock().unwrap())
+                .max_by(|inf1, inf2| {
+                    let (temp1, temp2) = (inf1.0.get(), inf2.0.get());
+                    let (troop1, troop2) = (temp1.as_ref(), temp2.as_ref());
+                    if let Some(inf1) = troop1 {
+                        if let Some(inf2) = troop2 {
+                            if inf1.unit.stats.moves == 0 || inf1.unit.is_dead() {
+                                Less
+                            } else if inf2.unit.stats.moves == 0 || inf2.unit.is_dead() {
+                                Greater
+                            } else {
+                                inf1.unit.stats.speed.cmp(&inf2.unit.stats.speed)
+                            }
                         } else {
-                            inf1.unit.stats.speed.cmp(&inf2.unit.stats.speed)
+                            Greater
                         }
                     } else {
-                        Greater
+                        if let Some(inf2) = troop2 {
+                            Less
+                        } else {
+                            Equal
+                        }
                     }
-                } else {
-                    if let Some(inf2) = troop2 {
-                        Less
-                    } else {
-                        Equal
-                    }
-                }
-            })
+                })
         }
         let next1 = max_speed(army1);
         let next2 = max_speed(army2);

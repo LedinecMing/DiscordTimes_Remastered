@@ -3,13 +3,12 @@
 use {
     std::{
         marker::PhantomData,
-        collections::HashMap,
     },
     notan::{
-        prelude::{AppState, Color, Graphics, Plugins, App, Assets},
-        app::{Event, Texture},
+        prelude::{Color, Graphics, Plugins, App, Assets},
         draw::*
     },
+    derive_builder::Builder,
     super::{
         form::Form,
         rect::*,
@@ -22,17 +21,33 @@ impl From<usize> for FontId {
     fn from(value: usize) -> Self {
         Self(value)
 }   }
-#[derive(Clone, Debug)]
+impl Default for FontId {
+    fn default() -> Self {
+        Self(0)
+}   }
+
+#[derive(Clone, Debug, Builder)]
+#[builder(build_fn(error = "StructBuildError"))]
 pub struct Text<State: UIStateCl> {
+    #[builder(setter(into))]
     pub text: String,
+    #[builder(setter(into), default)]
     pub font: FontId,
+    #[builder(default="AlignHorizontal::Left")]
     pub align_h: AlignHorizontal,
+    #[builder(default="AlignVertical::Top")]
     pub align_v: AlignVertical,
+    #[builder(setter(into), default)]
     pub pos: Position,
+    #[builder(default = "0.")]
     pub size: f32,
+    #[builder(setter(into, strip_option), default = "None")]
     pub rect_size: Option<Size>,
+    #[builder(setter(into, strip_option), default = "None")]
     pub max_width: Option<f32>,
+    #[builder(setter(into), default = "Color::BLACK")]
     pub color: Color,
+    #[builder(default)]
     pub boo: PhantomData<State>
 }
 impl<State: UIStateCl> Form<State> for Text<State> {
@@ -123,9 +138,12 @@ impl<State: UIStateCl> Text<State> {
             color,
             boo: PhantomData
 }   }   }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
+#[builder(build_fn(error = "StructBuildError"))]
 pub struct TextChain<State: UIStateCl> {
+    #[builder(default)]
     pub texts: Vec<Text<State>>,
+    #[builder(setter(into), default)]
     pub pos: Position,
     pub max_width: f32
 }

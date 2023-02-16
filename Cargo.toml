@@ -5,6 +5,18 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.release]
+lto = true
+strip = "symbols"
+debug = false
+panic = "abort"
+opt-level = "z"
+codegen-units = 1
+
+[profile.dev]
+debug = 2
+lto = true
+
 [dependencies]
 dyn-clone = "1.0.6"
 derive_more = {version="0.99.16"}
@@ -14,5 +26,10 @@ notan_ui = {path = "notan_ui"}
 math_thingies = {path = "math_thingies"}
 num = "0.4.0"
 anyhow = "1.0.65"
-ini = "1.3.0"
+derive_builder = "0.12.0"
 once_cell = "1.15.0"
+tracing-mutex = "0.2.1"
+ini_core = "0.1.0"
+worldgen = "0.5.3"
+pathfinding = "4.2.1"
+parking_lot = "0.12.1"

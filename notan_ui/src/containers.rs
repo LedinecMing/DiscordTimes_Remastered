@@ -9,6 +9,7 @@ use {
         app::{Event, Texture},
         draw::*
     },
+    derive_builder::Builder,
     super::{
         form::Form,
         wrappers::Slider,
@@ -16,12 +17,17 @@ use {
         defs::*
 }   };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct Container<State: UIStateCl, T: PosForm<State>> {
     pub inside: Vec<T>,
+    #[builder(setter(into), default)]
     pub pos: Position,
+    #[builder(default = "Direction::Right")]
     pub align_direction: Direction,
+    #[builder(setter(into), default)]
     pub interval: Position,
+    #[builder(setter(skip), default)]
     pub boo: PhantomData<State>
 }
 impl<State: UIStateCl, T: PosForm<State>> Form<State> for Container<State, T> {
@@ -137,11 +143,16 @@ impl<State: UIStateCl, T: PosForm<State>> Default for Container<State, T> {
             boo: PhantomData
 }   }   }
 
-#[derive(Clone)]
+#[derive(Clone, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct SingleContainer<State: UIStateCl, T: PosForm<State> + Debug> {
+    #[builder(setter(strip_option), default="None")]
     pub inside: Option<T>,
-    pub on_draw: Option<fn(&mut Self, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)>,
-    pub after_draw: Option<fn(&mut Self, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    #[builder(setter(strip_option), default="None")]
+    pub on_draw: Option<fn(&mut SingleContainer<State, T>, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)>,
+    #[builder(setter(strip_option), default="None")]
+    pub after_draw: Option<fn(&mut SingleContainer<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    #[builder(default)]
     pub pos: Position
 }
 impl<State: UIStateCl, T: PosForm<State> + Debug> Debug for SingleContainer<State, T> {
@@ -201,10 +212,12 @@ impl<State: UIStateCl, T: PosForm<State> + Debug> Default for SingleContainer<St
             pos: Position(0., 0.)
 }   }   }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct SliderContainer<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> {
     pub inside: T,
     pub slider: Slider<State, K>,
+    #[builder(default="1.")]
     pub slide_speed: f32,
 }
 impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Form<State> for SliderContainer<State, T, K> {
@@ -235,9 +248,12 @@ impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Positionable for Sl
     }
     fn get_pos(&self) -> Position { self.inside.get_pos() }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct StraightDynContainer<State: UIStateCl> {
+    #[builder(default)]
     pub inside: Vec<Box<dyn ObjPosForm<State>>>,
+    #[builder(setter(into), default)]
     pub pos: Position
 }
 impl<State: UIStateCl> Form<State> for StraightDynContainer<State> {
@@ -269,11 +285,16 @@ impl<State: UIStateCl> Default for StraightDynContainer<State> {
         pos: Position(0., 0.),
 }   }   }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct DynContainer<State: UIStateCl> {
+    #[builder(default)]
     pub inside: Vec<Box<dyn ObjPosForm<State>>>,
+    #[builder(setter(into), default)]
     pub pos: Position,
+    #[builder(default = "Direction::Right")]
     pub align_direction: Direction,
+    #[builder(default)]
     pub interval: Position
 }
 impl<State: UIStateCl> Form<State> for DynContainer<State> {
@@ -350,4 +371,4 @@ impl<State: UIStateCl> Default for DynContainer<State> {
         pos: Position(0., 0.),
         align_direction: Direction::Right,
         interval: Position(0., 0.)
-    }   }   }
+}   }   }

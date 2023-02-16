@@ -3,3 +3,4 @@
 **/*.html
 /.ts
 **/.lock
+/dt/

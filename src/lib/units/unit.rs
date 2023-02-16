@@ -1,22 +1,25 @@
-use crate::lib::battle::army::MAX_TROOPS;
-use crate::LOCALE;
-use num::abs;
-use {
-    crate::lib::{
-        battle::troop::Troop,
-        bonuses::{bonus::Bonus, bonuses::*},
-        effects::{
-            effect::{Effect, EffectInfo, EffectKind},
-            effects::{AttackMagic, DisableMagic, ElementalSupport, HealMagic},
-        },
-        items::item::Item,
-        units::unit::{MagicDirection::*, MagicType::*},
+use crate::{
+    lib::battle::{
+        army::MAX_TROOPS,
+        battlefield::{field_type, Field},
     },
-    derive_more::{Add, Div, Mul, Neg, Sub},
-    derive_more::{AddAssign, DivAssign, MulAssign, SubAssign},
-    math_thingies::Percent,
-    std::fmt::{Debug, Display, Formatter},
+    LOCALE,
 };
+use num::abs;
+
+use super::unitstats::ModifyUnitStats;
+use crate::lib::{
+    bonuses::{bonus::Bonus, bonuses::*},
+    effects::{
+        effect::{Effect, EffectKind},
+        effects::{AttackMagic, DisableMagic, ElementalSupport, HealMagic},
+    },
+    items::item::Item,
+    units::unit::{MagicDirection::*, MagicType::*},
+};
+use derive_more::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
+use math_thingies::Percent;
+use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Copy, Clone, Debug, Add, Sub)]
 pub struct Defence {
@@ -180,6 +183,7 @@ impl UnitLvl {
 #[derive(Clone, Debug)]
 pub struct UnitData {
     pub stats: UnitStats,
+    pub modify: ModifyUnitStats,
     pub info: UnitInfo,
     pub lvl: UnitLvl,
     pub inventory: UnitInventory,
@@ -200,6 +204,11 @@ impl Into<(usize, usize)> for UnitPos {
         (self.0, self.1)
     }
 }
+impl Into<usize> for UnitPos {
+    fn into(self) -> usize {
+        self.0 + self.1 * *MAX_TROOPS.lock().unwrap() / 2
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum UnitType {
@@ -213,6 +222,8 @@ pub enum UnitType {
 #[derive(Clone, Debug)]
 pub struct Unit {
     pub stats: UnitStats,
+    pub modified: UnitStats,
+    pub modify: ModifyUnitStats,
     pub info: UnitInfo,
     pub lvl: UnitLvl,
     pub inventory: UnitInventory,
@@ -325,18 +336,58 @@ fn get_magic_direction(magic_type: MagicType) -> MagicDirection {
 }
 
 impl Unit {
+    pub fn recalc(&mut self) {
+        self.modified = self.modify.apply(&self.stats);
+    }
+    pub fn new(
+        stats: UnitStats,
+        info: UnitInfo,
+        lvl: UnitLvl,
+        inventory: UnitInventory,
+        army: usize,
+        bonus: Box<dyn Bonus>,
+        effects: Vec<Box<dyn Effect>>,
+    ) -> Self {
+        let mut army = Self {
+            stats,
+            modified: stats,
+            info,
+            lvl,
+            inventory,
+            effects,
+            army,
+            modify: ModifyUnitStats::default(),
+            bonus,
+        };
+        army.recalc();
+        army
+    }
     pub fn can_attack(&self, target: &Unit, target_pos: UnitPos, my_pos: UnitPos) -> bool {
-        let effected = self.get_effected_stats();
+        let effected = self.modified;
         let is_enemy = self.army != target.army;
         let is_in_back = my_pos.1 == 0;
+        let my_field = field_type(my_pos.0.into(), *MAX_TROOPS.lock().unwrap());
+        let enemy_field = field_type(target_pos.0.into(), *MAX_TROOPS.lock().unwrap());
         let mut damage = effected.damage;
-        return if damage.hand > 0 || damage.ranged > 0 {
-            is_enemy
-                && ((is_in_back && damage.ranged > 0)
-                    || (damage.ranged > 0
-                        && target_pos.1 == my_pos.1
-                        && abs(target_pos.0 as i64 - my_pos.0 as i64) < 2)
-                    || (!is_in_back && damage.hand > 0 && target_pos.1 == 1))
+        /*
+         * C(`B`(`A`|D)) | `C`(`A^B`)
+         */
+        let enemy_in_reserve = enemy_field == Field::Reserve;
+        let me_in_reserve = my_field == Field::Reserve;
+        let both_in_reserve = me_in_reserve && enemy_in_reserve;
+        let both_not_in_reserve = !me_in_reserve && !enemy_in_reserve;
+        let a = (is_enemy && (!me_in_reserve || self.bonus.id() == "Ghost") && !enemy_in_reserve)
+            || (!is_enemy && (both_not_in_reserve || both_in_reserve));
+        return if !a {
+            false
+        } else if damage.ranged > 0
+            && (target_pos.1 == my_pos.1 && abs(target_pos.0 as i64 - my_pos.0 as i64) < 2
+                || my_field == Field::Back)
+            && is_enemy
+        {
+            true
+        } else if damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy {
+            true
         } else {
             match self.info.magic_type {
                 None => false,
@@ -380,37 +431,34 @@ impl Unit {
         };
     }
     pub fn attack(&mut self, target: &mut Unit, target_pos: UnitPos, my_pos: UnitPos) -> bool {
-        let effected = self.get_effected_stats();
+        let effected = self.modified;
         let is_enemy = self.army != target.army;
         let is_in_back = my_pos.1 == 0;
+        let my_field = field_type(my_pos.0.into(), *MAX_TROOPS.lock().unwrap());
+        let enemy_field = field_type(target_pos.0.into(), *MAX_TROOPS.lock().unwrap());
         let mut damage = effected.damage;
-
-        return if damage.hand > 0 || damage.ranged > 0 {
-            if is_enemy {
-                if is_in_back && damage.ranged > 0 {
-                    damage.hand = 0;
-                    damage.magic = 0;
-                    target.being_attacked(&damage, self, target_pos, my_pos);
-                    true
-                } else if damage.ranged > 0
-                    && target_pos.1 == my_pos.1
-                    && abs(target_pos.0 as i64 - my_pos.0 as i64) < 2
-                {
-                    damage.hand = 0;
-                    damage.magic = 0;
-                    target.being_attacked(&damage, self, target_pos, my_pos);
-                    true
-                } else if !is_in_back && damage.hand > 0 && target_pos.1 == 1 {
-                    damage.ranged = 0;
-                    damage.magic = 0;
-                    target.being_attacked(&damage, self, target_pos, my_pos);
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
+        let enemy_in_reserve = enemy_field == Field::Reserve;
+        let me_in_reserve = my_field == Field::Reserve;
+        let both_in_reserve = me_in_reserve && enemy_in_reserve;
+        let both_not_in_reserve = !me_in_reserve && !enemy_in_reserve;
+        let a = (is_enemy && (!me_in_reserve || self.bonus.id() == "Ghost") && !enemy_in_reserve)
+            || (!is_enemy && (both_not_in_reserve || both_in_reserve));
+        return if !a {
+            false
+        } else if damage.ranged > 0
+            && (target_pos.1 == my_pos.1 && abs(target_pos.0 as i64 - my_pos.0 as i64) < 2
+            || my_field == Field::Back)
+            && is_enemy
+        {
+            damage.hand = 0;
+            damage.magic = 0;
+            target.being_attacked(&damage, self, target_pos, my_pos);
+            true
+        } else if damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy {
+            damage.ranged = 0;
+            damage.magic = 0;
+            target.being_attacked(&damage, self, target_pos, my_pos);
+            true
         } else {
             match self.info.magic_type {
                 None => false,
@@ -482,22 +530,23 @@ impl Unit {
     }
 
     pub fn heal(&mut self, amount: u64) -> bool {
-        let effected = self.get_effected_stats();
+        let effected = self.modified;
         let amount = amount as i64;
         if effected.max_hp < effected.hp + amount {
             self.stats.hp = effected.max_hp;
+            self.recalc();
             return true;
         }
         self.stats.hp += amount;
+        self.recalc();
         return false;
     }
 
     pub fn get_effected_stats(&self) -> UnitStats {
-        let mut previous: UnitStats = self.stats;
-        previous
+        self.modified
     }
     pub fn is_dead(&self) -> bool {
-        self.stats.hp < 1
+        self.modified.hp < 1
     }
     pub fn has_effect_kind(&self, kind: EffectKind) -> bool {
         for effect in &self.effects {
@@ -508,16 +557,57 @@ impl Unit {
         return false;
     }
     pub fn kill(&mut self) {
-        self.stats.hp = 0;
+        self.stats.hp = -self.modified.hp;
+        self.recalc();
     }
     pub fn add_effect(&mut self, effect: Box<dyn Effect>) -> bool {
         self.effects.push(effect);
         self.effects.last_mut().unwrap().clone().update_stats(self);
+        self.recalc();
         true
     }
-    pub fn add_item(&mut self, item: Item) -> bool {
-        self.inventory.items.push(Some(item));
-        true
+    pub fn add_item(&mut self, item: Item, index: usize) -> bool {
+        if let Some(Some(_)) = self.inventory.items.get(index) {
+            return false;
+        }
+        if item.can_equip(&*self) {
+            self.modify += item.get_info().modify;
+            self.inventory.items[index] = Some(item);
+            self.recalc();
+            true
+        } else {
+            false
+        }
+    }
+    pub fn remove_item(&mut self, index: usize) {
+        let item = self
+            .inventory
+            .items
+            .remove(index)
+            .expect("No such index for items");
+        self.inventory.items.insert(index, None);
+        let item_info = item.get_info();
+        self.modify -= item_info.modify;
+        self.recalc();
+    }
+    pub fn get_bonus(&self) -> Box<dyn Bonus> {
+        let mut bonus = self.bonus.clone();
+        if let Some(item) = self
+            .inventory
+            .items
+            .iter()
+            .filter(|item|
+                if let Some(item) = item {
+                    item.get_info().bonus.is_some()
+                } else { false }
+            )
+            .last()
+        {
+            if let Some(item_bonus) = (&item.unwrap()).get_info().bonus {
+                bonus = item_bonus.clone();
+            };
+        };
+        bonus.clone()
     }
     pub fn being_attacked(
         &mut self,
@@ -527,26 +617,26 @@ impl Unit {
         target_pos: UnitPos,
     ) -> u64 {
         let corrected_damage = self.correct_damage(damage, sender.info.magic_type);
-        let unit_bonus = sender.bonus.clone();
+        let unit_bonus = sender.get_bonus();
         let corrected_damage = unit_bonus.on_attacking(corrected_damage, self, sender);
         let corrected_damage =
-            self.bonus
-                .clone()
+            self.get_bonus()
                 .on_attacked(corrected_damage, self, sender, my_pos, target_pos);
         let mut corrected_damage_units =
             corrected_damage.magic + corrected_damage.ranged + corrected_damage.hand;
         if corrected_damage_units == 0 {
             corrected_damage_units = 1;
         }
-        if corrected_damage_units as i64 > self.stats.hp {
-            self.stats.hp = 0;
+        if corrected_damage_units as i64 > self.modified.hp {
+            self.stats.hp = -self.modified.hp;
         } else {
             self.stats.hp -= corrected_damage_units as i64;
         }
+        self.recalc();
         corrected_damage_units
     }
     pub fn correct_damage(&self, damage: &Power, magic_type: Option<MagicType>) -> Power {
-        let defence: Defence = self.get_effected_stats().defence;
+        let defence: Defence = self.modified.defence;
         let percent_100 = Percent::new(100);
         let mut magic: u64 = 0;
 
@@ -578,18 +668,20 @@ impl Unit {
             if effect.is_dead() {
                 self.effects.remove(effect_num - removed).kill(self);
                 removed += 1;
+                self.recalc();
             }
         }
-        self.bonus.clone().on_tick(self);
+        self.get_bonus().on_tick(self);
         true
     }
 }
 
 impl Display for Unit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let bonus_info = bonus_info(self.bonus.clone());
+        let bonus_info = bonus_info(self.get_bonus());
         let locale = LOCALE.lock().unwrap();
-        let damage = self.stats.damage;
+        let stats = self.modified;
+        let damage = stats.damage;
         let attack = format!(
             "{}: {}\n{}: {}\n{}: {}",
             locale.get("unitstats_attack_melee"),
@@ -602,16 +694,16 @@ impl Display for Unit {
         let defence = format!(
             "{}: {}\n{}: {}\n{} {}: {}, {}: {}, {}: {}",
             locale.get("unitstats_defence_melee"),
-            self.stats.defence.hand_units,
+            stats.defence.hand_units,
             locale.get("unitstats_defence_ranged"),
-            self.stats.defence.ranged_units,
+            stats.defence.ranged_units,
             locale.get("unitstats_defence_magic"),
             locale.get("unitstats_defence_magic_death"),
-            self.stats.defence.death_magic,
+            stats.defence.death_magic,
             locale.get("unitstats_defence_magic_life"),
-            self.stats.defence.life_magic,
+            stats.defence.life_magic,
             locale.get("unitstats_defence_magic_elemental"),
-            self.stats.defence.elemental_magic
+            stats.defence.elemental_magic
         );
         let mut magic_dir = None;
         let magic_type = match &self.info.magic_type {
@@ -667,7 +759,7 @@ impl Display for Unit {
             locale.get("unitstats_xp"),
             self.info.descript,
             locale.get("unitstats_hp"),
-            self.stats.hp,
+            stats.hp,
             locale.get("unitstats_magic"),
             magic_type,
             locale.get("unitstats_magic_dir"),
@@ -675,13 +767,13 @@ impl Display for Unit {
             attack,
             defence,
             locale.get("unitstats_vamp"),
-            self.stats.vamp,
+            stats.vamp,
             locale.get("unitstats_regen"),
-            self.stats.regen,
+            stats.regen,
             locale.get("unitstats_moves"),
-            self.stats.moves,
+            stats.moves,
             locale.get("unitstats_speed"),
-            self.stats.speed,
+            stats.speed,
             locale.get("unitstats_unittype"),
             unit_type,
             locale.get("unitstats_cost"),

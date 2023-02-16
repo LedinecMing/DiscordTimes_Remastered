@@ -1,12 +1,12 @@
-use {
-    crate::lib::{
-        battle::army::{Army, TroopType},
-        bonuses::bonuses::NoBonus,
-        mutrc::SendMut,
-        units::unit::*,
-    },
-    std::fmt::{Display, Formatter},
+use crate::lib::units::unitstats::ModifyUnitStats;
+
+use crate::lib::{
+    battle::army::{Army, TroopType},
+    bonuses::bonuses::NoBonus,
+    mutrc::SendMut,
+    units::unit::*,
 };
+use std::fmt::{Display, Formatter};
 
 #[derive(Clone, Debug)]
 pub struct Troop {
@@ -38,10 +38,12 @@ impl Troop {
             custom_name: None,
             unit: Unit {
                 stats: UnitStats::empty(),
+                modified: UnitStats::empty(),
                 info: UnitInfo::empty(),
                 lvl: UnitLvl::empty(),
                 inventory: UnitInventory::empty(),
                 army: 0,
+                modify: ModifyUnitStats::default(),
                 bonus: Box::new(NoBonus {}),
                 effects: vec![],
             },
@@ -57,7 +59,7 @@ impl Display for Troop {
         let unitdata = &self.unit;
         let unit_name = &unitdata.info.name;
         let name = format!("{}-{}", custom_name, unit_name);
-        let stats = &self.unit.stats;
+        let stats = &self.unit.modified;
         write!(f, "| {name} |\n| {hp}/{maxhp}ХП ({is_dead}) |\n| {hand_attack} ближнего урона; {ranged_attack} дальнего урона; {magic_attack} магии |\n| {hand_def} ближней защиты.-{ranged_def} дальней защиты. |\n| Защита от магии: {magic_def_percent}|\n|Регенерация {regen_percent}% |\n| Вампиризм {vamp_percent}% |\n| {speed} инициативы |\n| {moves}/{max_moves} ходов |", name=name,
                hp = stats.hp,
                maxhp = stats.max_hp,

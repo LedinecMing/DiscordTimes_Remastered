@@ -12,15 +12,19 @@ use {
         app::{Texture},
         draw::*
     },
+    derive_builder::Builder,
     super::{
         form::Form,
         rect::*,
         defs::*
 }   };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct Data<State: UIStateCl, K: Clone + Send, V: Clone + Send> {
+    #[builder(default)]
     pub data: HashMap<K, V>,
+    #[builder(setter(skip), default)]
     pub boo: PhantomData<State>
 }
 impl<State: UIStateCl, K: Clone + Send, V: Clone + Send> Form<State> for Data<State, K, V> {
@@ -37,12 +41,16 @@ impl<State: UIStateCl, K: Clone + Send, V: Clone + Send> Positionable for Data<S
     fn get_pos(&self) -> Position { Position::default() }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 struct Image<'a, State: UIStateCl> {
     pub image: &'a Texture,
+    #[builder(default)]
     pub rect: Rect,
+    #[builder(default)]
     pub crop: Rect,
     pub color: Color,
+    #[builder(setter(skip), default)]
     pub boo: PhantomData<State>
 }
 impl<State: UIStateCl> Form<State> for Image<'_, State> {
@@ -66,10 +74,13 @@ impl<State: UIStateCl> Positionable for Image<'_, State> {
     fn get_pos(&self) -> Position { self.rect.pos }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct Drawing<State: UIStateCl> {
+    #[builder(default)]
     pub pos: Position,
-    pub to_draw: fn(&mut Self, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)
+    #[builder(setter(strip_option))]
+    pub to_draw: fn(&mut Drawing<State>, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)
 }
 impl<State: UIStateCl> Debug for Drawing<State> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

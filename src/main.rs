@@ -1,45 +1,63 @@
 mod lib;
 
-use crate::lib::battle::army::{Army, ArmyStats, TroopType, MAX_TROOPS};
-use crate::lib::battle::troop::Troop;
-use crate::lib::mutrc::SendMut;
-use crate::lib::parse::{parse_locale, parse_settings, parse_units, Locale};
-use crate::lib::units::unit::{Unit, UnitPos};
-use notan_ui::containers::StraightDynContainer;
-use rand::prelude::ThreadRng;
-use rand::thread_rng;
-use std::cmp::min;
-use std::fmt::{Debug, Formatter};
-use {
-    lib::{
-        battle::battlefield::*,
-        map::{map::*, tile::Tile},
-        time::time::Time,
+use crate::lib::{
+    battle::{
+        army::{find_path, Army, ArmyStats, TroopType, MAX_TROOPS},
+        troop::Troop,
     },
-    notan::{
-        app::AppState,
-        draw::*,
-        prelude::*,
-        text::{TextConfig, TextExtension},
+    mutrc::SendMut,
+    parse::{parse_items, parse_locale, parse_objects, parse_settings, parse_units, Locale},
+    units::{
+        unit::{Unit, UnitPos},
+        unitstats::ModifyUnitStats,
     },
-    notan_ui::{
-        containers::{Container, DynContainer, SingleContainer, SliderContainer},
-        defs::*,
-        form::Form,
-        forms::{Data, Drawing},
-        rect::*,
-        text::*,
-        wrappers::{Button, Checkbox},
+};
+use lib::{
+    battle::battlefield::*,
+    items::item::*,
+    map::{deco::MapDeco, map::*, object::ObjectInfo, tile::Tile},
+    new_forms::*,
+    time::time::Time,
+};
+use math_thingies::{IterableConversions, VecMove};
+use notan::{
+    app::AppState,
+    draw::*,
+    prelude::*,
+    text::{TextConfig, TextExtension},
+};
+use notan_ui::{
+    containers::{DynContainerBuilder, SingleContainerBuilder, StraightDynContainer, *},
+    defs::*,
+    form::Form,
+    forms::*,
+    rect::*,
+    text::*,
+    wrappers::*,
+};
+use num::clamp;
+use once_cell::sync::Lazy;
+use parking_lot::MappedRwLockReadGuard;
+use rand::{
+    prelude::{SliceRandom, ThreadRng},
+    thread_rng, Rng,
+};
+use std::{
+    array::from_fn,
+    collections::HashMap,
+    fmt::{Debug, Display, Formatter},
+    fs::{read, read_dir},
+    mem::size_of,
+};
+use tracing_mutex::stdsync::TracingMutex as Mutex;
+use worldgen::{
+    constraint,
+    noise::perlin::*,
+    noisemap::*,
+    world::{
+        tile::{Tile as GenTile, *},
+        Size as GenSize, *,
     },
-    once_cell::sync::Lazy,
-    rand::Rng,
-    std::{
-        collections::HashMap,
-        fmt::Display,
-        fs::{read, read_dir},
-        mem::size_of,
-    },
-    tracing_mutex::stdsync::TracingMutex as Mutex
 };
 
 #[derive(Clone, Debug)]
@@ -48,19 +66,20 @@ pub enum Value {
     Str(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, AppState)]
 pub struct State {
     pub fonts: Vec<Font>,
     pub frame: usize,
     pub draw: Draw,
+    pub shaders: Vec<(Pipeline, Buffer)>,
     pub gamemap: GameMap,
     pub units: HashMap<usize, Unit>,
+    pub objects: HashMap<usize, ObjectInfo>,
     pub assets: HashMap<&'static str, HashMap<String, Asset<Texture>>>,
     pub menu_data: HashMap<&'static str, Value>,
     pub menu_id: usize,
     pub battle: BattleInfo,
 }
-impl AppState for State {}
 impl Access<Vec<Font>> for State {
     fn get_mut(&mut self) -> &mut Vec<Font> {
         &mut self.fonts
@@ -77,19 +96,30 @@ impl Access<Draw> for State {
         &self.draw
     }
 }
+impl State {
+    pub fn get_texture(&self, dir: &str, img: &str) -> MappedRwLockReadGuard<'_, Texture> {
+        self.assets
+            .get(dir)
+            .expect(&*format!("No such dir - {dir}"))
+            .get(img)
+            .expect(&*format!("No such img - {img}"))
+            .lock()
+            .unwrap()
+    }
+}
 
 fn asset_path(path: &str) -> String {
     let base = "./assets";
     format!("{}/{}", base, path)
 }
 
-fn get_menu_value_str(state: &mut State, id: &'static str) -> Option<String> {
+fn get_menu_value_str(state: &State, id: &'static str) -> Option<String> {
     match state.menu_data.get(id) {
         Some(Value::Str(string)) => Some(string.clone()),
         _ => None,
     }
 }
-fn get_menu_value_num(state: &mut State, id: &'static str) -> Option<i64> {
+fn get_menu_value_num(state: &State, id: &'static str) -> Option<i64> {
     match state.menu_data.get(id) {
         Some(Value::Num(num)) => Some(*num),
         _ => None,
@@ -178,9 +208,10 @@ enum Menu {
     UnitView = 5,
     JustRectangle = 6,
     Battle = 7,
+    Items = 8,
 }
 
-fn gen_forms(gfx: &mut Graphics) {
+fn gen_forms(gfx: &mut Graphics) -> Result<(), String> {
     let draw_back: for<'a, 'b, 'c, 'd, 'e, 'f> fn(
         &'a mut SingleContainer<State, Text<State>>,
         &'b mut App,
@@ -202,109 +233,457 @@ fn gen_forms(gfx: &mut Graphics) {
     let locale = LOCALE.lock().unwrap();
     let max_troops = *MAX_TROOPS.lock().unwrap();
     let half_troops = max_troops / 2;
+    let nav_button_rect = Rect {
+        pos: Position(100., 0.),
+        size: Size(70., 100.),
+    };
+    let nav_button_text = |text: String| {
+        Some(Text {
+            text,
+            font: FontId(0),
+            align_h: AlignHorizontal::Left,
+            align_v: AlignVertical::Bottom,
+            pos: Position(0., 0.),
+            size: 10.,
+            rect_size: None,
+            max_width: None,
+            color: Color::BLACK,
+            boo: std::marker::PhantomData,
+        })
+    };
     hashmap.insert(
         Menu::Main as usize,
-        vec![SingleContainer {
-            inside: Some(DynContainer {
-                inside: vec![
-                    Box::new(Text {
-                        text: locale.get("menu_game_name"),
-                        align_h: AlignHorizontal::Center,
-                        align_v: AlignVertical::Top,
-                        size: 70.0,
-                        max_width: None,
-                        color: Color::BLACK,
-                        ..Text::default()
-                    }),
-                    menu_button(
-                        locale.get("menu_start_title"),
-                        draw_back,
-                        |container, app, assets, plugins, state: &mut State| {
-                            state.menu_id = Menu::Start as usize;
-                        },
-                    ),
-                    menu_button(
-                        locale.get("menu_battle_title"),
-                        draw_back,
-                        |container, app, assets, plugins, state: &mut State| {
-                            state.menu_id = Menu::Battle as usize;
-                        },
-                    ),
-                    menu_button(
-                        locale.get("menu_load_title"),
-                        draw_back,
-                        |container, app, assets, plugins, state: &mut State| {
-                            state.menu_id = Menu::Load as usize;
-                        },
-                    ),
-                    menu_button(
-                        locale.get("menu_settings_title"),
-                        draw_back,
-                        |container, app, assets, plugins, state: &mut State| {
-                            state.menu_id = Menu::Settings as usize;
-                        },
-                    ),
-                    menu_button(
-                        locale.get("menu_authors_title"),
-                        draw_back,
-                        |container, app, assets, plugins, state: &mut State| {
-                            state.menu_id = Menu::Authors as usize;
-                        },
-                    ),
-                    menu_button(
-                        locale.get("menu_unitview_title"),
-                        draw_back,
-                        |container, app, assets, plugins, state: &mut State| {
-                            state.menu_id = Menu::UnitView as usize;
-                        },
-                    ),
-                    menu_button(
-                        locale.get("menu_justrectangle_title"),
-                        draw_back,
-                        |container, app, assets, plugins, state: &mut State| {
-                            state.menu_id = Menu::JustRectangle as usize;
-                        },
-                    ),
-                    menu_button(
-                        locale.get("menu_exit_title"),
-                        draw_back,
-                        |container, app, assets, plugins, state: &mut State| app.exit(),
-                    ),
-                ],
-                pos: Position(MONITOR_SIZE.lock().unwrap().0 / 2., 0.),
-                align_direction: Direction::Bottom,
-                interval: Position(0., 20.),
-            }),
-            on_draw: Some(|container, app, assets, gfx, plugins, state: &mut State| {
+        vec![SingleContainerBuilder::default()
+            .inside(
+                DynContainerBuilder::default()
+                    .inside(vec![
+                        Box::new(
+                            TextBuilder::default()
+                                .text(locale.get("menu_game_name"))
+                                .align_h(AlignHorizontal::Center)
+                                .size(70.0)
+                                .build()?,
+                        ) as Box<dyn ObjPosForm<State>>,
+                        menu_button(
+                            locale.get("menu_start_title"),
+                            draw_back,
+                            |container, app, assets, plugins, state: &mut State| {
+                                state.menu_id = Menu::Start as usize;
+                            },
+                        ),
+                        menu_button(
+                            locale.get("menu_battle_title"),
+                            draw_back,
+                            |container, app, assets, plugins, state: &mut State| {
+                                state.menu_id = Menu::Battle as usize;
+                            },
+                        ),
+                        menu_button(
+                            locale.get("menu_load_title"),
+                            draw_back,
+                            |container, app, assets, plugins, state: &mut State| {
+                                state.menu_id = Menu::Load as usize;
+                            },
+                        ),
+                        menu_button(
+                            locale.get("menu_settings_title"),
+                            draw_back,
+                            |container, app, assets, plugins, state: &mut State| {
+                                state.menu_id = Menu::Settings as usize;
+                            },
+                        ),
+                        menu_button(
+                            locale.get("menu_authors_title"),
+                            draw_back,
+                            |container, app, assets, plugins, state: &mut State| {
+                                state.menu_id = Menu::Authors as usize;
+                            },
+                        ),
+                        menu_button(
+                            locale.get("menu_unitview_title"),
+                            draw_back,
+                            |container, app, assets, plugins, state: &mut State| {
+                                state.menu_id = Menu::UnitView as usize;
+                            },
+                        ),
+                        menu_button(
+                            locale.get("menu_items_title"),
+                            draw_back,
+                            |container, app, assets, plugins, state: &mut State| {
+                                state.menu_id = Menu::Items as usize;
+                            },
+                        ),
+                        menu_button(
+                            locale.get("menu_exit_title"),
+                            draw_back,
+                            |container, app, assets, plugins, state: &mut State| app.exit(),
+                        ),
+                    ])
+                    .pos(Position(MONITOR_SIZE.lock().unwrap().0 / 2., 0.))
+                    .align_direction(Direction::Bottom)
+                    .interval(Position(0., 20.))
+                    .build()?,
+            )
+            .on_draw(|container, app, assets, gfx, plugins, state: &mut State| {
                 get_mut::<State, Draw>(state)
                     .rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
                     .color(Color::ORANGE);
-            }),
-            ..SingleContainer::default()
-        }],
+            })
+            .build()?],
     );
-
+    fn items_unit_card_draw(
+        drawing: &mut Drawing<State>,
+        app: &mut App,
+        assets: &mut Assets,
+        gfx: &mut Graphics,
+        plugins: &mut Plugins,
+        state: &mut State,
+        army: usize,
+        index: usize,
+    ) {
+        let draw = get_mut::<State, Draw>(state);
+        gfx.render(draw);
+        let pos = drawing.pos;
+        let mut draw = gfx.create_draw();
+        let index = (pos.0 / 102.) as usize + index;
+        let troop = state.gamemap.armys[army].troops[index].get();
+        if let Some(troop) = troop.as_ref() {
+            let unit = &troop.unit;
+            let texture = &state.get_texture(
+                "assets/Icons",
+                &*format!("img_{}.png", unit.info.icon_index),
+            );
+            let stats = unit.modified;
+            draw.image(&texture).position(pos.0, pos.1);
+            draw.rect((pos.0, pos.1 + 92.), (92., 50.))
+                .color(if troop.is_main {
+                    Color::RED
+                } else if troop.is_free {
+                    Color::BLUE
+                } else {
+                    Color::BROWN
+                });
+            draw_unit_info(unit, pos, &*state, &mut draw);
+            draw.text(&state.fonts[0], &*format!("{};{};{}", army, index, pos.0))
+                .color(Color::BLACK)
+                .position(pos.0, pos.1);
+        }
+        state.draw = draw;
+    }
     hashmap.insert(
-        Menu::Settings as usize,
-        vec![SingleContainer {
-            inside: Some(DynContainer {
-                inside: vec![Box::new(DynContainer {
-                    inside: vec![
-                        Box::new(Checkbox {
+        Menu::Items as usize,
+        vec![SingleContainerBuilder::default()
+             .inside(DynContainerBuilder::default()
+                .inside(vec![Box::new(StraightDynContainerBuilder::default()
+                    .inside(vec![
+                        Box::new(SingleContainer {
+                            inside: Some(Container {
+                                inside: vec![
+                                    Container {
+                                        inside: (0..half_troops).map(|_| {
+                                            Button {
+                                                inside: Some(Drawing {
+                                                    pos: Position(0., 0.),
+                                                    to_draw: |drawing, app, assets, gfx, plugins, state| {
+                                                        items_unit_card_draw(drawing, app, assets, gfx, plugins, state, 0, 0);
+                                                    }
+                                                }),
+                                                rect: Rect { pos: Position(0., 0.), size: Size(92., 92.) },
+                                                if_hovered: None,
+                                                if_clicked: Some(|button, app, assets, plugins, state| {
+                                                    let pos = button.rect.pos;
+                                                    let index = (pos.0 / 102.) as usize;
+                                                    let army = 0;
+                                                    set_menu_value_num(state, "items_unit_stat_changed", 1);
+                                                    set_menu_value_num(state, "items_unit_stat_index", index as i64);
+                                                    set_menu_value_num(state, "items_unit_stat_army", army);
+                                                }),
+                                                ..Default::default()
+                                            }
+                                        }).collect::<Vec<_>>(),
+                                        pos: Position(0., 0.),
+                                        align_direction: Direction::Right,
+                                        interval: Position(10., 0.),
+                                        boo: Default::default()
+                                    },
+                                    Container {
+                                        inside: (0..half_troops).map(|_| {
+                                            Button {
+                                                inside: Some(Drawing {
+                                                    pos: Position(0., 0.),
+                                                    to_draw: |drawing, app, assets, gfx, plugins, state| {
+                                                        items_unit_card_draw(drawing, app, assets, gfx, plugins, state, 0, *MAX_TROOPS.lock().unwrap() / 2);
+                                                    }
+                                                }),
+                                                rect: Rect { pos: Position(0., 0.), size: Size(92., 92.) },
+                                                if_hovered: None,
+                                                if_clicked: Some(|button, app, assets, plugins, state| {
+                                                    let pos = button.rect.pos;
+                                                    let index = (pos.0 / 102.) as usize + *MAX_TROOPS.lock().unwrap() / 2;
+                                                    let army = 0;
+                                                    set_menu_value_num(state, "items_unit_stat_changed", 1);
+                                                    set_menu_value_num(state, "items_unit_stat_index", index as i64);
+                                                    set_menu_value_num(state, "items_unit_stat_army", army);
+                                                }),
+                                                ..Default::default()
+                                            }
+                                        }).collect::<Vec<_>>(),
+                                        pos: Position(0., 0.),
+                                        align_direction: Direction::Right,
+                                        interval: Position(10., 0.),
+                                        boo: Default::default()
+                                    },
+                                ],
+                                pos: Position(0., 0.),
+                                align_direction: Direction::Bottom,
+                                interval: Position(0., 50.),
+                                boo: Default::default()
+                            }),
+                            on_draw: None,
+                            after_draw: None,
+                            pos: Position(10., 30.)
+                        }),
+                        Box::new(SingleContainer {
+                            inside: Some(Container {
+                                inside: vec![
+                                    Container {
+                                        inside: (0..half_troops).map(|_| {
+                                            Button {
+                                                inside: Some(Drawing {
+                                                    pos: Position(0., 0.),
+                                                    to_draw: |drawing, app, assets, gfx, plugins, state| {
+                                                        items_unit_card_draw(drawing, app, assets, gfx, plugins, state, 1, *MAX_TROOPS.lock().unwrap() / 2);
+                                                    }
+                                                }),
+                                                rect: Rect { pos: Position(0., 0.), size: Size(92., 92.) },
+                                                if_hovered: None,
+                                                if_clicked: Some(|button, app, assets, plugins, state| {
+                                                    let pos = button.rect.pos;
+                                                    let army = 1;
+                                                    let index = (pos.0 / 102.) as usize + *MAX_TROOPS.lock().unwrap() / 2;
+                                                    set_menu_value_num(state, "items_unit_stat_changed", 1);
+                                                    set_menu_value_num(state, "items_unit_stat_index", index as i64);
+                                                    set_menu_value_num(state, "items_unit_stat_army", army);
+                                                }),
+                                                ..Default::default()
+                                        }}).collect::<Vec<_>>(),
+                                        pos: Position(0., 0.),
+                                        align_direction: Direction::Right,
+                                        interval: Position(10., 0.),
+                                        boo: Default::default()
+                                    },
+                                    Container  {
+                                        inside: (0..half_troops).map(|_| {
+                                            Button {
+                                                inside: Some(Drawing {
+                                                    pos: Position(0., 0.),
+                                                    to_draw: |drawing, app, assets, gfx, plugins, state| {
+                                                        items_unit_card_draw(drawing, app, assets, gfx, plugins, state, 1, 0);
+                                                    }
+                                                }),
+                                                rect: Rect { pos: Position(0., 0.), size: Size(92., 92.) },
+                                                if_hovered: None,
+                                                if_clicked: Some(|button, app, assets, plugins, state| {
+                                                    let pos = button.rect.pos;
+                                                    let index = (pos.0 / 102.) as usize;
+                                                    let army = 1;
+                                                    set_menu_value_num(state, "items_unit_stat_changed", 1);
+                                                    set_menu_value_num(state, "items_unit_stat_index", index as i64);
+                                                    set_menu_value_num(state, "items_unit_stat_army", army);
+                                                }),
+                                                ..Default::default()
+                                            }
+                                        }).collect::<Vec<_>>(),
+                                        pos: Position(0., 0.),
+                                        align_direction: Direction::Right,
+                                        interval: Position(10., 0.),
+                                        boo: Default::default()
+                                    },
+                                ],
+                                pos: Position(0., 0.),
+                                align_direction: Direction::Bottom,
+                                interval: Position(0., 50.),
+                                boo: Default::default()
+                            }),
+                            on_draw: None,
+                            after_draw: None,
+                            pos: Position(10., 500.)
+                        }),
+                        Box::new(DrawingBuilder::default()
+                            .to_draw(|drawing: &mut Drawing<State>, app, assets, gfx, plugins, state: &mut State| {
+                                if let Some(item_index) = get_menu_value_num(state, "items_item_index") {
+                                    let draw = get_mut::<State, Draw>(state);
+                                    gfx.render(draw);
+                                    let pos = drawing.pos;
+                                    let mut draw = gfx.create_draw();
+                                    draw.image(&state.get_texture("assets/Items", &*ITEMS.lock().unwrap().get(&(item_index as usize)).as_ref().expect(&*item_index.to_string()).icon))
+                                        .position(pos.0, pos.1);
+                                    state.draw = draw;
+                                }
+                            })
+                            .pos(Position(1150., 40.))
+                            .build()?
+                        ),
+                        Box::new(ButtonBuilder::default()
+                            .inside(TextBuilder::default()
+                                .text("Пред.")
+                                .pos(Position(0., 50.))
+                                .align_v(AlignVertical::Bottom)
+                                .size(20.)
+                                .build()?
+                            )
+                            .rect(Rect { pos: Position(1100., 40.), size: Size(100., 50.) })
+                            .if_clicked(|button: &mut Button<State, Text<State>>, app, assets, plugins, state| {
+                                set_menu_value_num(state, "items_item_index",
+                                                   clamp(get_menu_value_num(state, "items_item_index").unwrap_or(0) - 1, 1, 166));
+                            })
+                            .build()?
+                        ),
+                        Box::new(ButtonBuilder::default()
+                            .inside(TextBuilder::default()
+                                .text("След.")
+                                .pos(Position(0., 50.))
+                                .align_v(AlignVertical::Bottom)
+                                .size(20.)
+                                .build()?
+                            )
+                            .rect(Rect { pos: Position(1300., 40.), size: Size(100., 50.) })
+                            .if_clicked(|button: &mut Button<State, Text<State>>, app, assets, plugins, state| {
+                                set_menu_value_num(state, "items_item_index",
+                                                   clamp(get_menu_value_num(state, "items_item_index").unwrap_or(0) + 1, 1, 166));
+                            })
+                            .build()?
+                        ),
+                        Box::new(
+                            SingleContainerBuilder::default()
+                                .inside(DrawingBuilder::<State>::default()
+                                        .to_draw(|drawing, app, assets, gfx, plugins, state| {
+                                            let draw = get_mut::<State, Draw>(state);
+                                            gfx.render(draw);
+                                            let pos = drawing.pos;
+                                            let mut draw = gfx.create_draw();
+                                            draw.image(&state.get_texture("assets/Icons", &*format!("img_{}.png", get_menu_value_num(state, "items_unit_stat_icon").unwrap_or(1))))
+                                                .position(pos.0, pos.1);
+                                            state.draw = draw;
+                                        })
+                                        .pos(Position(900., 100.))
+                                        .build()?
+                                )
+                                .build()?
+                        ),
+                        Box::new(SingleContainer {
                             inside: Some(Text {
-                                text: "+".into(),
+                                text: "Статистика".to_string(),
                                 align_h: AlignHorizontal::Left,
                                 align_v: AlignVertical::Top,
-                                size: 50.0,
-                                color: Color::ORANGE,
-                                ..Default::default()
+                                size: 20.0,
+                                ..Text::default()
                             }),
-                            rect: Rect {
+                            on_draw: None,
+                            after_draw: Some(|container, app, assets, plugins, state: &mut State| {
+                                if app.keyboard.is_down(KeyCode::Escape) { state.menu_id = Menu::Main as usize; }
+                                if get_menu_value_num(state, "items_unit_stat_changed").unwrap_or(0) == 1 {
+                                    let index = get_menu_value_num(state, "items_unit_stat_index").unwrap_or(1) as usize;
+                                    let army = get_menu_value_num(state, "items_unit_stat_army").unwrap_or(0) as usize;
+                                    match &mut container.inside {
+                                        Some::<Text<State>>(text) => {
+                                            if let Some(troop) = &(state.gamemap.armys[army as usize]).get_troop(index) {
+                                                if let Some(troop) = &*troop.get() {
+                                                    container.inside.as_mut().unwrap().text = troop.unit.to_string();
+                                                    set_menu_value_num(state, "items_unit_stat_icon", troop.unit.info.icon_index as i64);
+                                                }
+                                            };
+                                            set_menu_value_num(state, "items_unit_stat_changed", 0);
+                                        }
+                                        None => {}
+                                }   }
+                            }),
+                            pos: Position(900., 200.)
+                        }),
+                        Box::new(ButtonBuilder::<State, Drawing<State>>::default()
+                            .inside(DrawingBuilder::default()
+                                .to_draw(|drawing, app, assets, gfx, plugins, state: &mut State| {
+                                    let draw = get_mut::<State, Draw>(state);
+                                    gfx.render(draw);
+                                    let mut draw = gfx.create_draw();
+                                    let pos = drawing.pos;
+                                    if let (Some(army), Some(index)) = (get_menu_value_num(state, "items_unit_stat_army"), get_menu_value_num(state, "items_unit_stat_index")) {
+                                        if let Some(troop) = state.gamemap.armys[army as usize].get_troop(index as usize) {
+                                            if let Some(troop) = &*troop.get() {
+                                                for i in 0..4 {
+                                                    draw.rect((pos.0 + (53. + 5.) * i as f32, pos.1), (53., 53.))
+                                                            .stroke_color(Color::BLACK)
+                                                            .stroke(5.);
+                                                    if let Some(item) = &troop.unit.inventory.items[i] {
+                                                        let texture = state.get_texture("assets/Items", &*item.get_info().icon);
+                                                        draw.image(&texture)
+                                                            .position(pos.0 + (53. + 5.) * i as f32, pos.1);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    state.draw = draw;
+                                })
+                                .build()?
+                            )
+                            .rect(Rect { pos:Position(1000., 147.), size: Size(212., 53.)} )
+                            .if_clicked(|button, app, assets, plugins, state: &mut State| {
+                                let slot = ((app.mouse.position().0 - 1. - button.rect.pos.0)/53.) as usize;
+                                if let (Some(army), Some(index)) = (get_menu_value_num(state, "items_unit_stat_army"), get_menu_value_num(state, "items_unit_stat_index")) {
+                                    if let Some(troop) = state.gamemap.armys[army as usize].get_troop(index as usize) {
+                                        if let Some(troop) = &mut *troop.get() {
+                                            if troop.unit.inventory.items[slot].is_some() {
+                                                troop.unit.remove_item(slot);
+                                                set_menu_value_num(state, "items_unit_stat_changed", 1);
+                                                return;
+                                            }
+                                            if let Some(item_index) = get_menu_value_num(state, "items_item_index") {
+                                                troop.unit.add_item(Item { index: item_index as usize }.into(), slot);
+                                                set_menu_value_num(state, "items_unit_stat_changed", 1);
+                                            }
+                                        }
+                                    }
+                                }
+                            })
+                            .build()?
+                        )
+                    ])
+                    .build()?,
+                )])
+                .build()?
+             )
+             .on_draw(|container, app, assets, gfx, plugins, state: &mut State| {
+                get_mut::<State, Draw>(state)
+                    .rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
+                    .color(Color::ORANGE);
+             })
+             .after_draw(|container, app, assets, plugins, state: &mut State| {
+                 if app.keyboard.is_down(KeyCode::Escape) {
+                     state.menu_id = Menu::Main as usize;
+                 }
+             })
+             .build()?
+        ]
+    );
+    hashmap.insert(
+        Menu::Settings as usize,
+        vec![SingleContainerBuilder::default()
+             .inside(DynContainerBuilder::default()
+                .inside(vec![Box::new(StraightDynContainerBuilder::default()
+                    .inside(vec![
+                        Box::new(CheckboxBuilder::default()
+                            .inside(TextBuilder::default()
+                                .text("+")
+                                .align_h(AlignHorizontal::Left)
+                                .size(50.0)
+                                .color(Color::ORANGE)
+                                .build()?)
+                            .rect(Rect {
                                 pos: Position(0., 0.),
                                 size: Size(50., 50.),
-                            },
-                            checked: false,
-                            on_draw: Some(
+                            })
+                            .on_draw(
                                 |container, app, assets, gfx, plugins, state: &mut State| {
                                     get_mut::<State, Draw>(state)
                                         .rect(
@@ -323,143 +702,136 @@ fn gen_forms(gfx: &mut Graphics) {
                                         container.checked as i64,
                                     );
                                 },
-                            ),
-                            pos: Position(20., 0.),
-                            ..Default::default()
-                        }),
-                        Box::new(Text {
-                            text: locale.get("settings_rect_rotate_type"),
-                            font: FontId(0),
-                            align_h: AlignHorizontal::Left,
-                            align_v: AlignVertical::Top,
-                            pos: Position(20., 0.),
-                            size: 20.0,
-                            rect_size: None,
-                            max_width: None,
-                            color: Color::BLACK,
-                            boo: Default::default(),
-                        }),
-                    ],
-                    pos: Position(0., 0.),
-                    align_direction: Direction::Right,
-                    interval: Position(50., 0.),
-                })],
-                pos: Position(0., 0.),
-                align_direction: Direction::Bottom,
-                interval: Position(0., 0.),
-            }),
-            on_draw: Some(|container, app, assets, gfx, plugins, state: &mut State| {
+                            )
+                            .pos(Position(20., 0.))
+                            .build()?
+                        ),
+                        Box::new(TextBuilder::default()
+                            .text(locale.get("settings_rect_rotate_type"))
+                            .pos(Position(20., 0.))
+                            .size(20.0)
+                            .build()?
+                        ),
+                        Box::new(ButtonBuilder::default()
+                            .inside(TextBuilder::default()
+                                .text(locale.get("settings_regenerate_map"))
+                                .size(20.)
+                                .build()?)
+                            .if_clicked(|button: &mut Button<State, Text<State>>, app, assets, plugins, state: &mut State| {
+                                let tilemap = gen_tilemap();
+                                let decomap = gen_decomap(tilemap.1, *state.objects.iter().find(|obj| obj.1.path == "Tree0.png").unwrap().0);
+                                state.gamemap.tilemap = tilemap.0;
+                                state.gamemap.decomap = decomap;
+                            })
+                            .rect(Rect {
+                                pos: Position(0., 40.),
+                                size: Size(200., 50.)
+                            })
+                            .build()?
+                        )
+                    ])
+                    .build()?
+                )])
+                .build()?)
+            .on_draw(|container, app, assets, gfx, plugins, state: &mut State| {
                 get_mut::<State, Draw>(state)
                     .rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
                     .color(Color::ORANGE);
-            }),
-            after_draw: Some(|container, app, assets, plugins, state: &mut State| {
+            })
+            .after_draw(|container, app, assets, plugins, state: &mut State| {
                 if app.keyboard.is_down(KeyCode::Escape) {
                     state.menu_id = Menu::Main as usize;
                 }
-            }),
-            pos: Position(0., 0.),
-        }],
+            })
+            .pos(Position(0., 0.))
+            .build()?
+        ]
     );
+    let rect_draw: for<'a, 'b, 'c, 'd, 'e, 'f> fn(
+        &'a mut SingleContainer<State, Text<State>>,
+        &'b mut App,
+        &'f mut Assets,
+        &'c mut Graphics,
+        &'d mut Plugins,
+        &'e mut State,
+    ) = |drawing, app, assets, gfx, plugins, state: &mut State| {
+        let deg = get_menu_value_num(state, "map_rotation_deg").unwrap_or(0) as f32 / 4.0;
+        let mut center = drawing.pos + Position(25. * 8., 25. * 8.);
+        for i in 0..MAP_SIZE {
+            for j in 0..MAP_SIZE {
+                let color = Color::RED;
+                let pos = drawing.pos + Position(i as f32 * 8., j as f32 * 8.);
+                if get_menu_value_num(state, "setting_rectangle_rotate_mode").unwrap_or(0) == 1 {
+                    center = pos - Position(4., 4.);
+                }
+                get_mut::<State, Draw>(state)
+                    .rect(pos.into(), (8., 8.))
+                    .rotate_degrees_from(center.into(), deg)
+                    .color(color);
+            }
+        }
+    };
+    let rect_handle: for<'a, 'b, 'd, 'e, 'f> fn(
+        &'a mut SingleContainer<State, Text<State>>,
+        &'b mut App,
+        &'f mut Assets,
+        &'d mut Plugins,
+        &'e mut State,
+    ) = |container, app, assets, plugins, state: &mut State| {
+        if app.keyboard.is_down(KeyCode::W) {
+            container.add_pos(Position(0., -8.));
+        }
+        if app.keyboard.is_down(KeyCode::A) {
+            container.add_pos(Position(-8., 0.));
+        }
+        if app.keyboard.is_down(KeyCode::S) {
+            container.add_pos(Position(0., 8.));
+        }
+        if app.keyboard.is_down(KeyCode::D) {
+            container.add_pos(Position(8., 0.));
+        }
+        if app.keyboard.is_down(KeyCode::Q) {
+            if let Some(num) = get_menu_value_num(state, "map_rotation_deg") {
+                set_menu_value_num(state, "map_rotation_deg", num - 1)
+            } else {
+                set_menu_value_num(state, "map_rotation_deg", 0);
+            }
+        }
+        if app.keyboard.is_down(KeyCode::E) {
+            if let Some(num) = get_menu_value_num(state, "map_rotation_deg") {
+                set_menu_value_num(state, "map_rotation_deg", num + 1)
+            } else {
+                set_menu_value_num(state, "map_rotation_deg", 0);
+            }
+        }
+        if app.keyboard.is_down(KeyCode::Escape) {
+            state.menu_id = Menu::Main as usize;
+        }
+    };
     hashmap.insert(
         Menu::JustRectangle as usize,
-        vec![SingleContainer {
-            inside: Some(DynContainer {
-                inside: vec![Box::new(SingleContainer {
-                    inside: None::<Drawing<State>>,
-                    on_draw: Some(
-                        |drawing: &mut SingleContainer<State, _>,
-                         app,
-                         assets,
-                         gfx,
-                         plugins,
-                         state: &mut State| {
-                            let deg = get_menu_value_num(state, "map_rotation_deg").unwrap_or(0)
-                                as f32
-                                / 4.0;
-                            let mut center = drawing.pos + Position(25. * 8., 25. * 8.);
-                            for i in 0..MAP_SIZE {
-                                for j in 0..MAP_SIZE {
-                                    let color = Color::RED;
-                                    let pos = drawing.pos + Position(i as f32 * 8., j as f32 * 8.);
-                                    if get_menu_value_num(state, "setting_rectangle_rotate_mode")
-                                        .unwrap_or(0)
-                                        == 1
-                                    {
-                                        center = pos - Position(4., 4.);
-                                    }
-                                    get_mut::<State, Draw>(state)
-                                        .rect(pos.into(), (8., 8.))
-                                        .rotate_degrees_from(center.into(), deg)
-                                        .color(color);
-                                }
-                            }
-                        },
-                    ),
-                    after_draw: Some(|container, app, assets, plugins, state: &mut State| {
-                        if app.keyboard.is_down(KeyCode::W) {
-                            container.add_pos(Position(0., -8.));
-                        }
-                        if app.keyboard.is_down(KeyCode::A) {
-                            container.add_pos(Position(-8., 0.));
-                        }
-                        if app.keyboard.is_down(KeyCode::S) {
-                            container.add_pos(Position(0., 8.));
-                        }
-                        if app.keyboard.is_down(KeyCode::D) {
-                            container.add_pos(Position(8., 0.));
-                        }
-                        if app.keyboard.is_down(KeyCode::Q) {
-                            if let Some(num) = get_menu_value_num(state, "map_rotation_deg") {
-                                set_menu_value_num(state, "map_rotation_deg", num - 1)
-                            } else {
-                                set_menu_value_num(state, "map_rotation_deg", 0);
-                            }
-                        }
-                        if app.keyboard.is_down(KeyCode::E) {
-                            if let Some(num) = get_menu_value_num(state, "map_rotation_deg") {
-                                set_menu_value_num(state, "map_rotation_deg", num + 1)
-                            } else {
-                                set_menu_value_num(state, "map_rotation_deg", 0);
-                            }
-                        }
-                        if app.keyboard.is_down(KeyCode::Escape) {
-                            state.menu_id = Menu::Main as usize;
-                        }
-                    }),
-                    pos: Position(0., 0.),
-                })],
-                pos: Position(0., 0.),
-                align_direction: Direction::Bottom,
-                interval: Position(0., 50.),
-            }),
-            on_draw: Some(|container, app, assets, gfx, plugins, state: &mut State| {
+        vec![SingleContainerBuilder::default()
+            .inside(
+                DynContainerBuilder::default()
+                    .inside(vec![Box::new(
+                        SingleContainerBuilder::default()
+                            .on_draw(rect_draw)
+                            .after_draw(rect_handle)
+                            .build()?,
+                    )])
+                    .align_direction(Direction::Bottom)
+                    .interval(Position(0., 50.))
+                    .build()?,
+            )
+            .on_draw(|container, app, assets, gfx, plugins, state: &mut State| {
                 get_mut::<State, Draw>(state)
                     .rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
                     .color(Color::ORANGE);
-            }),
-            after_draw: None,
-            pos: Position(0., 0.),
-        }],
+            })
+            .build()?],
     );
-    let nav_button_rect = Rect {
-        pos: Position(0., 0.),
-        size: Size(70., 100.),
-    };
-    let nav_button_text = |text: String| {
-        Some(Text {
-            text,
-            font: FontId(0),
-            align_h: AlignHorizontal::Left,
-            align_v: AlignVertical::Bottom,
-            pos: Position(0., 100.),
-            size: 10.,
-            rect_size: None,
-            max_width: None,
-            color: Color::BLACK,
-            boo: std::marker::PhantomData,
-        })
-    };
+
+    const SIZE: (f32, f32) = (140., 100.);
     hashmap.insert(
         Menu::Start as usize,
         vec![SingleContainer {
@@ -476,30 +848,121 @@ fn gen_forms(gfx: &mut Graphics) {
                             let mut draw = get_mut::<State, Draw>(state);
                             gfx.render(draw);
                             let mut draw = gfx.create_draw();
+                            let terrain = state.assets.get("assets/Terrain").unwrap();
                             for i in 0..MAP_SIZE {
                                 for j in 0..MAP_SIZE {
-                                    let asset = state
-                                        .assets
-                                        .get("assets/Terrain")
-                                        .unwrap()
-                                        .get(&format!(
-                                            "{}",
-                                            TILES[state.gamemap.tilemap[i][j]].sprite()
-                                        ))
+                                    let asset = terrain
+                                        .get(TILES[state.gamemap.tilemap[i][j]].sprite())
                                         .unwrap();
                                     let texture = asset.lock().unwrap();
-                                    let pos = Position(i as f32 * 53., j as f32 * 50.);
+
+                                    let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
                                     draw.image(&texture)
                                         .position(pos.0, pos.1)
-                                        .translate(53., 50.);
+                                        .size(SIZE.0, SIZE.1);
+                                    if state.gamemap.armys[0].path.contains(&(i, j)) {
+                                        draw.rect((pos).into(), (10., 10.)).color(Color::RED);
+                                    }
                                 }
                             }
+                            for i in 0..MAP_SIZE {
+                                for j in 0..MAP_SIZE {
+                                    let asset = terrain
+                                        .get(TILES[state.gamemap.tilemap[i][j]].sprite())
+                                        .unwrap();
+                                    let texture = asset.lock().unwrap();
+
+                                    const ALPHA: f32 = 0.2;
+                                    const W_SIZE_QUARTER: f32 = SIZE.0 / 4.;
+                                    const H_SIZE_QUARTER: f32 = SIZE.1 / 4.;
+                                    const QUARTER_TILE: f32 = 106. / 4.;
+                                    const THREE_QUARTERS: f32 = QUARTER_TILE * 3.;
+                                    let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
+                                    (0..4).for_each(|i| {
+                                        let (quarter_size, crop_start, cropped_size, quarter_pos) =
+                                            match i {
+                                                0 => (
+                                                    (W_SIZE_QUARTER, SIZE.1),
+                                                    (THREE_QUARTERS, 0.),
+                                                    (QUARTER_TILE, 106.),
+                                                    (pos.0 - W_SIZE_QUARTER, pos.1),
+                                                ),
+                                                1 => (
+                                                    (W_SIZE_QUARTER, SIZE.1),
+                                                    (0., 0.),
+                                                    (QUARTER_TILE, 106.),
+                                                    (pos.0 + W_SIZE_QUARTER, pos.1),
+                                                ),
+                                                2 => (
+                                                    (SIZE.0, H_SIZE_QUARTER),
+                                                    (0., THREE_QUARTERS),
+                                                    (106., QUARTER_TILE),
+                                                    (pos.0, pos.1 - H_SIZE_QUARTER),
+                                                ),
+                                                3 => (
+                                                    (SIZE.0, H_SIZE_QUARTER),
+                                                    (0., 0.),
+                                                    (106., QUARTER_TILE),
+                                                    (pos.0, pos.1 + H_SIZE_QUARTER),
+                                                ),
+                                                _ => ((0., 0.), (0., 0.), (0., 0.), (0., 0.)),
+                                            };
+                                        gfx.set_buffer_data(&state.shaders[0].1, &[i % 2]);
+                                        draw.image_pipeline()
+                                            .pipeline(&state.shaders[0].0)
+                                            .uniform_buffer(&state.shaders[0].1);
+                                        draw.image(&texture)
+                                            .position(quarter_pos.0, quarter_pos.1)
+                                            .crop(crop_start, cropped_size)
+                                            .size(quarter_size.0, quarter_size.1)
+                                            .alpha(ALPHA);
+                                    });
+                                    draw.image_pipeline().remove();
+                                }
+                            }
+                            let objects = state.assets.get("assets/Objects").unwrap();
+                            for i in 0..MAP_SIZE {
+                                for j in 0..MAP_SIZE {
+                                    if let Some(index) = state.gamemap.decomap[i][j] {
+                                        let asset = objects
+                                            .get(&state.objects[&index].path)
+                                            .expect(&*format!("{}", &state.objects[&index].path));
+                                        let texture = asset.lock().unwrap();
+                                        let size = state.objects[&index].size;
+                                        let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
+                                        draw.image(&texture)
+                                            .position(pos.0, pos.1 - (size.1 as f32 - 1.) * SIZE.1)
+                                            .size(SIZE.0 * size.0 as f32, SIZE.1 * size.1 as f32);
+                                    }
+                                }
+                            }
+
                             state.draw = draw;
                         },
                     ),
                     after_draw: Some(|container, app, assets, plugins, state: &mut State| {
                         if app.keyboard.is_down(KeyCode::Escape) {
                             state.menu_id = Menu::Main as usize;
+                        }
+                        let rect = Rect {
+                            pos: container.pos,
+                            size: (SIZE.0 * MAP_SIZE as f32, SIZE.1 * MAP_SIZE as f32).into(),
+                        };
+                        if rect.collides((app.mouse.x, app.mouse.y).into())
+                            && app.mouse.left_was_released()
+                        {
+                            let clicked_at = app.mouse.position();
+                            let start = state.gamemap.armys[0].pos;
+                            let goal = (
+                                (clicked_at.0 / SIZE.0) as usize,
+                                (clicked_at.1 / SIZE.1) as usize,
+                            );
+                            let path = find_path(&state.gamemap, start, goal, false);
+                            state.gamemap.armys[0].path = if let Some(path) = path {
+                                path.0
+                            } else {
+                                Vec::new()
+                            };
                         }
                     }),
                     pos: Position(0., 0.),
@@ -579,18 +1042,24 @@ fn gen_forms(gfx: &mut Graphics) {
                                     if_hovered: None,
                                     if_clicked: Some(
                                         |button, app, assets, plugins, state: &mut State| {
-                                            match state.menu_data.get_mut("char_view_selected") {
-                                                Some(value) => match value {
-                                                    Value::Num(num) => *num += 1,
-                                                    _ => {}
-                                                },
-                                                None => {
-                                                    state.menu_data.insert(
-                                                        "char_view_selected",
-                                                        Value::Num(1),
-                                                    );
-                                                }
-                                            }
+                                            let nav_button_rect = Rect {
+                                                pos: Position(0., 0.),
+                                                size: Size(70., 100.),
+                                            };
+                                            let nav_button_text = |text: String| {
+                                                Some(Text {
+                                                    text,
+                                                    font: FontId(0),
+                                                    align_h: AlignHorizontal::Left,
+                                                    align_v: AlignVertical::Bottom,
+                                                    pos: Position(0., 100.),
+                                                    size: 10.,
+                                                    rect_size: None,
+                                                    max_width: None,
+                                                    color: Color::BLACK,
+                                                    boo: std::marker::PhantomData::<State>,
+                                                })
+                                            };
                                             set_menu_value_num(state, "char_view_changed", 1);
                                         },
                                     ),
@@ -657,7 +1126,7 @@ fn gen_forms(gfx: &mut Graphics) {
         }],
     );
     fn draw_unit_info(unit: &Unit, pos: Position, state: &State, draw: &mut Draw) {
-        let stats = &unit.stats;
+        let stats = &unit.modified;
         let damage_info = &*if stats.damage.hand > 0 {
             format!("A: {}", stats.damage.hand)
         } else if stats.damage.ranged > 0 {
@@ -709,7 +1178,6 @@ fn gen_forms(gfx: &mut Graphics) {
         let mut draw = gfx.create_draw();
         let index = (pos.0 / 102.) as usize + index;
         let troop = state.gamemap.armys[army].troops[index].get();
-
         if let Some(troop) = troop.as_ref() {
             let unit = &troop.unit;
             let texture = &state
@@ -720,6 +1188,7 @@ fn gen_forms(gfx: &mut Graphics) {
                 .unwrap()
                 .lock()
                 .unwrap();
+            let stats = unit.modified;
             draw.image(&texture).position(pos.0, pos.1);
             draw.rect((pos.0, pos.1 + 92.), (92., 50.))
                 .color(if troop.is_main {
@@ -737,7 +1206,7 @@ fn gen_forms(gfx: &mut Graphics) {
                 (pos.0, pos.1 + 92.),
                 (
                     92.,
-                    -((1. - (unit.stats.hp as f64 / unit.stats.max_hp as f64) as f32) * 92.),
+                    -((1. - (stats.hp as f64 / stats.max_hp as f64) as f32) * 92.),
                 ),
             );
             draw.rect(health_rect.0, health_rect.1)
@@ -767,9 +1236,9 @@ fn gen_forms(gfx: &mut Graphics) {
     fn unit_card_clicked(state: &mut State, army: usize, index: usize) {
         let mut unit_index = u64::MAX;
         if let Some(troop) = state.gamemap.armys[army].troops[index].get().as_mut() {
-            unit_index = { troop.unit.info.icon_index as u64 + 1 };
+            unit_index = troop.unit.info.icon_index as u64 + 1;
         }
-        if !unit_index == u64::MAX {
+        if !(unit_index == u64::MAX) {
             set_menu_value_num(state, "battle_unit_stat", unit_index as i64);
             set_menu_value_num(state, "battle_unit_stat_changed", 1);
         }
@@ -831,6 +1300,7 @@ fn gen_forms(gfx: &mut Graphics) {
                     }
                 } else {
                     unit1.unit.stats.moves -= 1;
+                    unit1.unit.recalc();
                 }
             }
             if moves == 0 || active_is_dead {
@@ -973,18 +1443,28 @@ fn gen_forms(gfx: &mut Graphics) {
                             after_draw: None,
                             pos: Position(10., 500.)
                         }),
+                        Box::new(
+                            SingleContainerBuilder::default()
+                                .inside(DrawingBuilder::<State>::default()
+                                        .to_draw(|drawing, app, assets, gfx, plugins, state| {
+                                            let mut draw = get_mut::<State, Draw>(state);
+                                            gfx.render(draw);
+                                            let pos = drawing.pos;
+                                            let mut draw = gfx.create_draw();
+                                            draw.image(&state.assets.get("assets/Icons").unwrap().get(&*format!("img_{}.png", get_menu_value_num(state, "battle_unit_stat").unwrap_or(1)-1)).unwrap().lock().unwrap())
+                                                .position(pos.0, pos.1);
+                                        })
+                                        .build()?
+                                )
+                                .build()?
+                        ),
                         Box::new(SingleContainer {
                             inside: Some(Text {
                                 text: "Статистика".to_string(),
-                                font: FontId(0),
                                 align_h: AlignHorizontal::Left,
                                 align_v: AlignVertical::Top,
-                                pos: Position(0., 0.),
                                 size: 20.0,
-                                rect_size: None,
-                                max_width: Some(100.),
-                                color: Color::BLACK,
-                                boo: Default::default()
+                                ..Text::default()
                             }),
                             on_draw: None,
                             after_draw: Some(|container, app, assets, plugins, state: &mut State| {
@@ -1018,9 +1498,10 @@ fn gen_forms(gfx: &mut Graphics) {
                             if_hovered: None,
                             if_clicked: Some(|button, app, assets, plugins, state: &mut State| {
                                 let mut rng = thread_rng();
+                                let max_troops = *MAX_TROOPS.lock().unwrap();
                                 state.gamemap.armys = vec![
                                     Army {
-                                        troops: (0..*MAX_TROOPS.lock().unwrap()).map(|_| Troop {
+                                        troops: (0..max_troops).map(|_| Troop {
                                             was_payed: true,
                                             is_free: false,
                                             is_main: false,
@@ -1037,10 +1518,11 @@ fn gen_forms(gfx: &mut Graphics) {
                                             army_name: "hero".to_string()
                                         },
                                         inventory: vec![],
-                                        pos: [0, 0]
+                                        pos: (0, 0),
+                                        path: vec![]
                                     },
                                     Army {
-                                        troops: (0..*MAX_TROOPS.lock().unwrap()).map(|_| Troop {
+                                        troops: (0..max_troops).map(|_| Troop {
                                             was_payed: true,
                                             is_free: false,
                                             is_main: false,
@@ -1053,7 +1535,8 @@ fn gen_forms(gfx: &mut Graphics) {
                                             army_name: "pidoras".to_string()
                                         },
                                         inventory: vec![],
-                                        pos: [0, 0]
+                                        pos: (0, 0),
+                                        path: vec![]
                                     }
                                 ];
                                 state.battle.active_unit = state.battle.search_next_active(&*state);
@@ -1101,8 +1584,9 @@ fn gen_forms(gfx: &mut Graphics) {
         pos: Position(0., 0.)
     }]);
     dbg!(size_of::<State>());
+    Ok(())
 }
-static TILES: Lazy<[Tile; 9]> = Lazy::new(|| {
+static TILES: Lazy<[Tile; 10]> = Lazy::new(|| {
     [
         Tile::new(2, "Land.png", false),
         Tile::new(1, "Badground.png", false),
@@ -1113,14 +1597,16 @@ static TILES: Lazy<[Tile; 9]> = Lazy::new(|| {
         Tile::new(4, "Water.png", true),
         Tile::new(4, "Shallow.png", true),
         Tile::new(0, "DeepWater.png", false),
+        Tile::new(2, "Desert.png", false),
     ]
 });
+type Tilemap = [[usize; MAP_SIZE]; MAP_SIZE];
 fn gen_army_troops(
     rng: &mut ThreadRng,
     units: &HashMap<usize, Unit>,
     army: usize,
 ) -> Vec<TroopType> {
-    let mut troops = (0..*MAX_TROOPS.lock().unwrap())
+    let mut troops = (0..*MAX_TROOPS.lock().unwrap() / 2)
         .map(|_| {
             Troop {
                 was_payed: true,
@@ -1142,7 +1628,7 @@ fn gen_army_troops(
         })
         .collect::<Vec<TroopType>>();
     troops.append(
-        &mut (0..*MAX_TROOPS.lock().unwrap())
+        &mut (0..*MAX_TROOPS.lock().unwrap() / 2)
             .map(|_| {
                 Troop {
                     was_payed: true,
@@ -1166,16 +1652,159 @@ fn gen_army_troops(
     );
     troops
 }
-fn setup(assets: &mut Assets, gfx: &mut Graphics) -> State {
+fn gen_tilemap() -> (Tilemap, (u32, u32)) {
+    let noise = PerlinNoise::new();
     let mut rng = thread_rng();
-    let asset_dirs = ["assets/Icons", "assets/Terrain"];
-    let mut my_assets: HashMap<&str, HashMap<String, Asset<Texture>>> = HashMap::new();
+    let seeds = (rng.gen_range(0..10000), rng.gen_range(0..10000));
+    let nm1 = NoiseMap::new(noise)
+        .set(Seed::of(seeds.0))
+        .set(Step::of(0.005, 0.005));
+
+    let nm2 = NoiseMap::new(noise)
+        .set(Seed::of(seeds.1))
+        .set(Step::of(0.05, 0.05));
+
+    let nm = Box::new(nm1 + nm2 * 3);
+
+    let world = World::new()
+        .set(GenSize::of(50, 50))
+        // Water
+        .add(GenTile::new(6usize).when(constraint!(nm.clone(), < -0.1)))
+        // Sand
+        .add(GenTile::new(9).when(constraint!(nm.clone(), < 0.)))
+        // Grass
+        .add(GenTile::new(5).when(constraint!(nm.clone(), < 0.1)))
+        .add(GenTile::new(0).when(constraint!(nm.clone(), < 0.45)))
+        // Mountains
+        .add(GenTile::new(1).when(constraint!(nm.clone(), > 0.8)))
+        // Hills
+        .add(GenTile::new(4));
+    let mut w = world.generate(0, 0).unwrap();
+    (
+        w.iter_mut()
+            .map(|item| from_fn(|_| item.pop().unwrap()))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap(),
+        seeds,
+    )
+}
+fn gen_decomap(
+    seeds: (u32, u32),
+    first_tree_index: usize,
+) -> [[Option<usize>; MAP_SIZE]; MAP_SIZE] {
+    let noise = PerlinNoise::new();
+    let mut rng = thread_rng();
+    let nm1 = NoiseMap::new(noise)
+        .set(Seed::of(seeds.0))
+        .set(Step::of(0.005, 0.005));
+
+    let nm2 = NoiseMap::new(noise)
+        .set(Seed::of(seeds.1))
+        .set(Step::of(0.05, 0.05));
+
+    let nm = Box::new(nm1 + nm2 * 3);
+
+    let w = World::new()
+        .set(GenSize::of(50, 50))
+        .add(GenTile::new(Some(0..30))
+            .when(constraint!(nm.clone(), > 0.44)))
+        .add(GenTile::new(None)
+            .when(constraint!(nm.clone(), < 0.)))
+        // pine
+        .add(GenTile::new(Some(113..124))
+            .when(constraint!(nm.clone(), < 0.25)))
+        // GreenTrees
+        .add(GenTile::new(Some(44..50))
+            .when(constraint!(nm.clone(), < 0.30)))
+        .add(GenTile::new(Some(0..8))
+            .when(constraint!(nm.clone(), < 0.35)))
+        // Orange tres
+        .add(GenTile::new(Some(51..59))
+            .when(constraint!(nm.clone(), < 0.40)))
+        .add(GenTile::new(Some(104..112))
+            .when(constraint!(nm.clone(), < 0.45)))
+        // palm
+        //.add(GenTile::new(125..127))
+        ;
+    w.generate(0, 0)
+        .expect("bl")
+        .iter_mut()
+        .map(|item| {
+            from_fn(|_| {
+                let val = item.pop().unwrap();
+                if let Some(val) = val {
+                    if rng.gen_range(0..100) > 70 {
+                        (rng.gen_range(val) + first_tree_index).into()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("bla")
+}
+
+fn gen_shaders(gfx: &mut Graphics) -> Vec<(Pipeline, Buffer)> {
+    const TILE_ALPHA: ShaderSource = fragment_shader! {
+        r#"
+        #version 450
+        precision mediump float;
+
+        layout(location = 0) in vec2 v_uvs;
+        layout(location = 1) in vec4 v_color;
+        layout(binding = 0) uniform sampler2D u_texture;
+        layout(set = 0, binding = 1) uniform Facet {
+            uint facet;
+        };
+        layout(location = 0) out vec4 color;
+
+        void main() {
+            vec2 tex_size = textureSize(u_texture, 0);
+            vec2 coord = fract(v_uvs) * tex_size;
+            color = texture(u_texture, coord / tex_size) * v_color;
+            bool relay = (tex_size.x < tex_size.y);
+            vec2 tex_mid;
+            if (!relay) {
+                tex_mid = vec2(tex_size.x/2, float(facet)*tex_size.y);
+            } else {
+                tex_mid = vec2(float(facet)*tex_size.x, tex_size.y/2);
+            };
+            color.a =  distance(tex_mid, coord)/120.;
+            //color = vec4(tex_mid.x/140., tex_mid.y/100., 0., distance(tex_mid, coord)/120.);
+
+        }
+        "#
+    };
+    let pipeline = create_image_pipeline(gfx, Some(&TILE_ALPHA)).unwrap();
+    let uniforms = gfx
+        .create_uniform_buffer(0, "facet")
+        .with_data(&[0])
+        .build()
+        .unwrap();
+    vec![(pipeline, uniforms)]
+}
+fn setup(app_assets: &mut Assets, gfx: &mut Graphics) -> State {
+    let mut rng = thread_rng();
+    let mut assets = HashMap::new();
+    let asset_dirs = [
+        "assets/Icons",
+        "assets/Terrain",
+        "assets/Objects",
+        "assets/Items",
+    ];
     for dir in asset_dirs {
         let mut dir_assets: HashMap<String, Asset<Texture>> = HashMap::new();
         for entry in read_dir(dir).expect("Cant find directory") {
             let entry = entry.expect("erorrere");
             let path = entry.path();
-            let asset = assets.load_asset(path.to_str().clone().unwrap()).unwrap();
+            let asset = app_assets
+                .load_asset(path.to_str().clone().unwrap())
+                .unwrap();
             dir_assets.insert(
                 path.strip_prefix(dir)
                     .unwrap()
@@ -1185,15 +1814,28 @@ fn setup(assets: &mut Assets, gfx: &mut Graphics) -> State {
                 asset,
             );
         }
-        my_assets.insert(dir, dir_assets);
+        assets.insert(dir, dir_assets);
     }
     let settings = parse_settings();
     {
         *MAX_TROOPS.lock().unwrap() = settings.max_troops;
     }
+    parse_items(&settings.locale);
     parse_locale(settings.locale);
-    gen_forms(gfx);
+    gen_forms(gfx).expect("Failed to gen forms:(");
     let units = parse_units();
+    let objects = parse_objects();
+
+    let tilemap = gen_tilemap();
+    let decomap = gen_decomap(
+        tilemap.1,
+        *objects
+            .iter()
+            .find(|obj| obj.1.path == "Tree0.png")
+            .unwrap()
+            .0,
+    );
+    let tilemap = tilemap.0;
     let mut state = State {
         fonts: vec![gfx
             .create_font(include_bytes!("Ru_Gothic.ttf"))
@@ -1202,18 +1844,9 @@ fn setup(assets: &mut Assets, gfx: &mut Graphics) -> State {
         frame: 0,
         gamemap: GameMap {
             time: Time::new(0),
-            tilemap: (0..MAP_SIZE)
-                .map(|_| {
-                    (0..MAP_SIZE)
-                        .map(|_| rng.gen_range(0..9))
-                        .collect::<Vec<usize>>()
-                        .try_into()
-                        .unwrap()
-                })
-                .collect::<Vec<[usize; MAP_SIZE]>>()
-                .try_into()
-                .unwrap(),
-            decomap: [[None; MAP_SIZE]; MAP_SIZE],
+            tilemap,
+            decomap,
+            buildings: vec![],
             armys: vec![
                 Army {
                     troops: gen_army_troops(&mut rng, &units, 0),
@@ -1223,7 +1856,8 @@ fn setup(assets: &mut Assets, gfx: &mut Graphics) -> State {
                         army_name: "hero".to_string(),
                     },
                     inventory: vec![],
-                    pos: [0, 0],
+                    pos: (0, 0),
+                    path: vec![],
                 },
                 Army {
                     troops: gen_army_troops(&mut rng, &units, 1),
@@ -1233,14 +1867,15 @@ fn setup(assets: &mut Assets, gfx: &mut Graphics) -> State {
                         army_name: "pidoras".to_string(),
                     },
                     inventory: vec![],
-                    pos: [0, 0],
+                    pos: (0, 0),
+                    path: vec![],
                 },
             ],
         },
         units,
         menu_id: 0,
         menu_data: HashMap::new(),
-        assets: my_assets,
+        assets,
         battle: BattleInfo {
             army1: 0,
             army2: 1,
@@ -1250,12 +1885,15 @@ fn setup(assets: &mut Assets, gfx: &mut Graphics) -> State {
             move_count: 0,
             dead: vec![],
         },
+        objects,
+        shaders: gen_shaders(gfx),
     };
     let mut battle = state.battle.clone();
     battle.start(&mut state);
     state.battle = battle;
     state.battle.active_unit = state.battle.search_next_active(&state);
     state.battle.can_interact = search_interactions(&mut state);
+    dbg!(size_of::<ModifyUnitStats>());
     state
 }
 fn draw(

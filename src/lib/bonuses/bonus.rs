@@ -1,11 +1,9 @@
-use {
-    crate::lib::{
-        time::time::Time,
-        units::unit::{Power, Unit, UnitPos},
-    },
-    dyn_clone::DynClone,
-    std::fmt::Debug,
+use crate::lib::{
+    time::time::Time,
+    units::unit::{Power, Unit, UnitPos},
 };
+use dyn_clone::DynClone;
+use std::fmt::Debug;
 
 dyn_clone::clone_trait_object!(Bonus);
 pub trait Bonus: DynClone + Debug + Send {

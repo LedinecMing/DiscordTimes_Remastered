@@ -8,6 +8,7 @@ use {
         form::Form,
         rect::*
     },
+    derive_builder::UninitializedFieldError,
     dyn_clone::clone_box
 };
 
@@ -73,4 +74,15 @@ pub enum Direction {
     Left,
     Top,
     Bottom
+}
+
+#[derive(Debug)]
+pub struct StructBuildError(pub String);
+impl From<UninitializedFieldError> for StructBuildError {
+    fn from(ufe: UninitializedFieldError) -> StructBuildError { StructBuildError(ufe.to_string()) }
+}
+impl From<StructBuildError> for String {
+    fn from(value: StructBuildError) -> Self {
+        value.0
+    }
 }

@@ -6,6 +6,7 @@ use {
         marker::PhantomData,
         ops::Not
     },
+    derive_builder::Builder,
     notan::{
         prelude::{Graphics, Plugins, App, Assets},
         draw::*
@@ -16,13 +17,20 @@ use {
         defs::*
 }   };
 
-#[derive(Clone)]
+#[derive(Clone, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct Button<State: UIStateCl, T: PosForm<State>> {
+    #[builder(setter(into, strip_option), default)]
     pub inside: Option<T>,
+    #[builder(default)]
     pub rect: Rect,
-    pub if_hovered: Option<fn(&mut Self, &mut App, &mut Assets, &mut Plugins, &mut State)>,
-    pub if_clicked: Option<fn(&mut Self, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    #[builder(setter(strip_option), default="None")]
+    pub if_hovered: Option<fn(&mut Button<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    #[builder(setter(strip_option), default="None")]
+    pub if_clicked: Option<fn(&mut Button<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    #[builder(setter(skip), default = "false")]
     pub focused: bool,
+    #[builder(setter(skip), default = "false")]
     pub selected: bool
 }
 impl<State: UIStateCl + Clone, T: PosForm<State>> Debug for Button<State, T> {
@@ -85,13 +93,18 @@ impl<State: UIStateCl + Clone, T: PosForm<State>> Default for Button<State, T> {
             selected: false
 }   }   }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct Slider<State: UIStateCl, T: PosForm<State>> {
+    #[builder(default)]
     pub rect: Rect,
     pub slider_inside: T,
+    #[builder(default="0.")]
     pub scroll: f32,
     pub max_scroll: f32,
+    #[builder(default="0.")]
     pub scroll_percent: f32,
+    #[builder(default)]
     pub boo: PhantomData<State>
 }
 impl<State: UIStateCl, T: PosForm<State>> Form<State> for Slider<State, T> {
@@ -128,15 +141,24 @@ impl<State: UIStateCl, T: PosForm<State> + Default> Default for Slider<State, T>
 }   }   }
 
 
-#[derive(Clone)]
+#[derive(Clone, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct Checkbox<State: UIStateCl, T: PosForm<State>> {
+    #[builder(setter(strip_option), default)]
     pub inside: Option<T>,
+    #[builder(default)]
     pub rect: Rect,
+    #[builder(default="false")]
     pub focused: bool,
+    #[builder(default="false")]
     pub checked: bool,
-    pub on_draw: Option<fn(&mut Self, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)>,
-    pub if_hovered: Option<fn(&mut Self, &mut App, &mut Assets, &mut Plugins, &mut State)>,
-    pub if_selected: Option<fn(&mut Self, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    #[builder(setter(strip_option), default="None")]
+    pub on_draw: Option<fn(&mut Checkbox<State, T>, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)>,
+    #[builder(setter(strip_option), default="None")]
+    pub if_hovered: Option<fn(&mut Checkbox<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    #[builder(setter(strip_option), default="None")]
+    pub if_selected: Option<fn(&mut Checkbox<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    #[builder(default)]
     pub pos: Position
 }
 impl<State: UIStateCl + Clone, T: PosForm<State>> Debug for Checkbox<State, T> {
@@ -197,7 +219,7 @@ impl<State: UIStateCl, T: PosForm<State>> Default for Checkbox<State, T> {
             if_hovered: None,
             pos: Position(0., 0.),
             if_selected: None
-        }   }   }
+}   }   }
 
 #[derive(Clone, Debug)]
 pub struct Mask<State: UIStateCl, T: PosForm<State>> {

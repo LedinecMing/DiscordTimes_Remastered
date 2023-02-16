@@ -397,8 +397,18 @@ version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a01d95850c592940db9b8194bc39f4bc0e89dee5c4265e4b1807c34a9aba453c"
 dependencies = [
- "darling_core",
- "darling_macro",
+ "darling_core 0.13.4",
+ "darling_macro 0.13.4",
+]
+
+[[package]]
+name = "darling"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0dd3cd20dc6b5a876612a6e5accfe7f3dd883db6d07acfbf14c128f61550dfa"
+dependencies = [
+ "darling_core 0.14.2",
+ "darling_macro 0.14.2",
 ]
 
 [[package]]
@@ -416,13 +426,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling_core"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a784d2ccaf7c98501746bf0be29b2022ba41fd62a2e622af997a03e9f972859f"
+dependencies = [
+ "fnv",
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn",
+]
+
+[[package]]
 name = "darling_macro"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c972679f83bdf9c42bd905396b6c3588a843a17f0f16dfcfa3e2c5d57441835"
 dependencies = [
- "darling_core",
+ "darling_core 0.13.4",
  "quote",
+ "syn",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7618812407e9402654622dd402b0a89dff9ba93badd6540781526117b92aab7e"
+dependencies = [
+ "darling_core 0.14.2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "derive_builder"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d67778784b508018359cbc8696edb3db78160bab2c2a28ba7f56ef6932997f8"
+dependencies = [
+ "derive_builder_macro",
+]
+
+[[package]]
+name = "derive_builder_core"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c11bdc11a0c47bc7d37d582b5285da6849c96681023680b906673c5707af7b0f"
+dependencies = [
+ "darling 0.14.2",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "derive_builder_macro"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebcda35c7a396850a55ffeac740804b40ffec779b98fffbb1738f4033f0ee79e"
+dependencies = [
+ "derive_builder_core",
  "syn",
 ]
 
@@ -805,32 +871,6 @@ dependencies = [
 
 [[package]]
 name = "glutin"
-version = "0.29.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "444c9ad294fdcaf20ccf6726b78f380b5450275540c9b68ab62f49726ad1c713"
-dependencies = [
- "cgl",
- "cocoa",
- "core-foundation",
- "glutin_egl_sys 0.1.6",
- "glutin_gles2_sys",
- "glutin_glx_sys 0.1.8",
- "glutin_wgl_sys 0.1.5",
- "libloading",
- "log",
- "objc",
- "once_cell",
- "osmesa-sys",
- "parking_lot",
- "raw-window-handle 0.5.0",
- "wayland-client",
- "wayland-egl",
- "winapi",
- "winit",
-]
-
-[[package]]
-name = "glutin"
 version = "0.30.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "524d807cd49a0c56a53ef9a6738cd15e7c8c4e9d37a3b7fdb3c250c1cd5bf7a3"
@@ -840,9 +880,9 @@ dependencies = [
  "cgl",
  "cocoa",
  "core-foundation",
- "glutin_egl_sys 0.3.1",
- "glutin_glx_sys 0.3.0",
- "glutin_wgl_sys 0.3.0",
+ "glutin_egl_sys",
+ "glutin_glx_sys",
+ "glutin_wgl_sys",
  "libloading",
  "objc",
  "once_cell",
@@ -859,19 +899,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e44949d3a525ad1deae282fc9e7dbf05ddcce98219079c5aea7d9aa6927920c6"
 dependencies = [
  "cfg_aliases",
- "glutin 0.30.3",
+ "glutin",
  "raw-window-handle 0.5.0",
  "winit",
-]
-
-[[package]]
-name = "glutin_egl_sys"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68900f84b471f31ea1d1355567eb865a2cf446294f06cef8d653ed7bcf5f013d"
-dependencies = [
- "gl_generator",
- "winapi",
 ]
 
 [[package]]
@@ -885,26 +915,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "glutin_gles2_sys"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8094e708b730a7c8a1954f4f8a31880af00eb8a1c5b5bf85d28a0a3c6d69103"
-dependencies = [
- "gl_generator",
- "objc",
-]
-
-[[package]]
-name = "glutin_glx_sys"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d93d0575865098580c5b3a423188cd959419912ea60b1e48e8b3b526f6d02468"
-dependencies = [
- "gl_generator",
- "x11-dl",
-]
-
-[[package]]
 name = "glutin_glx_sys"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -912,15 +922,6 @@ checksum = "947c4850c58211c9627969c2b4e2674764b81ae5b47bab2c9a477d7942f96e0f"
 dependencies = [
  "gl_generator",
  "x11-dl",
-]
-
-[[package]]
-name = "glutin_wgl_sys"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3da5951a1569dbab865c6f2a863efafff193a93caf05538d193e9e3816d21696"
-dependencies = [
- "gl_generator",
 ]
 
 [[package]]
@@ -1300,7 +1301,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0df7ac00c4672f9d5aece54ee3347520b7e20f158656c7db2e6de01902eb7a6c"
 dependencies = [
- "darling",
+ "darling 0.13.4",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -1354,58 +1355,20 @@ dependencies = [
 [[package]]
 name = "notan"
 version = "0.8.0"
-dependencies = [
- "notan_app 0.8.0",
- "notan_backend 0.8.0",
- "notan_core 0.8.0",
- "notan_draw 0.8.0",
- "notan_graphics 0.8.0",
- "notan_input 0.8.0",
- "notan_log 0.8.0",
- "notan_macro 0.8.0",
- "notan_math 0.8.0",
- "notan_random 0.8.0",
- "notan_text 0.8.0",
- "notan_utils 0.8.0",
-]
-
-[[package]]
-name = "notan"
-version = "0.8.0"
 source = "git+https://github.com/Nazariglez/notan.git#58cb8f1e9a67daa9783600055e77c9fefcf5a8db"
 dependencies = [
- "notan_app 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_backend 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_core 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_draw 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_graphics 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_input 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_log 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_macro 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_math 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_random 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_text 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_utils 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
-]
-
-[[package]]
-name = "notan_app"
-version = "0.8.0"
-dependencies = [
- "bytemuck",
- "downcast-rs",
- "futures",
- "hashbrown",
- "indexmap",
- "log",
- "notan_core 0.8.0",
- "notan_graphics 0.8.0",
- "notan_input 0.8.0",
- "notan_macro 0.8.0",
- "notan_math 0.8.0",
- "notan_utils 0.8.0",
- "parking_lot",
- "platter2",
+ "notan_app",
+ "notan_backend",
+ "notan_core",
+ "notan_draw",
+ "notan_graphics",
+ "notan_input",
+ "notan_log",
+ "notan_macro",
+ "notan_math",
+ "notan_random",
+ "notan_text",
+ "notan_utils",
 ]
 
 [[package]]
@@ -1419,12 +1382,12 @@ dependencies = [
  "hashbrown",
  "indexmap",
  "log",
- "notan_core 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_graphics 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_input 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_macro 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_math 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_utils 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
+ "notan_core",
+ "notan_graphics",
+ "notan_input",
+ "notan_macro",
+ "notan_math",
+ "notan_utils",
  "parking_lot",
  "platter2",
 ]
@@ -1432,23 +1395,11 @@ dependencies = [
 [[package]]
 name = "notan_backend"
 version = "0.8.0"
-dependencies = [
- "notan_web 0.8.0",
- "notan_winit 0.8.0",
-]
-
-[[package]]
-name = "notan_backend"
-version = "0.8.0"
 source = "git+https://github.com/Nazariglez/notan.git#58cb8f1e9a67daa9783600055e77c9fefcf5a8db"
 dependencies = [
- "notan_web 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_winit 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
+ "notan_web",
+ "notan_winit",
 ]
-
-[[package]]
-name = "notan_core"
-version = "0.8.0"
 
 [[package]]
 name = "notan_core"
@@ -1458,49 +1409,18 @@ source = "git+https://github.com/Nazariglez/notan.git#58cb8f1e9a67daa9783600055e
 [[package]]
 name = "notan_draw"
 version = "0.8.0"
-dependencies = [
- "log",
- "lyon",
- "notan_app 0.8.0",
- "notan_glyph 0.8.0",
- "notan_graphics 0.8.0",
- "notan_macro 0.8.0",
- "notan_math 0.8.0",
- "notan_text 0.8.0",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "notan_draw"
-version = "0.8.0"
 source = "git+https://github.com/Nazariglez/notan.git#58cb8f1e9a67daa9783600055e77c9fefcf5a8db"
 dependencies = [
  "log",
  "lyon",
- "notan_app 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_glyph 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_graphics 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_macro 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_math 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_text 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
+ "notan_app",
+ "notan_glyph",
+ "notan_graphics",
+ "notan_macro",
+ "notan_math",
+ "notan_text",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "notan_glow"
-version = "0.8.0"
-dependencies = [
- "bytemuck",
- "glow",
- "hashbrown",
- "image",
- "js-sys",
- "log",
- "notan_graphics 0.8.0",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -1514,7 +1434,7 @@ dependencies = [
  "image",
  "js-sys",
  "log",
- "notan_graphics 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
+ "notan_graphics",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -1522,39 +1442,14 @@ dependencies = [
 [[package]]
 name = "notan_glyph"
 version = "0.8.0"
-dependencies = [
- "bytemuck",
- "glyph_brush",
- "log",
- "notan_app 0.8.0",
- "notan_graphics 0.8.0",
- "notan_math 0.8.0",
-]
-
-[[package]]
-name = "notan_glyph"
-version = "0.8.0"
 source = "git+https://github.com/Nazariglez/notan.git#58cb8f1e9a67daa9783600055e77c9fefcf5a8db"
 dependencies = [
  "bytemuck",
  "glyph_brush",
  "log",
- "notan_app 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_graphics 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_math 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
-]
-
-[[package]]
-name = "notan_graphics"
-version = "0.8.0"
-dependencies = [
- "bytemuck",
- "glsl-layout",
- "image",
- "notan_macro 0.8.0",
- "notan_math 0.8.0",
- "notan_utils 0.8.0",
- "parking_lot",
+ "notan_app",
+ "notan_graphics",
+ "notan_math",
 ]
 
 [[package]]
@@ -1565,20 +1460,10 @@ dependencies = [
  "bytemuck",
  "glsl-layout",
  "image",
- "notan_macro 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_math 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_utils 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
+ "notan_macro",
+ "notan_math",
+ "notan_utils",
  "parking_lot",
-]
-
-[[package]]
-name = "notan_input"
-version = "0.8.0"
-dependencies = [
- "hashbrown",
- "log",
- "notan_core 0.8.0",
- "notan_math 0.8.0",
 ]
 
 [[package]]
@@ -1588,21 +1473,8 @@ source = "git+https://github.com/Nazariglez/notan.git#58cb8f1e9a67daa9783600055e
 dependencies = [
  "hashbrown",
  "log",
- "notan_core 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_math 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
-]
-
-[[package]]
-name = "notan_log"
-version = "0.8.0"
-dependencies = [
- "console_log",
- "fern",
- "js-sys",
- "log",
- "notan_app 0.8.0",
- "time",
- "wasm-bindgen",
+ "notan_core",
+ "notan_math",
 ]
 
 [[package]]
@@ -1614,21 +1486,9 @@ dependencies = [
  "fern",
  "js-sys",
  "log",
- "notan_app 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
+ "notan_app",
  "time",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "notan_macro"
-version = "0.8.0"
-dependencies = [
- "glsl-to-spirv",
- "num",
- "proc-macro2",
- "quote",
- "spirv_cross",
- "syn",
 ]
 
 [[package]]
@@ -1647,25 +1507,9 @@ dependencies = [
 [[package]]
 name = "notan_math"
 version = "0.8.0"
-dependencies = [
- "glam",
-]
-
-[[package]]
-name = "notan_math"
-version = "0.8.0"
 source = "git+https://github.com/Nazariglez/notan.git#58cb8f1e9a67daa9783600055e77c9fefcf5a8db"
 dependencies = [
  "glam",
-]
-
-[[package]]
-name = "notan_random"
-version = "0.8.0"
-dependencies = [
- "getrandom",
- "rand",
- "rand_pcg",
 ]
 
 [[package]]
@@ -1681,29 +1525,15 @@ dependencies = [
 [[package]]
 name = "notan_text"
 version = "0.8.0"
-dependencies = [
- "hashbrown",
- "lazy_static",
- "log",
- "notan_app 0.8.0",
- "notan_glyph 0.8.0",
- "notan_graphics 0.8.0",
- "notan_math 0.8.0",
- "parking_lot",
-]
-
-[[package]]
-name = "notan_text"
-version = "0.8.0"
 source = "git+https://github.com/Nazariglez/notan.git#58cb8f1e9a67daa9783600055e77c9fefcf5a8db"
 dependencies = [
  "hashbrown",
  "lazy_static",
  "log",
- "notan_app 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_glyph 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_graphics 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_math 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
+ "notan_app",
+ "notan_glyph",
+ "notan_graphics",
+ "notan_math",
  "parking_lot",
 ]
 
@@ -1711,18 +1541,11 @@ dependencies = [
 name = "notan_ui"
 version = "1.0.1"
 dependencies = [
+ "derive_builder",
  "derive_more",
  "dyn-clone",
  "math_thingies",
- "notan 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
-]
-
-[[package]]
-name = "notan_utils"
-version = "0.8.0"
-dependencies = [
- "instant",
- "log",
+ "notan",
 ]
 
 [[package]]
@@ -1737,33 +1560,16 @@ dependencies = [
 [[package]]
 name = "notan_web"
 version = "0.8.0"
-dependencies = [
- "console_error_panic_hook",
- "futures-util",
- "js-sys",
- "log",
- "notan_app 0.8.0",
- "notan_core 0.8.0",
- "notan_glow 0.8.0",
- "notan_graphics 0.8.0",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "notan_web"
-version = "0.8.0"
 source = "git+https://github.com/Nazariglez/notan.git#58cb8f1e9a67daa9783600055e77c9fefcf5a8db"
 dependencies = [
  "console_error_panic_hook",
  "futures-util",
  "js-sys",
  "log",
- "notan_app 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_core 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_glow 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_graphics 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
+ "notan_app",
+ "notan_core",
+ "notan_glow",
+ "notan_graphics",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1772,25 +1578,14 @@ dependencies = [
 [[package]]
 name = "notan_winit"
 version = "0.8.0"
-dependencies = [
- "glutin 0.29.1",
- "log",
- "notan_app 0.8.0",
- "notan_core 0.8.0",
- "notan_glow 0.8.0",
-]
-
-[[package]]
-name = "notan_winit"
-version = "0.8.0"
 source = "git+https://github.com/Nazariglez/notan.git#58cb8f1e9a67daa9783600055e77c9fefcf5a8db"
 dependencies = [
- "glutin 0.30.3",
+ "glutin",
  "glutin-winit",
  "log",
- "notan_app 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_core 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
- "notan_glow 0.8.0 (git+https://github.com/Nazariglez/notan.git)",
+ "notan_app",
+ "notan_core",
+ "notan_glow",
  "raw-window-handle 0.5.0",
  "winit",
 ]
@@ -1934,15 +1729,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d84eb1409416d254e4a9c8fa56cc24701755025b458f0fcd8e59e1f5f40c23bf"
 dependencies = [
  "num-traits",
-]
-
-[[package]]
-name = "osmesa-sys"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88cfece6e95d2e717e0872a7f53a8684712ad13822a7979bc760b9c77ec0013b"
-dependencies = [
- "shared_library",
 ]
 
 [[package]]
@@ -2163,7 +1949,7 @@ name = "rust_book_introduction"
 version = "0.1.0"
 dependencies = [
  "math_thingies",
- "notan 0.8.0",
+ "notan",
  "notan_ui",
  "once_cell",
 ]
@@ -2290,16 +2076,6 @@ dependencies = [
  "byte-tools",
  "digest",
  "fake-simd",
-]
-
-[[package]]
-name = "shared_library"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a9e7e0f2bfae24d8a5b5a66c5b257a83c7412304311512a0c054cd5e619da11"
-dependencies = [
- "lazy_static",
- "libc",
 ]
 
 [[package]]
@@ -2626,16 +2402,6 @@ dependencies = [
  "nix 0.24.3",
  "wayland-client",
  "xcursor",
-]
-
-[[package]]
-name = "wayland-egl"
-version = "0.29.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "402de949f81a012926d821a2d659f930694257e76dd92b6e0042ceb27be4107d"
-dependencies = [
- "wayland-client",
- "wayland-sys 0.29.5",
 ]
 
 [[package]]

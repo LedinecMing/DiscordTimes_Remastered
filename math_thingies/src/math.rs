@@ -1,12 +1,13 @@
 use {
     std::{
         cmp::{Ordering, min, max},
-        ops::{Add, AddAssign, Sub, SubAssign, Div, Mul, Range},
+        ops::{Add, AddAssign, Sub, SubAssign, Div, Mul, Range, Neg, Rem},
         fmt::{Display, Formatter},
-        iter::Extend
+        iter::Extend,
+        num::ParseIntError
     },
     boolinator::Boolinator,
-    num::{Num, NumCast, ToPrimitive}
+    num::{Num, NumCast, ToPrimitive, Zero, One}
 };
 
 pub trait PartOrdNum = Num + PartialOrd;
@@ -72,7 +73,7 @@ impl<V: CopyPartOrdNum + NumCast> IsInRange<V> for InUnsignedRange<V> {
         Ok(())
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Percent(i16);
 impl Percent {
     pub fn new(value: i16) -> Self {
@@ -87,8 +88,8 @@ impl Percent {
     pub fn get(self) -> i16 { self.0 }
     pub fn calc<V: Num + NumCast>(self, all: V) -> V {
         all * NumCast::from(self.0).unwrap() / NumCast::from(100).unwrap()
-}   }
-impl InConstRange<i16> for Percent { const RANGE: Range<i16> = -100..200; }
+    }   }
+impl InConstRange<i16> for Percent { const RANGE: Range<i16> = -10000..10000; }
 
 impl PartialEq<i16> for Percent {
     fn eq(&self, other: &i16) -> bool { self.0 == *other }
@@ -100,16 +101,78 @@ impl Sub<Percent> for Percent {
     type Output = Percent;
     fn sub(self, rhs: Percent) -> Self::Output {
         Percent(saturating(self.0 - rhs.get(), Self::RANGE))
-}   }
+    }   }
 impl Add<Percent> for Percent {
-    type Output = Percent;
+    type Output = Self;
     fn add(self, rhs: Percent) -> Self::Output {
         Percent(saturating(self.0 + rhs.get(), Self::RANGE))
-}   }
+    }   }
+impl Neg for Percent {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        Percent::new(-self.get())
+    }
+}
+impl Mul<Percent> for Percent {
+    type Output = Self;
+    fn mul(self, _rhs: Self) -> Self::Output {
+        Percent(saturating((self.0 as f32 * _rhs.get() as f32 / 100.) as i16, Self::RANGE))
+    }
+}
+impl Div<Percent> for Percent {
+    type Output = Self;
+    fn div(self, _rhs: Self) -> Self::Output {
+        Percent(saturating((self.0 as f32 / _rhs.get() as f32 * 100.) as i16, Self::RANGE))
+    }
+}
+impl Rem<Percent> for Percent {
+    type Output = Self;
+    fn rem(self, _rhs: Self) -> Self::Output {
+        Percent(self.get()%_rhs.get())
+    }
+}
+impl Zero for Percent {
+    fn zero() -> Self {
+        Percent(0)
+    }
+    fn is_zero(&self) -> bool {
+        self.get()==0
+    }
+}
+impl One for Percent {
+    fn one() -> Self {
+        Percent(1)
+    }
+    fn is_one(&self) -> bool {
+        self.get()==1
+    }
+}
+impl ToPrimitive for Percent {
+    fn to_i64(&self) -> Option<i64> {
+        Some(self.get() as i64)
+    }
+    fn to_u64(&self) -> Option<u64> {
+        Some(self.get() as u64)
+    }
+}
+impl Num for Percent {
+    type FromStrRadixErr = ParseIntError;
+    fn from_str_radix(
+        str: &str,
+        radix: u32
+    ) -> Result<Self, Self::FromStrRadixErr> {
+        Ok(Percent(i16::from_str_radix(str, radix)?))
+    }
+}
+impl NumCast for Percent {
+    fn from<T: ToPrimitive>(v: T) -> Option<Self> {
+        Some(Percent(<i16 as NumCast>::from(v)?))
+    }
+}
 impl Display for Percent {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}%", self.0)
-}   }
+    }   }
 macro_rules! percent_ops_impl {
     ($($t:ty), *) => {
         $(
@@ -139,7 +202,7 @@ macro_rules! percent_float_ops_impl {
             impl Add<Percent> for $t {
                 type Output = Self;
                 fn add(self, _rhs: Percent) -> Self::Output {
-                    self - _rhs.calc(self)
+                    self + _rhs.calc(self)
             }   }
             impl Sub<Percent> for $t {
                 type Output = Self;
@@ -148,7 +211,7 @@ macro_rules! percent_float_ops_impl {
             }   }
             impl AddAssign<Percent> for $t {
                 fn add_assign(&mut self, _rhs: Percent) {
-                    *self = *self - _rhs.calc(*self);
+                    *self = *self + _rhs.calc(*self);
             }   }
             impl SubAssign<Percent> for $t {
                 fn sub_assign(&mut self, _rhs: Percent) {
@@ -158,6 +221,30 @@ macro_rules! percent_float_ops_impl {
 }   }
 percent_ops_impl![i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, usize, isize];
 percent_float_ops_impl![f32, f64];
+
+pub fn add_opt<A: Add<A, Output=A>>(a: Option<A>, b: Option<A>) -> Option<A> {
+    if let Some(a) = a {
+        if let Some(b) = b {
+            (a + b).into()
+        } else {
+            a.into()
+        }
+    } else if let Some(b) = b {
+        b.into()
+    } else { None }
+}
+pub fn sub_opt<A: Sub<A, Output=A> + Neg<Output=A>>(a: Option<A>, b: Option<A>) -> Option<A> {
+    if let Some(a) = a {
+        if let Some(b) = b {
+            (a - b).into()
+        } else {
+            a.into()
+        }
+    } else if let Some(b) = b {
+        (-b).into()
+    } else { None }
+}
+
 
 
 #[inline(always)]
@@ -185,3 +272,11 @@ impl<T, I: IntoIterator<Item = T>> VecMove<T, I> for Vec<T> {
         self.extend(iter);
         self
 }   }
+
+pub trait IterableConversions<F, T, Output: FromIterator<T>> where T: From<F> {
+    fn conv(self) -> Output;
+}
+impl<IF: IntoIterator<Item = F>, Output: FromIterator<T>, F, T> IterableConversions<F, T, Output> for IF where T: From<F> {
+    fn conv(self) -> Output {
+        self.into_iter().map(T::from).collect()
+    }   }

@@ -1,8 +1,6 @@
-use {
-    crate::lib::units::unit::{Unit, UnitStats},
-    dyn_clone::DynClone,
-    std::fmt::Debug,
-};
+use crate::lib::units::unit::{Unit, UnitStats};
+use dyn_clone::DynClone;
+use std::fmt::Debug;
 
 #[derive(PartialEq)]
 pub enum EffectKind {
