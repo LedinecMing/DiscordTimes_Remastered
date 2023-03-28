@@ -17,6 +17,7 @@ use {
         defs::*
 }   };
 
+type ButtonFunc<State, T> = fn(&mut Button<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State);
 #[derive(Clone, Builder)]
 #[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct Button<State: UIStateCl, T: PosForm<State>> {
@@ -25,13 +26,18 @@ pub struct Button<State: UIStateCl, T: PosForm<State>> {
     #[builder(default)]
     pub rect: Rect,
     #[builder(setter(strip_option), default="None")]
-    pub if_hovered: Option<fn(&mut Button<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    pub if_hovered: Option<ButtonFunc<State, T>>,
     #[builder(setter(strip_option), default="None")]
-    pub if_clicked: Option<fn(&mut Button<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    pub if_clicked: Option<ButtonFunc<State, T>>,
     #[builder(setter(skip), default = "false")]
     pub focused: bool,
     #[builder(setter(skip), default = "false")]
     pub selected: bool
+}
+pub fn button<State: UIStateCl, T: PosForm<State>>(inside: T, rect: Rect) -> ButtonBuilder<State, T> {
+    ButtonBuilder::default()
+        .inside(inside)
+        .rect(rect)
 }
 impl<State: UIStateCl + Clone, T: PosForm<State>> Debug for Button<State, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -160,6 +166,11 @@ pub struct Checkbox<State: UIStateCl, T: PosForm<State>> {
     pub if_selected: Option<fn(&mut Checkbox<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
     #[builder(default)]
     pub pos: Position
+}
+pub fn checkbox<State: UIStateCl, T: PosForm<State>>(inside: T, rect: Rect) -> CheckboxBuilder<State, T> {
+    CheckboxBuilder::default()
+        .inside(inside)
+        .rect(rect)
 }
 impl<State: UIStateCl + Clone, T: PosForm<State>> Debug for Checkbox<State, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

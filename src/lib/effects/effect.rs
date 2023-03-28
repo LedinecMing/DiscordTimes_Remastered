@@ -1,4 +1,4 @@
-use crate::lib::units::unit::{Unit, UnitStats};
+use crate::lib::units::unit::Unit;
 use dyn_clone::DynClone;
 use std::fmt::Debug;
 

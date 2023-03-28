@@ -27,7 +27,7 @@ impl Default for FontId {
 }   }
 
 #[derive(Clone, Debug, Builder)]
-#[builder(build_fn(error = "StructBuildError"))]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct Text<State: UIStateCl> {
     #[builder(setter(into))]
     pub text: String,
@@ -49,6 +49,10 @@ pub struct Text<State: UIStateCl> {
     pub color: Color,
     #[builder(default)]
     pub boo: PhantomData<State>
+}
+pub fn text<State: UIStateCl>(text: impl Into<String>) -> TextBuilder<State> {
+    TextBuilder::default()
+        .text(text.into())
 }
 impl<State: UIStateCl> Form<State> for Text<State> {
     fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {

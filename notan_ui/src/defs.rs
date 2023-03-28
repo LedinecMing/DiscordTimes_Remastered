@@ -53,7 +53,10 @@ impl<State: UIStateCl> Clone for Box<dyn ObjPosForm<State>> {
         clone_box(&**self)
 }   }
 
-pub trait PosForm<State: UIState> = Form<State> + Positionable + Clone + Debug;
+pub trait PosForm<State: UIState>: Form<State> + Positionable + Clone + Debug {
+    type State = State;
+}
+impl<T, State: UIState> PosForm<State> for T where T: Form<State> + Positionable + Clone + Debug {}
 pub trait UIStateCl = UIState + Clone + Send;
 
 #[derive(Copy, Clone, PartialEq, Debug)]

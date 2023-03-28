@@ -279,4 +279,4 @@ pub trait IterableConversions<F, T, Output: FromIterator<T>> where T: From<F> {
 impl<IF: IntoIterator<Item = F>, Output: FromIterator<T>, F, T> IterableConversions<F, T, Output> for IF where T: From<F> {
     fn conv(self) -> Output {
         self.into_iter().map(T::from).collect()
-    }   }
+}   }

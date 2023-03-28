@@ -69,9 +69,9 @@ pub struct UnitStats {
     pub max_hp: i64,
     pub damage: Power,
     pub defence: Defence,
-    pub moves: u64,
-    pub max_moves: u64,
-    pub speed: u64,
+    pub moves: i64,
+    pub max_moves: i64,
+    pub speed: i64,
     pub vamp: Percent,
     pub regen: Percent,
 }

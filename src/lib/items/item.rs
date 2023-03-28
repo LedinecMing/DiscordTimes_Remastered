@@ -2,7 +2,6 @@ use crate::lib::units::unitstats::ModifyUnitStats;
 
 use crate::lib::{
     bonuses::bonus::Bonus,
-    effects::effect::Effect,
     units::unit::{MagicType, Unit},
 };
 use once_cell::sync::Lazy;

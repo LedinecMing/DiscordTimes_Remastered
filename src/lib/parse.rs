@@ -116,14 +116,14 @@ use std::{any::type_name, fs::File, io::Read, ops::Add};
 
 use super::{
     bonuses::bonuses::*,
-    items::item::{Item as GameItem, ItemInfo, ItemType, *},
+    items::item::{ItemInfo, *},
     map::object::{ObjectInfo, ObjectType},
     units::{
         unit::{MagicDirection::*, MagicType::*, *},
-        unitstats::{Modify, ModifyDefence, ModifyPower, ModifyUnitStats},
+        unitstats::ModifyUnitStats,
     },
 };
-use crate::{lib::mutrc::SendMut, LOCALE};
+use crate::LOCALE;
 use ini_core::{Item, Parser};
 use math_thingies::Percent;
 use std::{collections::HashMap, fmt::Display, str::FromStr};
@@ -283,10 +283,10 @@ pub fn parse_units() -> HashMap<usize, Unit> {
                     magic_direction = v;
                 }
                 "manevres" | "moves" => {
-                    moves = handle_parse::<u64>(v, &mut error_collector, "moves");
+                    moves = handle_parse::<i64>(v, &mut error_collector, "moves");
                 }
                 "initiative" | "speed" => {
-                    speed = handle_parse::<u64>(v, &mut error_collector, "speed");
+                    speed = handle_parse::<i64>(v, &mut error_collector, "speed");
                 }
                 "vampirizm" => {
                     vamp = handle_parse::<i16>(v, &mut error_collector, "vamp");

@@ -13,6 +13,14 @@ use pathfinding::directed::astar::astar;
 use std::iter::successors;
 use tracing_mutex::stdsync::TracingMutex as Mutex;
 
+#[derive(Clone, Debug, Default)]
+pub struct Relations {
+    player: u8,
+    ally: u8,
+    neighbour: u8,
+    enemy: u8
+}
+
 #[derive(Clone, Debug)]
 pub struct ArmyStats {
     pub gold: u64,
@@ -94,7 +102,7 @@ pub fn find_path(
     goal: (usize, usize),
     on_transport: bool,
 ) -> Option<(Vec<(usize, usize)>, u32)> {
-    astar(
+    let path = astar(
         &start,
         |&(x, y)| {
             let edge = (
@@ -147,11 +155,13 @@ pub fn find_path(
             }
             .into_iter()
             .filter(|p: &(usize, usize)| {
-                !(TILES[gamemap.tilemap[p.0][p.1]].need_transport() ^ on_transport)
+                let hitbox = &gamemap.hitmap[p.0][p.1];
+                hitbox.passable && !(hitbox.need_transport ^ on_transport)
             })
             .map(|p| (p, 10 / TILES[gamemap.tilemap[p.0][p.1]].walkspeed))
         },
         |&p| dist(&p, &goal),
         |&p| p == goal,
-    )
+    )?;
+    Some((path.0[1..].to_vec(), path.1))
 }

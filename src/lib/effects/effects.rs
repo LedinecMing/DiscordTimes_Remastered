@@ -2,8 +2,7 @@ use crate::lib::{
     effects::effect::{Effect, EffectInfo, EffectKind},
     units::{unit::*, unitstats::*},
 };
-use math_thingies::{add_if_nat, nat, saturating, Percent};
-use std::cmp::{max, min};
+use math_thingies::Percent;
 
 #[derive(Copy, Clone, Debug)]
 pub struct MoreMoves {
@@ -318,7 +317,7 @@ const FIRE_SLOWNESS_PERCENT: Percent = Percent::const_new(10);
 #[derive(Copy, Clone, Debug)]
 pub struct Fire {
     pub info: EffectInfo,
-    addition_speed: u64,
+    addition_speed: i64,
 }
 impl Effect for Fire {
     fn update_stats(&mut self, unit: &mut Unit) {

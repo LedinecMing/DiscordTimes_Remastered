@@ -16,6 +16,7 @@ use {
         rect::*,
         defs::*
 }   };
+use crate::wrappers::SliderBuilder;
 
 #[derive(Clone, Debug, Builder)]
 #[builder(build_fn(error = "StructBuildError"), pattern="owned")]
@@ -29,6 +30,10 @@ pub struct Container<State: UIStateCl, T: PosForm<State>> {
     pub interval: Position,
     #[builder(setter(skip), default)]
     pub boo: PhantomData<State>
+}
+pub fn container<State: UIStateCl, T: PosForm<State>>(inside: Vec<T>) -> ContainerBuilder<State, T> {
+    ContainerBuilder::default()
+        .inside(inside)
 }
 impl<State: UIStateCl, T: PosForm<State>> Form<State> for Container<State, T> {
     fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
@@ -83,7 +88,7 @@ impl<State: UIStateCl, T: PosForm<State>> Container<State, T> {
             };
             inside.with_pos(to_add)
         }).collect()
-    }   }
+}   }
 impl<State: UIStateCl, T: PosForm<State>> Positionable for Container<State, T> {
     fn with_pos(&self, to_add: Position) -> Self {
         Self { pos: self.pos + to_add, ..self.clone() }
@@ -143,6 +148,160 @@ impl<State: UIStateCl, T: PosForm<State>> Default for Container<State, T> {
             boo: PhantomData
 }   }   }
 
+
+#[derive(Clone, Debug, Builder)]
+#[builder(build_fn(error = "StructBuildError"), pattern="owned")]
+pub struct TupleContainer<State: UIStateCl, T> {
+    pub inside: T,
+    #[builder(setter(into), default)]
+    pub pos: Position,
+    #[builder(default = "Direction::Right")]
+    pub align_direction: Direction,
+    #[builder(setter(into), default)]
+    pub interval: Position,
+    #[builder(setter(skip), default)]
+    pub boo: PhantomData<State>
+}
+
+macro_rules! tuple_impls {
+    () => {};
+    (($idx:tt => $typ:ident), $( ($nidx:tt => $ntyp:ident), )*) => {
+        tuple_impls!([($idx, $typ);] $( ($nidx => $ntyp), )*);
+        tuple_impls!($( ($nidx => $ntyp), )*); // invoke macro on tail
+    };
+    ([$(($accIdx: tt, $accTyp: ident);)+]  ($idx:tt => $typ:ident), $( ($nidx:tt => $ntyp:ident), )*) => {
+      tuple_impls!([($idx, $typ); $(($accIdx, $accTyp); )*] $( ($nidx => $ntyp), ) *);
+    };
+
+    ([($idx:tt, $typ:ident); $( ($nidx:tt, $ntyp:ident); )*]) => {
+        impl<State: UIStateCl, $typ, $( $ntyp ),*> Form<State> for TupleContainer<State, ($typ, $( $ntyp ),*)>
+        where
+            $typ: ObjPosForm<State> + Clone,
+            $( $ntyp: ObjPosForm<State> + Clone),*
+        {
+            fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+                let mut inside: &mut [&mut dyn ObjPosForm<State>] = &mut [&mut self.inside.$idx, $( &mut self.inside.$nidx ),*];
+
+                let mut size = Size(0., 0.);
+                let mut interval = Position(0., 0.);
+                inside.iter_mut().for_each(|inside| {
+                    let to_add = match self.align_direction {
+                        Direction::Right => {
+                            Position(size.0 + interval.0 + self.pos.0, self.pos.1 + interval.1)
+                        }
+                        Direction::Left => {
+                            Position(-size.0 + interval.0 + self.pos.0, self.pos.1 + interval.1)
+                        }
+                        Direction::Top => {
+                            Position(self.pos.0 + interval.0, -size.1 + interval.1 + self.pos.1)
+                        }
+                        Direction::Bottom => {
+                            Position(self.pos.0 + interval.0, size.1 + interval.1 + self.pos.1)
+                        }
+                    };
+
+                    inside.add_pos_obj(to_add);
+                    inside.draw(app, assets, gfx, plugins, state);
+                    inside.add_pos_obj(-to_add);
+                    size += inside.get_size_obj();
+                    interval += self.interval;
+                });
+            }
+            fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
+                let mut inside: &mut [&mut dyn ObjPosForm<State>] = &mut [&mut self.inside.$idx, $( &mut self.inside.$nidx ),*];
+
+                let mut size = Size(0., 0.);
+                let mut interval = Position(0., 0.);
+                inside.iter_mut().for_each(|inside| {
+                    let to_add = match self.align_direction {
+                        Direction::Right => {
+                            Position(size.0 + interval.0 + self.pos.0, self.pos.1 + interval.1)
+                        }
+                        Direction::Left => {
+                            Position(-size.0 + interval.0 + self.pos.0, self.pos.1 + interval.1)
+                        }
+                        Direction::Top => {
+                            Position(self.pos.0 + interval.0, -size.1 + interval.1 + self.pos.1)
+                        }
+                        Direction::Bottom => {
+                            Position(self.pos.0 + interval.0, size.1 + interval.1 + self.pos.1)
+                        }
+                    };
+                    inside.add_pos_obj(to_add);
+                    inside.after(app, assets, plugins, state);
+                    inside.add_pos_obj(-to_add);
+                    size += inside.get_size_obj();
+                    interval += self.interval;
+                });
+            }
+        }
+        impl<State: UIStateCl, $typ, $( $ntyp ),*> Positionable for TupleContainer<State, ($typ, $( $ntyp ),*)>
+        where
+            $typ: ObjPosForm<State> + Clone,
+            $( $ntyp: ObjPosForm<State> + Clone),*
+        {
+            fn with_pos(&self, to_add: Position) -> Self {
+                Self { pos: self.pos + to_add, ..self.clone() }
+            }
+            fn add_pos(&mut self, to_add: Position) {
+                self.pos += to_add;
+            }
+            fn get_size(&self) -> Size {
+                let inside: &[&dyn ObjPosForm<State>] = &[&self.inside.$idx, $( &self.inside.$nidx ),*];
+                let sizes = inside.iter().map(|form| form.get_size_obj()).collect::<Vec<Size>>();
+                let (sizes_h, sizes_v) = (
+                    sizes.iter().map(|form| form.0),
+                    sizes.iter().map(|form| form.1));
+
+                let (mut summed_h, mut summed_v) = (0., 0.);
+                match self.align_direction {
+                    Direction::Left | Direction::Right => {
+                        summed_h = sizes_h.clone().sum::<f32>();
+                    }
+                    Direction::Bottom | Direction::Top => {
+                        summed_v = sizes_v.clone().sum::<f32>();
+                    }
+                }
+                let interval = self.interval * sizes.len() as f32;
+                Size(
+                    match self.align_direction {
+                        Direction::Right => {
+                            summed_h + interval.0
+                        }
+                        Direction::Left => {
+                            -summed_h + interval.0
+                        },
+                        _ => sizes_v.max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
+                    },
+                    match self.align_direction {
+                        Direction::Top => {
+                            -summed_v + interval.1
+                        }
+                        Direction::Bottom => {
+                            summed_v + interval.1
+                        },
+                        _ => sizes_h.max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
+                    }
+                )
+            }
+            fn get_pos(&self) -> Position { self.pos }
+        }
+    };
+}
+
+tuple_impls!(
+    (9 => J),
+    (8 => I),
+    (7 => H),
+    (6 => G),
+    (5 => F),
+    (4 => E),
+    (3 => D),
+    (2 => C),
+    (1 => B),
+    (0 => A),
+);
+
 #[derive(Clone, Builder)]
 #[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct SingleContainer<State: UIStateCl, T: PosForm<State> + Debug> {
@@ -154,6 +313,10 @@ pub struct SingleContainer<State: UIStateCl, T: PosForm<State> + Debug> {
     pub after_draw: Option<fn(&mut SingleContainer<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
     #[builder(default)]
     pub pos: Position
+}
+pub fn single<State: UIStateCl, T: PosForm<State>>(form: T) -> SingleContainerBuilder<State, T> {
+    SingleContainerBuilder::default()
+        .inside(form)
 }
 impl<State: UIStateCl, T: PosForm<State> + Debug> Debug for SingleContainer<State, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -220,6 +383,15 @@ pub struct SliderContainer<State: UIStateCl, T: PosForm<State>, K: PosForm<State
     #[builder(default="1.")]
     pub slide_speed: f32,
 }
+pub fn slider<State: UIStateCl, T: PosForm<State>, K: PosForm<State>>(form: T, slider_inside: K, slider_rect: Rect, max_scroll: f32) -> SliderContainerBuilder<State, T, K> {
+    SliderContainerBuilder::default()
+        .inside(form)
+        .slider(SliderBuilder::default()
+            .rect(slider_rect)
+            .slider_inside(slider_inside)
+            .max_scroll(max_scroll)
+            .build().unwrap())
+}
 impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Form<State> for SliderContainer<State, T, K> {
     fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
         self.slider.draw(app, assets, gfx, plugins, state);
@@ -255,6 +427,10 @@ pub struct StraightDynContainer<State: UIStateCl> {
     pub inside: Vec<Box<dyn ObjPosForm<State>>>,
     #[builder(setter(into), default)]
     pub pos: Position
+}
+pub fn straight_dyn<State: UIStateCl>(forms: Vec<Box<dyn ObjPosForm<State>>>) -> StraightDynContainerBuilder<State> {
+    StraightDynContainerBuilder::default()
+        .inside(forms)
 }
 impl<State: UIStateCl> Form<State> for StraightDynContainer<State> {
     fn draw(&mut self, app: &mut App, assets: &mut Assets,  gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
@@ -296,6 +472,10 @@ pub struct DynContainer<State: UIStateCl> {
     pub align_direction: Direction,
     #[builder(default)]
     pub interval: Position
+}
+pub fn dyn_cont<State: UIStateCl>(forms: Vec<Box<dyn ObjPosForm<State>>>) -> DynContainerBuilder<State> {
+    DynContainerBuilder::default()
+        .inside(forms)
 }
 impl<State: UIStateCl> Form<State> for DynContainer<State> {
     fn draw(&mut self, app: &mut App, assets: &mut Assets,  gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {

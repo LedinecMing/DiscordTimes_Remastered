@@ -26,7 +26,10 @@ pub struct MapBuildingdata {
     pub event: Vec<Event>,
     pub market: Option<Market>,
     pub recruitment: Option<Recruitment>,
-    pub income: Option<u64>,
+    pub pos: (usize, usize),
+    pub size: (u8, u8),
+    pub defense: u64,
+    pub income: u64,
     pub owner: usize,
 }
 

@@ -1,5 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard};
-
+use std::{sync::{Arc, Mutex, MutexGuard}, fmt::Display, ops::Drop};
 #[derive(Debug)]
 pub struct SendMut<T: ?Sized> {
     inner: Arc<Mutex<T>>,
@@ -14,6 +13,7 @@ where
         }
     }
     pub fn get(&self) -> MutexGuard<'_, T> {
+		println!("hey i got locked");
         self.inner.lock().unwrap()
     }
     pub fn clone(&self) -> Self {
@@ -40,4 +40,9 @@ where
     fn from(value: T) -> Self {
         Self::new(value)
     }
+}
+impl<T: ?Sized> Drop for SendMut<T> {
+	fn drop(&mut self) {
+		println!("nvm unlocked");
+	}
 }

@@ -17,7 +17,7 @@ pub struct Modify<V: Num + NumCast> {
 impl<K: Num + NumCast + Add<Percent, Output = K> + Copy> Modify<K> {
     pub fn apply<V: Num + NumCast + Add<Percent, Output = V> + Copy>(&self, mut v: V) -> V {
         let mut v: K =
-            <K as NumCast>::from(v).unwrap() + self.add.unwrap_or(NumCast::from(0).unwrap());
+            <K as NumCast>::from(v).unwrap() + self.add.unwrap_or(K::zero());
         if let Some(percent_add) = &self.percent_add {
             v = v + *percent_add;
         }
