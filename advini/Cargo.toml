@@ -1,0 +1,15 @@
+[package]
+name = "advini"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "advini"
+path = "src/lib.rs"
+crate-type = ["lib"]
+[dependencies]
+ini_core = { path = "../ini_core" }
+num = "0.4.1"
+advini_derive = { path = "../advini_derive" }
+proc-macro2 = "1.0.66"
