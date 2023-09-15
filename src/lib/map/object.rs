@@ -1,19 +1,22 @@
+use std::collections::HashMap;
+
 use crate::lib::{
     battle::{army::Army, troop::Troop},
     items::item::{Item, ITEMS},
-    map::event::Event,
     units::unit::Unit,
 };
-use rand::seq::SliceRandom;
+use rand::{seq::SliceRandom, thread_rng};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ObjectType {
     Building,
+	Bridge,
     MapDeco,
 }
 
 #[derive(Clone, Debug)]
 pub struct ObjectInfo {
+	pub name: String,
     pub path: String,
     pub category: String,
     pub obj_type: ObjectType,
@@ -21,28 +24,52 @@ pub struct ObjectInfo {
     pub size: (u8, u8),
 }
 
+enum Building {
+	Village(u64, u64),
+	Castle,
+	Ruined
+}
+
 #[derive(Clone, Debug)]
 pub struct MapBuildingdata {
-    pub event: Vec<Event>,
+	pub name: String,
+	pub desc: String,
+	pub id: usize,
+    pub event: Vec<usize>,
     pub market: Option<Market>,
     pub recruitment: Option<Recruitment>,
     pub pos: (usize, usize),
-    pub size: (u8, u8),
     pub defense: u64,
     pub income: u64,
-    pub owner: usize,
+    pub owner: Option<usize>,
 }
 
 const RECRUIT_COST: f64 = 2.0;
 #[derive(Clone, Debug)]
 pub struct Market {
-    pub itemcost_range: [u64; 2],
-    pub items: Vec<Item>,
+    pub itemcost_range: (u64, u64),
+    pub items: Vec<usize>,
     pub max_items: usize,
 }
 impl Market {
     fn update(&mut self) {
-        for _ in self.max_items - self.items.len()..0 {}
+        for _ in self.max_items - self.items.len()..0 {
+			let items = ITEMS.lock().unwrap();
+			let nice_items = items
+				.iter()
+				.filter(|(_, item)|
+						self.itemcost_range.0
+						<= item.cost
+						&&
+						item.cost <= self.itemcost_range.1 )
+				.collect::<Vec<_>>();
+			self.items.append(
+				&mut nice_items
+					.choose_multiple(&mut thread_rng(), self.max_items)
+					.map(|(index, _)| **index)
+					.collect()
+			);
+		}
     }
     fn buy(&mut self, buyer: &mut Army, item_num: usize) {
         if self.can_buy(buyer, item_num) {
@@ -54,28 +81,31 @@ impl Market {
         }
     }
     fn can_buy(&self, buyer: &Army, item_num: usize) -> bool {
-        if self
+        if ITEMS.lock().unwrap()[
+			self
             .items
             .get(item_num)
             .expect("Trying to get item at unknown place")
-            .get_info()
+            ]
             .sells
         {
-            return buyer.stats.gold >= self.items[item_num].get_info().cost as u64;
+            return buyer.stats.gold >= self.get_item_cost(item_num);
         }
         false
     }
     fn get_item_cost(&self, item_num: usize) -> u64 {
-        self.items
+		ITEMS.lock().unwrap()[
+			self
+			.items
             .get(item_num)
             .expect("Trying to get item at unknown place")
-            .get_info()
-            .cost
+		]
+        .cost
     }
 }
 #[derive(Clone, Debug)]
 pub struct RecruitUnit {
-    pub unit: Unit,
+    pub unit: usize,
     pub count: usize,
 }
 #[derive(Clone, Debug)]
@@ -84,26 +114,24 @@ pub struct Recruitment {
     pub cost_modify: f64,
 }
 impl Recruitment {
-    pub fn buy(&self, buyer: &mut Army, unit_num: usize) {
-        if self.can_buy(buyer, unit_num) {
-            match buyer.add_troop(Troop {
-                unit: self.units[unit_num].clone().unit,
+    pub fn buy(&mut self, buyer: &mut Army, unit_num: usize, units: &HashMap<usize, Unit>) -> Result<(),()> {
+        if self.can_buy(buyer, unit_num, units) {
+			buyer.add_troop(Troop {
+                unit: units[&self.units[unit_num].unit].clone(),
                 ..Troop::empty()
-            }) {
-                Ok(()) => println!("Успешно приобретён юнит"),
-                Err(()) => println!("Произошла ошибка"),
-            };
+            }.into())?;
+			self.units[unit_num].count-=1;
+			buyer.stats.gold -= units[&self.units[unit_num].unit].info.cost_hire;
         }
+		Err(())
     }
-    pub fn can_buy(&self, buyer: &Army, unit_num: usize) -> bool {
-        return buyer.stats.gold
-            >= (self
-                .units
-                .get(unit_num)
-                .expect("Trying to get unit at unknown index")
-                .unit
-                .info
-                .cost_hire as f64
-                * (RECRUIT_COST * self.cost_modify)) as u64;
+    pub fn can_buy(&self, buyer: &Army, unit_num: usize, units: &HashMap<usize, Unit>) -> bool {
+		let info = &self
+					  .units
+					  .get(unit_num)
+			.expect("Trying to get unit at unknown index");
+        buyer.stats.gold
+            >= units[&info.unit].info.cost_hire && info.count > 0
+                //* (RECRUIT_COST * self.cost_modify)) as u64;
     }
 }

@@ -1,7 +1,4 @@
 use {
-    std::{
-        iter::Extend,
-    },
     once_cell::sync::Lazy,
     notan::{
         prelude::*,
@@ -12,7 +9,7 @@ use {
     notan_ui::{
         defs::*,
         form::Form,
-        text::Text,
+        text::{Text, text},
         wrappers::Button,
         containers::{Container, SingleContainer},
         rect::*
@@ -33,7 +30,8 @@ impl Access<Draw> for State {
     fn get(&self) -> &Draw { &self.draw }
 }
 
-
+static FORMS: Lazy<Mutex<DynContainer<State>>> =
+    Lazy::new(|| Mutex::new(DynContainer::default()));
 static mut forms: Lazy<Vec<Box<dyn Form<State>>>> = Lazy::new(|| {
     vec![
         Box::new(Container {
@@ -73,32 +71,44 @@ static mut forms: Lazy<Vec<Box<dyn Form<State>>>> = Lazy::new(|| {
 
 
 fn setup(gfx: &mut Graphics) -> State {
+	
     State {
         fonts: vec![gfx
-            .create_font(include_bytes!("../../UbuntuMono-RI.ttf"))
+            .create_font(include_bytes!("UbuntuMono-RI.ttf"))
             .expect("shit happens")],
-        draw: gfx.create_draw()
 }   }
-fn draw(app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-    state.draw = gfx.create_draw();
-    get_mut::<State, Draw>(state).clear(Color::WHITE);
-    unsafe {
-        forms.iter_mut().for_each(|form: &mut Box<dyn Form<State>>| form.draw(app, gfx, plugins, state));
-        gfx.render(get::<State, Draw>(state));
-        forms.iter_mut().for_each(|form: &mut Box<dyn Form<State>>| form.after(app, gfx, plugins, state));
-}   }
+fn draw(
+    app: &mut App,
+    assets: &mut Assets,
+    gfx: &mut Graphics,
+    plugins: &mut Plugins,
+    state: &mut State,
+) {
+	let mut draw = gfx.create_draw();
+    FORMS
+        .lock()
+        .unwrap()
+        .draw(app, assets, gfx, plugins, state, &mut draw);
+    gfx.render(&draw);
+}
+fn update(app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
+    FORMS
+        .lock()
+        .unwrap()
+        .after(app, assets, plugins, state);
+}
 
 #[notan_main]
 fn main() -> Result<(), String> {
     let win = WindowConfig::new()
-        .title("notan_ui - Container Buttons")
-        .vsync(true)
-        .lazy_loop(true)
-        .high_dpi(true)
-        .size(900, 1200);
+        .set_title("notan_ui - Container Buttons")
+        .set_vsync(true)
+        .set_lazy_loop(false)
+        .set_high_dpi(true)
+        .set_size(900, 1200)
+        .set_resizable(false);
     notan::init_with(setup)
         .add_config(win)
-        .add_config(TextConfig)
         .add_config(DrawConfig)
         .draw(draw)
         .build()

@@ -3,7 +3,8 @@
 use {
     std::{
         marker::PhantomData,
-    },
+		fmt::Debug,
+	},
     notan::{
         prelude::{Color, Graphics, Plugins, App, Assets},
         draw::*
@@ -26,11 +27,32 @@ impl Default for FontId {
         Self(0)
 }   }
 
-#[derive(Clone, Debug, Builder)]
+pub trait ToText<State: UIStateCl>: Clone + Send  {
+	fn to_text(&self, _state: &State) -> String;
+	fn try_to_text(&self) -> Option<String>;
+}
+impl<State: UIStateCl> ToText<State> for String {
+	fn to_text(&self, _state: &State) -> String { self.to_string() }
+	fn try_to_text(&self) -> Option<String> { self.to_string().into() }
+}
+impl<State: UIStateCl> ToText<State> for &str {
+	fn to_text(&self, _state: &State) -> String { self.to_string() }
+	fn try_to_text(&self) -> Option<String> { self.to_string().into() }
+}
+impl<T: ToString, F: Fn(&State) -> T + Clone + Send, State: UIStateCl> ToText<State> for F {
+	fn to_text(&self, _state: &State) -> String {
+		(self)(_state).to_string()
+	}
+	fn try_to_text(&self) -> Option<String> {
+		None
+	}
+}
+
+#[derive(Clone, Builder)]
 #[builder(build_fn(error = "StructBuildError"), pattern="owned")]
-pub struct Text<State: UIStateCl> {
+pub struct Text<State: UIStateCl, T: ToText<State>> {
     #[builder(setter(into))]
-    pub text: String,
+    pub text: T,
     #[builder(setter(into), default)]
     pub font: FontId,
     #[builder(default="AlignHorizontal::Left")]
@@ -50,18 +72,29 @@ pub struct Text<State: UIStateCl> {
     #[builder(default)]
     pub boo: PhantomData<State>
 }
-pub fn text<State: UIStateCl>(text: impl Into<String>) -> TextBuilder<State> {
+pub fn text<State: UIStateCl, T: ToText<State>>(text: T) -> TextBuilder<State, T> {
     TextBuilder::default()
-        .text(text.into())
+        .text(text)
 }
-impl<State: UIStateCl> Form<State> for Text<State> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+impl<State: UIStateCl, T: ToText<State>> Debug for Text<State, T> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Text")
+			.field("pos", &self.pos)
+			.field("width", &self.max_width)
+			.field("align_v", &self.align_v)
+			.field("align_h", &self.align_h)
+			.field("color", &self.color)
+			.finish_non_exhaustive()
+	}
+}
+impl<State: UIStateCl, T: ToText<State>> Form<State> for Text<State, T> {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
         let font = Access::<Vec<Font>>::get_mut(state)
             .get(self.font.0)
             .expect(&*format!("Cant find font with index {}", self.font.0)).clone();
-        let draw = Access::<Draw>::get_mut(state);
         {
-            let mut text_builder = draw.text(&font, &*self.text);
+			let text = &*self.text.to_text(&state);
+            let mut text_builder = draw.text(&font, text);
             let mut text_builder = match self.align_h {
                 AlignHorizontal::Left => text_builder.h_align_left(),
                 AlignHorizontal::Center => text_builder.h_align_center(),
@@ -72,7 +105,6 @@ impl<State: UIStateCl> Form<State> for Text<State> {
                 AlignVertical::Center => text_builder.v_align_middle(),
                 AlignVertical::Top => text_builder.v_align_top()
             };
-            let text_size = self.get_size();
             let mut pos = self.pos;
             text_builder
                 .position(pos.0, pos.1)
@@ -86,7 +118,7 @@ impl<State: UIStateCl> Form<State> for Text<State> {
         }   }
     fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {}
 }
-impl<State: UIStateCl> Positionable for Text<State> {
+impl<State: UIStateCl, T: ToText<State>> Positionable for Text<State, T> {
     fn with_pos(&self, to_add: Position) -> Self {
         Self { pos: self.pos + to_add, ..self.clone() }
     }
@@ -96,22 +128,22 @@ impl<State: UIStateCl> Positionable for Text<State> {
     fn get_size(&self) -> Size {
         let mut size = Size(0., 0.);
         if let Some(rect_size) = self.rect_size {
-            size = rect_size;
+            return rect_size;
         }
         if let Some(width) = self.max_width {
             size.0 = width;
         }
-        if size == Size(0., 0.) && self.text.chars().count() > 0 {
-            return Size(self.size * (self.text.chars().count() as f32), self.size)
+		if let Some(text) = self.text.try_to_text(){
+            return Size(if size.0 == 0. { self.size * (text.chars().count() as f32) } else { size.0 }, self.size)
         }
         size
     }
     fn get_pos(&self) -> Position { self.pos }
 }
-impl<State: UIStateCl> Default for Text<State> {
+impl<State: UIStateCl, T: ToText<State> + Default> Default for Text<State, T> {
     fn default() -> Self {
         Self {
-            text: "".into(),
+            text: Default::default(),
             font: FontId(0),
             align_h: AlignHorizontal::Left,
             align_v: AlignVertical::Top,
@@ -122,8 +154,8 @@ impl<State: UIStateCl> Default for Text<State> {
             color: Color::BLACK,
             boo: PhantomData
 }   }   }
-impl<State: UIStateCl> Text<State> {
-    pub fn new(text: impl Into<String>, font: impl Into<FontId>,
+impl<State: UIStateCl, T: ToText<State>> Text<State, T> {
+    pub fn new(text: T, font: impl Into<FontId>,
                align_h: AlignHorizontal,
                align_v: AlignVertical,
                pos: Position,
@@ -131,7 +163,7 @@ impl<State: UIStateCl> Text<State> {
                max_width: Option<f32>,
                color: Color) -> Self {
         Self {
-            text: text.into(),
+            text,
             font: font.into(),
             align_h,
             align_v,
@@ -144,22 +176,22 @@ impl<State: UIStateCl> Text<State> {
 }   }   }
 #[derive(Clone, Debug, Builder)]
 #[builder(build_fn(error = "StructBuildError"))]
-pub struct TextChain<State: UIStateCl> {
+pub struct TextChain<State: UIStateCl, T: ToText<State>> {
     #[builder(default)]
-    pub texts: Vec<Text<State>>,
+    pub texts: Vec<Text<State, T>>,
     #[builder(setter(into), default)]
     pub pos: Position,
     pub max_width: f32
 }
-impl<State: UIStateCl> Form<State> for TextChain<State> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+impl<State: UIStateCl, T: ToText<State>> Form<State> for TextChain<State, T> {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
         let max_width = self.max_width;
         let mut add_pos = Position(0., 0.);
         self.texts.iter_mut().for_each(|text| {
             if text.max_width > Some(self.max_width) || text.max_width.is_none() {
                 text.max_width = Some(max_width);
             }
-            text.with_pos(self.pos + add_pos).draw(app, assets, gfx, plugins, state);
+            text.with_pos(self.pos + add_pos).draw(app, assets, gfx, plugins, state, draw);
             if *text.max_width.as_ref().unwrap() == text.get_size().0 {
                 add_pos.0 = 0.;
                 add_pos.1 += text.get_size().1;
@@ -175,7 +207,7 @@ impl<State: UIStateCl> Form<State> for TextChain<State> {
             text.add_pos(-self.pos);
         })
 }   }
-impl<State: UIStateCl> Positionable for TextChain<State> {
+impl<State: UIStateCl, T: ToText<State>> Positionable for TextChain<State, T> {
     fn with_pos(&self, to_add: Position) -> Self { Self { pos: self.pos + to_add, ..self.clone() } }
     fn add_pos(&mut self, to_add: Position) { self.pos += to_add; }
     fn get_size(&self) -> Size { (self.max_width, self.texts.iter().map(|text| text.get_size().1).sum()).into() }

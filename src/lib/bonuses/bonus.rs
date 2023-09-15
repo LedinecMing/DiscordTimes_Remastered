@@ -1,6 +1,6 @@
 use crate::lib::{
     time::time::Time,
-    units::unit::{Power, Unit, UnitPos},
+    units::unit::{Power, Unit, UnitPos}, battle::battlefield::BattleInfo,
 };
 use dyn_clone::DynClone;
 use std::fmt::Debug;
@@ -14,6 +14,7 @@ pub trait Bonus: DynClone + Debug + Send {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+		battle: &BattleInfo
     ) -> Power {
         damage
     }

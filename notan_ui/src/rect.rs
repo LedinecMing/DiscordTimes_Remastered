@@ -1,14 +1,14 @@
 use {
     std::ops::Div,
-    derive_more::{Add, Sub, Mul, Neg, AddAssign, SubAssign}
+    derive_more::{Add, Sub, Mul, Neg, AddAssign, SubAssign, Sum}
 };
 
 
-#[derive(Add, AddAssign, Sub, SubAssign, Neg, Mul, PartialEq, Copy, Clone, Debug)]
+#[derive(Add, AddAssign, Sub, SubAssign, Neg, Mul, PartialEq, Copy, Clone, Debug, Sum)]
 pub struct Position(pub f32, pub f32);
-#[derive(Add, AddAssign, Sub, SubAssign, Neg, Mul, PartialEq, Copy, Clone, Debug)]
+#[derive(Add, AddAssign, Sub, SubAssign, Neg, Mul, PartialEq, Copy, Clone, Debug, Sum)]
 pub struct Size(pub f32, pub f32);
-#[derive(Add, AddAssign, Sub, SubAssign, Neg, Mul, PartialEq, Copy, Clone, Debug)]
+#[derive(Add, AddAssign, Sub, SubAssign, Neg, Mul, PartialEq, Copy, Clone, Debug, Sum)]
 pub struct Rect {
     pub pos: Position,
     pub size: Size

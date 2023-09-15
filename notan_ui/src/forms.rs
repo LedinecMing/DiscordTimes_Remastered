@@ -28,7 +28,7 @@ pub struct Data<State: UIStateCl, K: Clone + Send, V: Clone + Send> {
     pub boo: PhantomData<State>
 }
 impl<State: UIStateCl, K: Clone + Send, V: Clone + Send> Form<State> for Data<State, K, V> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {}
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {}
     fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {}
 }
 impl<State: UIStateCl, K: Clone + Send, V: Clone + Send> Default for Data<State, K, V> {
@@ -54,7 +54,7 @@ struct Image<'a, State: UIStateCl> {
     pub boo: PhantomData<State>
 }
 impl<State: UIStateCl> Form<State> for Image<'_, State> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
         Access::<Draw>::get_mut(state).image(self.image)
             .position(self.rect.pos.0, self.rect.pos.1)
             .size(self.rect.size.0, self.rect.size.1)
@@ -80,7 +80,7 @@ pub struct Drawing<State: UIStateCl> {
     #[builder(default)]
     pub pos: Position,
     #[builder(setter(strip_option))]
-    pub to_draw: fn(&mut Drawing<State>, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)
+    pub to_draw: DrawFunction<State, Drawing<State>>
 }
 impl<State: UIStateCl> Debug for Drawing<State> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -89,8 +89,8 @@ impl<State: UIStateCl> Debug for Drawing<State> {
             .finish()
 }   }
 impl<State: UIStateCl> Form<State> for Drawing<State> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        (self.to_draw)(self, app, assets, gfx, plugins, state);
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
+        (self.to_draw)(self, app, assets, gfx, plugins, state, draw);
     }
     fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {}
 }

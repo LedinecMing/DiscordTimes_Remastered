@@ -1,7 +1,7 @@
 use crate::{
     lib::battle::{
         army::MAX_TROOPS,
-        battlefield::{field_type, Field},
+        battlefield::{field_type, Field, BattleInfo},
     },
     LOCALE,
 };
@@ -110,14 +110,14 @@ pub enum MagicType {
 
 #[derive(Clone, Debug)]
 pub struct LevelUpInfo {
-    pub stats: UnitStats,
+    pub stats: ModifyUnitStats,
     pub xp_up: i16,
     pub max_xp: u64,
 }
 impl LevelUpInfo {
     pub fn empty() -> Self {
         Self {
-            stats: UnitStats::empty(),
+            stats: ModifyUnitStats::default(),
             xp_up: 0,
             max_xp: 0,
         }
@@ -131,8 +131,9 @@ pub struct UnitInfo {
     pub cost: u64,
     pub cost_hire: u64,
     pub icon_index: usize,
+	pub size: (usize, usize),
     pub unit_type: UnitType,
-    pub next_unit: Vec<String>,
+    pub next_unit: Vec<usize>,
     pub magic_type: Option<MagicType>,
     pub surrender: Option<u64>,
     pub lvl: LevelUpInfo,
@@ -145,6 +146,7 @@ impl UnitInfo {
             cost: 0,
             cost_hire: 0,
             icon_index: 0,
+			size: (1, 1),
             unit_type: UnitType::People,
             next_unit: Vec::new(),
             magic_type: None,
@@ -180,22 +182,11 @@ impl UnitLvl {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct UnitData {
-    pub stats: UnitStats,
-    pub modify: ModifyUnitStats,
-    pub info: UnitInfo,
-    pub lvl: UnitLvl,
-    pub inventory: UnitInventory,
-    pub bonus: Box<dyn Bonus>,
-    pub effects: Vec<Box<dyn Effect>>,
-}
-
-#[derive(Copy, Clone, Add, AddAssign, Sub, SubAssign, Mul, MulAssign, Div, DivAssign)]
+#[derive(Debug, Copy, Clone, Add, AddAssign, Sub, SubAssign, Mul, MulAssign, Div, DivAssign)]
 pub struct UnitPos(pub usize, pub usize);
 impl UnitPos {
     pub fn from_index(index: usize) -> Self {
-        let max_troops = *MAX_TROOPS.lock().unwrap() / 2;
+        let max_troops = *MAX_TROOPS / 2;
         Self(index % max_troops, index / max_troops)
     }
 }
@@ -206,7 +197,7 @@ impl Into<(usize, usize)> for UnitPos {
 }
 impl Into<usize> for UnitPos {
     fn into(self) -> usize {
-        self.0 + self.1 * *MAX_TROOPS.lock().unwrap() / 2
+        self.0 + self.1 * *MAX_TROOPS / 2
     }
 }
 
@@ -215,6 +206,7 @@ pub enum UnitType {
     People,
     Hero,
     Animal,
+	Mecha,
     Undead,
     Rogue,
 }
@@ -239,18 +231,32 @@ fn heal_unit(me: &mut Unit, unit: &mut Unit, damage: Power, magic_type: MagicTyp
         _ => unit.heal(damage.magic),
     };
 }
-fn bless_unit(me: &mut Unit, target: &mut Unit, damage: Power) -> bool {
-    if !target.has_effect_kind(EffectKind::MageSupport) {
-        target.add_effect(Box::new(HealMagic::new(damage.magic)));
-        return true;
-    }
-    false
+fn bless_unit(me: &mut Unit, target: &mut Unit, damage: Power, magic_type: MagicType) -> bool {
+	match (target.info.unit_type, magic_type) {
+        (UnitType::Rogue | UnitType::Hero | UnitType::People, Death(_)) => false,
+        (UnitType::Undead, Life(_)) => false,
+		(UnitType::Mecha, _) => false,
+		_ => {
+			if !target.has_effect_kind(EffectKind::MageSupport) {
+				target.add_effect(Box::new(HealMagic::new(damage.magic)));
+				return true;
+			}
+			false
+		}
+	}
 }
 fn heal_bless(me: &mut Unit, target: &mut Unit, damage: Power, magic_type: MagicType) -> bool {
-    if heal_unit(me, target, damage, magic_type) {
-        return bless_unit(me, target, damage);
-    }
-    true
+	match (target.info.unit_type, magic_type) {
+        (UnitType::Rogue | UnitType::Hero | UnitType::People, Death(_)) => false,
+        (UnitType::Undead, Life(_)) => false,
+		(UnitType::Mecha, Death(_) | Life(_)) => false,
+		_ => {
+			if heal_unit(me, target, damage, magic_type) {
+				return bless_unit(me, target, damage, magic_type);
+			}
+			true
+		}
+	}
 }
 
 fn elemental_bless(me: &mut Unit, target: &mut Unit, damage: Power) -> bool {
@@ -296,6 +302,7 @@ fn magic_attack(
     magic_type: MagicType,
     target_pos: UnitPos,
     my_pos: UnitPos,
+	battle: &BattleInfo
 ) -> bool {
     match (target.info.unit_type, magic_type) {
         (UnitType::Undead, Life(_)) => {
@@ -306,7 +313,7 @@ fn magic_attack(
     if !magic_curse(me, target, damage, magic_type) {
         damage.hand = 0;
         damage.ranged = 0;
-        target.being_attacked(&damage, me, target_pos, my_pos);
+        target.being_attacked(&damage, me, target_pos, my_pos, battle);
     }
     true
 }
@@ -317,12 +324,13 @@ fn elemental_attack(
     damage: Power,
     target_pos: UnitPos,
     my_pos: UnitPos,
+	battle: &BattleInfo
 ) -> bool {
     let mut damage = damage;
     if !elemental_curse(me, target, damage) {
         damage.hand = 0;
         damage.ranged = 0;
-        target.being_attacked(&damage, me, target_pos, my_pos);
+        target.being_attacked(&damage, me, target_pos, my_pos, battle);
     }
     true
 }
@@ -365,10 +373,10 @@ impl Unit {
     pub fn can_attack(&self, target: &Unit, target_pos: UnitPos, my_pos: UnitPos) -> bool {
         let effected = self.modified;
         let is_enemy = self.army != target.army;
-        let is_in_back = my_pos.1 == 0;
-        let my_field = field_type(my_pos.0.into(), *MAX_TROOPS.lock().unwrap());
-        let enemy_field = field_type(target_pos.0.into(), *MAX_TROOPS.lock().unwrap());
-        let mut damage = effected.damage;
+        let my_field = field_type(my_pos.into(), *MAX_TROOPS);
+		let is_in_back = my_field == Field::Back;
+        let enemy_field = field_type(target_pos.into(), *MAX_TROOPS);
+        let damage = effected.damage;
         /*
          * C(`B`(`A`|D)) | `C`(`A^B`)
          */
@@ -378,6 +386,7 @@ impl Unit {
         let both_not_in_reserve = !me_in_reserve && !enemy_in_reserve;
         let a = (is_enemy && (!me_in_reserve || self.bonus.id() == "Ghost") && !enemy_in_reserve)
             || (!is_enemy && (both_not_in_reserve || both_in_reserve));
+		//dbg!(&self.info.name, &target.info.name, &a, &target_pos, &my_pos, my_field, enemy_field, is_enemy);
         return if !a {
             false
         } else if damage.ranged > 0
@@ -395,13 +404,24 @@ impl Unit {
                     let direction = get_magic_direction(magic_type);
                     match (direction, magic_type, is_enemy) {
                         (ToAlly, _, false) => match magic_type {
-                            Death(_) | Life(_) => !target.has_effect_kind(EffectKind::MageSupport),
+                            Death(_) | Life(_) => {
+								match (target.info.unit_type, magic_type) {
+									(UnitType::Rogue | UnitType::Hero | UnitType::People, Death(_)) => false,
+									(UnitType::Undead, Life(_)) => false,
+									_ => !target.has_effect_kind(EffectKind::MageSupport)
+								}
+							},
                             Elemental(_) => !target.has_effect_kind(EffectKind::MageSupport),
                         },
                         (ToAll, _, _) => match (magic_type, is_enemy) {
                             (Death(_) | Life(_), true) => is_in_back,
                             (Death(_) | Life(_), false) => {
-                                !target.has_effect_kind(EffectKind::MageSupport)
+                                match (target.info.unit_type, magic_type) {
+									(UnitType::Rogue | UnitType::Hero | UnitType::People, Death(_)) => false,
+									(UnitType::Undead, Life(_)) => false,
+									(UnitType::Mecha, Death(_) | Life(_) ) => false,
+									_ => !target.has_effect_kind(EffectKind::MageSupport)
+								}
                             }
                             (Elemental(_), true) => is_in_back,
                             (Elemental(_), false) => {
@@ -418,11 +438,23 @@ impl Unit {
                         },
                         (StrikeOnly, _, true) => is_in_back,
                         (BlessOnly, _, false) => match magic_type {
-                            Life(_) | Death(_) => !target.has_effect_kind(EffectKind::MageSupport),
+                            Life(_) | Death(_) => {
+								match (target.info.unit_type, magic_type) {
+									(UnitType::Rogue | UnitType::Hero | UnitType::People, Death(_)) => false,
+									(UnitType::Undead, Life(_)) => false,
+									(UnitType::Mecha, Death(_) | Life(_) ) => false,
+									_=> !target.has_effect_kind(EffectKind::MageSupport)
+								}
+							},
                             Elemental(_) => !target.has_effect_kind(EffectKind::MageSupport),
                         },
                         (CureOnly, Life(_) | Death(_), false) => {
-                            !target.stats.hp == target.stats.max_hp
+                            match (target.info.unit_type, magic_type) {
+								(UnitType::Rogue | UnitType::Hero | UnitType::People, Death(_)) => false,
+								(UnitType::Undead, Life(_)) => false,
+								(UnitType::Mecha, Death(_) | Life(_) ) => false,
+								_ => !target.stats.hp == target.stats.max_hp
+							}
                         }
                         _ => false,
                     }
@@ -430,12 +462,12 @@ impl Unit {
             }
         };
     }
-    pub fn attack(&mut self, target: &mut Unit, target_pos: UnitPos, my_pos: UnitPos) -> bool {
+    pub fn attack(&mut self, target: &mut Unit, target_pos: UnitPos, my_pos: UnitPos, battle: &BattleInfo) -> bool {
         let effected = self.modified;
         let is_enemy = self.army != target.army;
-        let is_in_back = my_pos.1 == 0;
-        let my_field = field_type(my_pos.0.into(), *MAX_TROOPS.lock().unwrap());
-        let enemy_field = field_type(target_pos.0.into(), *MAX_TROOPS.lock().unwrap());
+        let my_field = field_type(my_pos.into(), *MAX_TROOPS);
+		let is_in_back = my_field == Field::Back;
+        let enemy_field = field_type(target_pos.into(), *MAX_TROOPS);
         let mut damage = effected.damage;
         let enemy_in_reserve = enemy_field == Field::Reserve;
         let me_in_reserve = my_field == Field::Reserve;
@@ -452,12 +484,12 @@ impl Unit {
         {
             damage.hand = 0;
             damage.magic = 0;
-            target.being_attacked(&damage, self, target_pos, my_pos);
+            target.being_attacked(&damage, self, target_pos, my_pos, battle);
             true
         } else if damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy {
             damage.ranged = 0;
             damage.magic = 0;
-            target.being_attacked(&damage, self, target_pos, my_pos);
+            target.being_attacked(&damage, self, target_pos, my_pos, battle);
             true
         } else {
             match self.info.magic_type {
@@ -473,7 +505,7 @@ impl Unit {
                             (Death(_) | Life(_), true) => {
                                 if is_in_back {
                                     magic_attack(
-                                        self, target, damage, magic_type, my_pos, target_pos,
+                                        self, target, damage, magic_type, my_pos, target_pos, battle
                                     )
                                 } else {
                                     false
@@ -484,7 +516,7 @@ impl Unit {
                             }
                             (Elemental(_), true) => {
                                 if is_in_back {
-                                    elemental_attack(self, target, damage, target_pos, my_pos)
+                                    elemental_attack(self, target, damage, target_pos, my_pos, battle)
                                 } else {
                                     false
                                 }
@@ -495,10 +527,10 @@ impl Unit {
                             if is_in_back {
                                 match magic_type {
                                     Death(_) | Life(_) => magic_attack(
-                                        self, target, damage, magic_type, my_pos, target_pos,
+                                        self, target, damage, magic_type, my_pos, target_pos, battle
                                     ),
                                     Elemental(_) => {
-                                        elemental_attack(self, target, damage, target_pos, my_pos)
+                                        elemental_attack(self, target, damage, target_pos, my_pos, battle)
                                     }
                                 }
                             } else {
@@ -512,11 +544,11 @@ impl Unit {
                         (StrikeOnly, _, true) => {
                             damage.hand = 0;
                             damage.ranged = 0;
-                            target.being_attacked(&damage, self, my_pos, target_pos);
+                            target.being_attacked(&damage, self, my_pos, target_pos, battle);
                             true
                         }
                         (BlessOnly, _, false) => match magic_type {
-                            Life(_) | Death(_) => bless_unit(self, target, damage),
+                            Life(_) | Death(_) => bless_unit(self, target, damage, magic_type),
                             Elemental(_) => elemental_bless(self, target, damage),
                         },
                         (CureOnly, Life(_) | Death(_), false) => {
@@ -615,13 +647,14 @@ impl Unit {
         sender: &mut Unit,
         my_pos: UnitPos,
         target_pos: UnitPos,
+		battle: &BattleInfo
     ) -> u64 {
         let corrected_damage = self.correct_damage(damage, sender.info.magic_type);
         let unit_bonus = sender.get_bonus();
         let corrected_damage = unit_bonus.on_attacking(corrected_damage, self, sender);
         let corrected_damage =
             self.get_bonus()
-                .on_attacked(corrected_damage, self, sender, my_pos, target_pos);
+                .on_attacked(corrected_damage, self, sender, my_pos, target_pos, battle);
         let mut corrected_damage_units =
             corrected_damage.magic + corrected_damage.ranged + corrected_damage.hand;
         if corrected_damage_units == 0 {
@@ -738,12 +771,14 @@ impl Display for Unit {
             None => locale.get("unitstats_empty"),
         }
         .to_string();
+		use UnitType::*;
         let unit_type = match self.info.unit_type {
-            UnitType::Undead => locale.get("unitstats_unittype_undead"),
-            UnitType::People => locale.get("unitstats_unittype_people"),
-            UnitType::Hero => locale.get("unitstats_unittype_hero"),
-            UnitType::Rogue => locale.get("unitstats_unittype_rogue"),
-            UnitType::Animal => locale.get("unitstats_unittype_animal"),
+            Undead => locale.get("unitstats_unittype_undead"),
+            People => locale.get("unitstats_unittype_people"),
+            Hero => locale.get("unitstats_unittype_hero"),
+            Rogue => locale.get("unitstats_unittype_rogue"),
+            Animal => locale.get("unitstats_unittype_animal"),
+			Mecha => locale.get("unitstats_unittype_mecha")
         }
         .to_string();
         let surrender = if self.info.surrender > Some(0) {
@@ -781,7 +816,7 @@ impl Display for Unit {
             locale.get("unitstats_cost_hire"),
             self.info.cost,
             locale.get("unitstats_cost_per_day"),
-            self.info.next_unit.join("|"),
+            "|",
             surrender,
             locale.get("unitstats_upgrade"),
             locale.get("unitstats_bonus"),

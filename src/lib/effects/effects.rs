@@ -373,7 +373,26 @@ impl Effect for ArtilleryEffect {
     }
 }
 
-const SPEAR_PERCENT: Percent = Percent::const_new(300);
+#[derive(Copy, Clone, Debug)]
+pub struct RessurectedEffect {}
+impl Effect for RessurectedEffect {
+	fn update_stats(&mut self, unit: &mut Unit) {
+		unit.stats.hp += Percent::new(25);
+	}
+	fn get_kind(&self) -> EffectKind {
+		EffectKind::Fire
+	}
+	fn is_dead(&self) -> bool {
+		false
+	}
+}
+impl RessurectedEffect {
+	pub fn new() -> Self {
+		RessurectedEffect {}
+	}
+}
+
+const SPEAR_PERCENT: Percent = Percent::const_new(200);
 #[derive(Copy, Clone, Debug)]
 pub struct SpearEffect {
     pub info: EffectInfo,

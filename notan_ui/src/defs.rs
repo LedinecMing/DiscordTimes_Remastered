@@ -1,7 +1,7 @@
 use {
     std::fmt::Debug,
     notan::{
-        prelude::AppState,
+        prelude::{AppState, App, Assets, Graphics, Plugins},
         draw::*
     },
     super::{
@@ -58,6 +58,9 @@ pub trait PosForm<State: UIState>: Form<State> + Positionable + Clone + Debug {
 }
 impl<T, State: UIState> PosForm<State> for T where T: Form<State> + Positionable + Clone + Debug {}
 pub trait UIStateCl = UIState + Clone + Send;
+
+pub type DrawFunction<State: UIStateCl, Form: PosForm<State>> = fn(&mut Form, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State, &mut Draw);
+pub type UpdateFunction<State: UIStateCl, Form: PosForm<State>> = fn(&mut Form, &mut App, &mut Assets, &mut Plugins, &mut State);
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum AlignHorizontal {

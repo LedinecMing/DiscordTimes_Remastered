@@ -36,8 +36,8 @@ pub fn container<State: UIStateCl, T: PosForm<State>>(inside: Vec<T>) -> Contain
         .inside(inside)
 }
 impl<State: UIStateCl, T: PosForm<State>> Form<State> for Container<State, T> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        self.calc_insides().iter_mut().for_each(|form| form.draw(app, assets, gfx, plugins, state));
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
+        self.calc_insides().iter_mut().for_each(|form| form.draw(app, assets, gfx, plugins, state, draw));
     }
     fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         let inside_len = self.inside.len();
@@ -179,7 +179,7 @@ macro_rules! tuple_impls {
             $typ: ObjPosForm<State> + Clone,
             $( $ntyp: ObjPosForm<State> + Clone),*
         {
-            fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+            fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
                 let mut inside: &mut [&mut dyn ObjPosForm<State>] = &mut [&mut self.inside.$idx, $( &mut self.inside.$nidx ),*];
 
                 let mut size = Size(0., 0.);
@@ -201,14 +201,14 @@ macro_rules! tuple_impls {
                     };
 
                     inside.add_pos_obj(to_add);
-                    inside.draw(app, assets, gfx, plugins, state);
+                    inside.draw(app, assets, gfx, plugins, state, draw);
                     inside.add_pos_obj(-to_add);
                     size += inside.get_size_obj();
                     interval += self.interval;
                 });
             }
             fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
-                let mut inside: &mut [&mut dyn ObjPosForm<State>] = &mut [&mut self.inside.$idx, $( &mut self.inside.$nidx ),*];
+                let inside: &mut [&mut dyn ObjPosForm<State>] = &mut [&mut self.inside.$idx, $( &mut self.inside.$nidx ),*];
 
                 let mut size = Size(0., 0.);
                 let mut interval = Position(0., 0.);
@@ -308,9 +308,9 @@ pub struct SingleContainer<State: UIStateCl, T: PosForm<State> + Debug> {
     #[builder(setter(strip_option), default="None")]
     pub inside: Option<T>,
     #[builder(setter(strip_option), default="None")]
-    pub on_draw: Option<fn(&mut SingleContainer<State, T>, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)>,
+    pub on_draw: Option<DrawFunction<State, SingleContainer<State, T>>>,
     #[builder(setter(strip_option), default="None")]
-    pub after_draw: Option<fn(&mut SingleContainer<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    pub after_draw: Option<UpdateFunction<State, SingleContainer<State, T>>>,
     #[builder(default)]
     pub pos: Position
 }
@@ -326,15 +326,15 @@ impl<State: UIStateCl, T: PosForm<State> + Debug> Debug for SingleContainer<Stat
             .finish()
 }   }
 impl<State: UIStateCl, T: PosForm<State> + Debug> Form<State> for SingleContainer<State, T> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
         if let Some(form) = &mut self.inside {
             form.add_pos(self.pos);
         }
         if let Some(func) = self.on_draw {
-            func(self, app, assets, gfx, plugins, state);
+            func(self, app, assets, gfx, plugins, state, draw);
         }
         if let Some(form) = &mut self.inside {
-            form.draw(app, assets, gfx, plugins, state);
+            form.draw(app, assets, gfx, plugins, state, draw);
             form.add_pos(-self.pos);
         }   }
 
@@ -393,9 +393,9 @@ pub fn slider<State: UIStateCl, T: PosForm<State>, K: PosForm<State>>(form: T, s
             .build().unwrap())
 }
 impl<State: UIStateCl, T: PosForm<State>, K: PosForm<State>> Form<State> for SliderContainer<State, T, K> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        self.slider.draw(app, assets, gfx, plugins, state);
-        self.inside.with_pos(Position(0.,self.slider.scroll)).draw(app, assets, gfx, plugins, state);
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
+        self.slider.draw(app, assets, gfx, plugins, state, draw);
+        self.inside.with_pos(Position(0.,self.slider.scroll)).draw(app, assets, gfx, plugins, state, draw);
     }
     fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         self.inside.add_pos(Position(0.,self.slider.scroll));
@@ -433,8 +433,8 @@ pub fn straight_dyn<State: UIStateCl>(forms: Vec<Box<dyn ObjPosForm<State>>>) ->
         .inside(forms)
 }
 impl<State: UIStateCl> Form<State> for StraightDynContainer<State> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets,  gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        self.inside.iter_mut().for_each(|form| form.draw(app, assets, gfx, plugins, state));
+    fn draw(&mut self, app: &mut App, assets: &mut Assets,  gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
+        self.inside.iter_mut().for_each(|form| form.draw(app, assets, gfx, plugins, state, draw));
     }
     fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         self.inside.iter_mut().for_each(|inside: &mut Box<dyn ObjPosForm<State>>| {
@@ -473,17 +473,41 @@ pub struct DynContainer<State: UIStateCl> {
     #[builder(default)]
     pub interval: Position
 }
+
 pub fn dyn_cont<State: UIStateCl>(forms: Vec<Box<dyn ObjPosForm<State>>>) -> DynContainerBuilder<State> {
     DynContainerBuilder::default()
         .inside(forms)
 }
 impl<State: UIStateCl> Form<State> for DynContainer<State> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets,  gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
-        self.calc_insides().iter_mut().for_each(|form| form.draw(app, assets, gfx, plugins, state));
+    fn draw(&mut self, app: &mut App, assets: &mut Assets,  gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
+        let inside_len = self.inside.len();
+        let inside_sizes = self.inside.iter().map(|form| form.get_size_obj()).collect::<Vec<Size>>();
+        self.inside.iter_mut().zip(0..inside_len).for_each(|(inside, i): (&mut Box<dyn ObjPosForm<State>>, usize)| {
+            let sizes = &inside_sizes[0..i];
+            let interval = self.interval * i as f32;
+            let pos = self.pos;
+            let to_add = match self.align_direction {
+                Direction::Right => {
+                    Position(sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + pos.0, pos.1 + interval.1)
+                }
+                Direction::Left => {
+                    Position(-sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + pos.0, pos.1 + interval.1)
+                }
+                Direction::Top => {
+                    Position(pos.0 + interval.0, -sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + pos.1)
+                }
+                Direction::Bottom => {
+                    Position(pos.0 + interval.0, sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + pos.1)
+                }
+            };
+            inside.add_pos_obj(to_add);
+            inside.draw(app, assets, gfx, plugins, state, draw);
+            inside.add_pos_obj(-to_add);
+        });
     }
     fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         let inside_len = self.inside.len();
-        let inside_sizes = self.inside.iter().map(|form| form.get_size_obj()).collect::<Vec<Size>>();
+		let inside_sizes = self.inside.iter().map(|form| form.get_size_obj()).collect::<Vec<Size>>();
         self.inside.iter_mut().zip(0..inside_len).for_each(|(inside, i): (&mut Box<dyn ObjPosForm<State>>, usize)| {
             let sizes = &inside_sizes[0..i];
             let interval = self.interval * i as f32;
@@ -507,32 +531,6 @@ impl<State: UIStateCl> Form<State> for DynContainer<State> {
             inside.add_pos_obj(-to_add);
         });
 }   }
-impl<State: UIStateCl> DynContainer<State> {
-    pub fn calc_insides(&self) -> Vec<Box<dyn ObjPosForm<State>>> {
-        let inside_sizes = self.inside.iter().map(|form| form.get_size_obj()).collect::<Vec<Size>>();
-
-        self.inside.iter().zip(0..(self.inside.len())).map(|(inside, i): (&Box<dyn ObjPosForm<State>>, usize)| {
-            let sizes = &inside_sizes[0..i];
-            let interval = self.interval * i as f32;
-            let to_add = match self.align_direction {
-                Direction::Right => {
-                    Position(sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + self.pos.0, self.pos.1 + interval.1)
-                }
-                Direction::Left => {
-                    Position(-sizes.iter().map(|&size| size.0).sum::<f32>() + interval.0 + self.pos.0, self.pos.1 + interval.1)
-                }
-                Direction::Top => {
-                    Position(self.pos.0 + interval.0, -sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + self.pos.1)
-                }
-                Direction::Bottom => {
-                    Position(self.pos.0 + interval.0, sizes.iter().map(|&size| size.1).sum::<f32>() + interval.1 + self.pos.1)
-                }
-            };
-            let mut clonned = inside.clone();
-            clonned.add_pos_obj(to_add);
-            clonned
-        }).collect()
-    }   }
 impl<State: UIStateCl> Positionable for DynContainer<State> {
     fn with_pos(&self, to_add: Position) -> Self {
         let mut cloned = self.clone();
@@ -542,7 +540,10 @@ impl<State: UIStateCl> Positionable for DynContainer<State> {
     fn add_pos(&mut self, to_add: Position) {
         self.pos += to_add;
     }
-    fn get_size(&self) -> Size { Default::default() }
+    fn get_size(&self) -> Size {
+		let size: Size = self.inside.iter().map(|v| v.get_size_obj()).sum();
+		Size(size.0 + self.interval.0 * self.inside.len() as f32, size.1 + self.interval.1 * self.inside.len() as f32)
+	}
     fn get_pos(&self) -> Position { self.pos }
 }
 impl<State: UIStateCl> Default for DynContainer<State> {
@@ -552,3 +553,56 @@ impl<State: UIStateCl> Default for DynContainer<State> {
         align_direction: Direction::Right,
         interval: Position(0., 0.)
 }   }   }
+
+#[derive(Clone, Debug)]
+pub struct Centered<State: UIStateCl, F: PosForm<State>> {
+	pub vertical_center: bool,
+	pub horizontal_center: bool,
+	pub inside: F,
+	pub boo: PhantomData<State>
+}
+pub fn center<State: UIStateCl, F: PosForm<State>>(v_h: (bool, bool), inside: F) -> Centered<State, F> {
+	Centered { vertical_center: v_h.0, horizontal_center: v_h.1, inside, boo: Default::default() }
+}
+impl<State: UIStateCl, F: PosForm<State>> Form<State> for Centered<State, F> {
+	fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
+		let size = self.inside.get_size();
+		self.inside.add_pos(
+			Position(
+				if self.horizontal_center { -size.0/2. } else { 0. },
+				if self.vertical_center { -size.1/2. } else { 0. }
+			)
+		);
+		self.inside.draw(app, assets, gfx, plugins, state, draw);
+	}
+	fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
+		let size = self.inside.get_size();
+		self.inside.add_pos(
+			Position(
+				if self.horizontal_center { -size.0/2. } else { 0. },
+				if self.vertical_center { -size.1/2. } else { 0. }
+			)
+		);
+		self.inside.after(app, assets, plugins, state);		
+	}
+}
+impl<State: UIStateCl, F: PosForm<State>> Positionable for Centered<State, F> {
+	fn add_pos(&mut self, to_add: Position) { self.inside.add_pos(to_add); }
+	fn get_pos(&self) -> Position { let size = self.inside.get_size();self.inside.get_pos() - Position(size.0/2., size.1/2.) }
+	fn get_rect(&self) -> Rect {
+		let size = self.inside.get_size();
+		Rect {
+			pos: self.inside.get_pos() - Position(
+				if self.horizontal_center { -size.0/2. } else { 0. },
+				if self.vertical_center { -size.1/2. } else { 0. }
+			),
+			size: self.inside.get_size()
+		}
+	}
+	fn get_size(&self) -> Size { self.inside.get_size() }
+	fn with_pos(&self, to_add: Position) -> Self {
+		let mut new = self.clone();
+		new.inside = self.inside.with_pos(to_add);
+		new
+	}
+}

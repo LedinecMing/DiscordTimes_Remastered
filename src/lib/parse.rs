@@ -23,7 +23,7 @@ Surrender=[{число}] — плен
 
 StartExpirience=[{число}] — базовый опыт (2lvl = StartExpirience)
 
-LevelMultipler=[{число}; standard = 140] — множитель уровня (y*lvl → y+1lvl = StartExpirience × (LevelMultipler / 100) ^ y. * – y > 2)
+Levpler=[{число}; standard = 140] — множитель уровня (y*lvl → y+1lvl = StartExpirience × (LevelMultipler / 100) ^ y. * – y > 2)
 
 IconIndex=[{число}] — индекс иконки
 
@@ -43,7 +43,7 @@ OldVampirsGist
 // развитие отряда
 
 NextUnit1=[Name] — развитие в персонажа
-
+Option
 NextUnit1Level=[{число}; standard = 1] — необходимый уровень для развития в отряде ИИ
 
 NextUnit2=[Name] — развитие в персонажа
@@ -112,21 +112,57 @@ d-Vampirizm=[{отсутствие строки}/1-100] — +вампиризм
 
  */
 use math_thingies::add_opt;
-use std::{any::type_name, fs::File, io::Read, ops::Add};
-
+use num::Num;
+use std::{any::type_name, fs::File, io::Read, ops::Add, fmt::Debug};
+use std::{collections::HashMap, fmt::Display, str::FromStr};
+use notan::prelude::{Asset, Texture, Graphics};
 use super::{
     bonuses::bonuses::*,
+	battle::{troop::Troop, army::Control},
     items::item::{ItemInfo, *},
-    map::object::{ObjectInfo, ObjectType},
+    map::{
+		object::{ObjectInfo, ObjectType, MapBuildingdata, Market, Recruitment, RecruitUnit},
+		map::{GameMap, Tilemap, MAP_SIZE},
+		event::*
+	},
     units::{
         unit::{MagicDirection::*, MagicType::*, *},
         unitstats::ModifyUnitStats,
     },
+	time::time::{Time, Data::*},
+	mutrc::SendMut,
 };
-use crate::LOCALE;
-use ini_core::{Item, Parser};
+use anyhow::Result as EResult;
+use crate::lib::{battle::army::{Army, ArmyStats}, items};
 use math_thingies::Percent;
-use std::{collections::HashMap, fmt::Display, str::FromStr};
+use ini_core::{Item, Parser};
+use advini::*;
+
+#[cfg(target_arch="wasm32")]
+mod wasm_tools {
+	use wasm_rs_async_executor::single_threaded::block_on;
+	use reqwest;
+	pub async fn read_url(url: &str) -> String {
+		reqwest::get(url.clone()).await.unwrap()
+			.text().await.unwrap()
+	}
+	pub fn read_file(path: String) -> Vec<u8> {
+		block_on(read_url(&*format!("http://localhost:8080/{}", path))).as_bytes().iter().map(|v|*v).collect()
+	}
+}
+
+#[cfg(target_arch="wasm32")]
+use wasm_tools::*;
+
+#[cfg(not(target_arch="wasm32"))]
+pub fn read_file(path: String) -> Vec<u8> {
+	File::open(format!("{}", path))
+        .unwrap().bytes().map(Result::unwrap).collect()
+}
+
+pub fn read_file_as_string(path: String) -> String {
+	String::from_utf8(read_file(path)).unwrap()
+}
 
 fn collect_errors<T, K: Display>(
     for_check: Result<T, K>,
@@ -139,7 +175,7 @@ fn collect_errors<T, K: Display>(
             collector.push(format!(
                 "Error: {}; additional: {}",
                 info.to_string(),
-                additional
+                 additional
             ));
             None
         }
@@ -181,10 +217,13 @@ pub fn match_magictype(
         }
     }
 }
-pub fn parse_units() -> HashMap<usize, Unit> {
+pub fn parse_units(asset_map: &mut HashMap<&str, HashMap<String, Asset<Texture>>>, gfx: &mut Graphics) -> HashMap<usize, Unit> {
     let mut units = HashMap::new();
     let sections = parse_for_sections("Units.ini");
     let mut counter = None;
+	asset_map.insert("assets/Icons", HashMap::new());
+	let mut upgrades: HashMap<usize, Vec<String>> = HashMap::new();
+	
     for (sec, prop) in sections.iter() {
         let mut name = "";
         let mut description = "";
@@ -194,6 +233,7 @@ pub fn parse_units() -> HashMap<usize, Unit> {
         let mut bonus_name = "";
 
         let mut cost_hire = None;
+		let mut size = (1, 1);
         let mut cost = None::<u64>;
         let mut surrender = None;
         let mut icon_index = None;
@@ -300,12 +340,29 @@ pub fn parse_units() -> HashMap<usize, Unit> {
                 "startexpirience" => {
                     max_xp = handle_parse::<u64>(v, &mut error_collector, "max_xp");
                 }
-                "nextunit1" | "nextunit2" | "nextunit3" => next_unit.push(v.into()),
+                "nextunit1" | "nextunit2" | "nextunit3" => {
+					next_unit.push(v.into());
+				},
+				"size" => size = {
+					let mut points = v.split(|ch: char| !ch.is_ascii_digit()).map(|string| string.parse().unwrap());
+					(points.next().unwrap(), points.next().unwrap())
+				},
                 "bonus" => {
                     bonus_name = v;
                 }
                 "globalindex" => {
                     counter = handle_parse::<usize>(v, &mut error_collector, "globalindex");
+					if !upgrades.contains_key(&counter.unwrap()) { upgrades.insert(counter.unwrap(), next_unit.clone()); }
+					let path = format!("assets/Icons/img_{}.png", counter.unwrap() - 1);
+					asset_map
+						.get_mut("assets/Icons").unwrap()
+						.insert(format!("img_{}.png", counter.unwrap() - 1),
+								Asset::from_data(&*path.clone(),
+												 gfx.create_texture()
+												 .from_image(&read_file(path))
+												 .build()
+												 .unwrap()));
+					
                 }
                 _ => {}
             }
@@ -346,6 +403,7 @@ pub fn parse_units() -> HashMap<usize, Unit> {
             "Rogue" => UnitType::Rogue,
             "Undead" => UnitType::Undead,
             "Hero" => UnitType::Hero,
+			"Mecha" => UnitType::Mecha,
             _ => {
                 collect_errors(
                     MATCH_ERR,
@@ -355,8 +413,10 @@ pub fn parse_units() -> HashMap<usize, Unit> {
                 UnitType::People
             }
         };
-
-        assert!(error_collector.is_empty(), "{}", error_collector.join("\n"));
+		if !error_collector.is_empty() {             
+		    panic!("{}", error_collector.join("\n"));
+		}                                     
+  
         let hp = hp.unwrap();
         let xp_up = xp_up.unwrap();
         let max_xp = max_xp.unwrap();
@@ -406,11 +466,12 @@ pub fn parse_units() -> HashMap<usize, Unit> {
                 cost_hire,
                 icon_index: counter.unwrap() - 1,
                 unit_type,
-                next_unit,
+                next_unit: Vec::new(),
                 magic_type,
+				size,
                 surrender,
                 lvl: LevelUpInfo {
-                    stats: UnitStats::empty(),
+                    stats: ModifyUnitStats::default(),
                     xp_up,
                     max_xp,
                 },
@@ -429,34 +490,70 @@ pub fn parse_units() -> HashMap<usize, Unit> {
         };
         units.insert(counter.unwrap(), unit);
     }
+	for (index, up) in upgrades {
+		let upgrade = up.iter().map(|name| units.iter().filter(|unit| unit.1.info.name == *name).map(|unit| *unit.0).next().unwrap() ).collect();
+		units.get_mut(&index).unwrap().info.next_unit = upgrade;
+	}
     units
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Settings {
-    pub(crate) max_troops: usize,
+    pub max_troops: usize,
     pub locale: String,
+	pub additional_locale: String,
+	pub fullscreen: bool,
+	pub init_size: (u32, u32)
 }
+
+pub static mut SETTINGS: Settings = Settings {
+	max_troops: 0,
+	locale: String::new(),
+	additional_locale: String::new(),
+	fullscreen: true,
+	init_size: (1600, 1200)
+};
+
 #[derive(Debug)]
-pub struct Locale(HashMap<String, String>);
+pub struct Locale {
+	map: HashMap<String, HashMap<String, String>>,
+	main_lang: String,
+	additional_lang: String
+}
 impl Locale {
     pub fn get<K: Into<String> + Copy>(&self, id: K) -> String {
-        self.0
-            .get(&id.into())
-            .expect(&*format!("Cant find locale key {}", id.into()))
-            .clone()
+        self.map
+            .get(&self.main_lang)
+            .and_then(|lang_map| 
+                lang_map.get(&id.into()).cloned().or_else(||
+                    self.map.get(&self.additional_lang)
+                        .and_then(|lang_map|
+                            lang_map.get(&id.into()).cloned()
+                        )
+				)
+			)
+            .unwrap_or(id.into())
     }
-    pub fn insert<V: Into<String>, K: Into<String>>(&mut self, key: K, value: V) {
-        self.0.insert(key.into(), value.into());
+    pub fn insert<V: Into<String>, K: Into<String>>(&mut self, key: K, value: V, lang: &String) {
+		self.map.entry(lang.clone())
+			.or_insert_with(HashMap::new)
+			.insert(key.into(), value.into());
     }
-    pub fn new() -> Self {
-        Locale(HashMap::new())
+    pub fn new(main_lang: String, additional_lang: String) -> Self {
+        Locale {
+			map: HashMap::new(),
+			main_lang,
+			additional_lang
+		}
     }
 }
 pub fn parse_settings() -> Settings {
     let sections = parse_for_sections("Settings.ini");
     let mut max_troops: usize = 0;
     let mut locale = String::new();
+	let mut additional_locale = String::new();
+	let mut fullscreen = false;
+	let mut init_size = None;
     for (sec, prop) in sections.iter() {
         for (k, value) in prop.iter() {
             match &**k {
@@ -466,26 +563,43 @@ pub fn parse_settings() -> Settings {
                         .expect("Field max_troops is not usize type")
                 }
                 "locale" => locale = value.clone(),
+				"additional_locale" => additional_locale = value.clone(),
+				"fullscreen" => fullscreen = str_bool(value.to_string()),
+				"init_size" => {
+					let mut parsed = value.split(",");
+					init_size = Some((parsed.next().unwrap().parse().unwrap(), parsed.next().unwrap().parse().unwrap()));
+				}
                 _ => {}
             }
         }
     }
-    Settings { max_troops, locale }
+	let settings = Settings { max_troops, locale, additional_locale, fullscreen, init_size: init_size.unwrap() };
+	unsafe {
+		SETTINGS=settings.clone();
+	}
+	settings
 }
-pub fn parse_locale(language: String) {
-    let mut locale = LOCALE.lock().unwrap();
-    let props = parse_for_props(&*format!("{}_Locale.ini", language));
-    for (k, value) in props {
-        locale.insert(k, value);
-    }
+
+pub fn parse_locale(languages: &[&String], locale: &mut Locale) {
+	for language in languages {
+		let props = parse_for_props(&*format!("{}_Locale.ini", language));
+		for (k, value) in props {
+			locale.insert(k, value, &language);
+		}
+	}
 }
+pub fn parse_map_locale(path: &str, languages: &[&String], locale: &mut Locale) {
+	for (sec, props) in parse_for_sections(path) {
+		if !languages.contains(&&sec) { continue; }
+		for prop in props {
+			register_locale(prop.0, prop.1, sec.clone(), locale).unwrap();
+		}
+	}
+}
+
 fn parse_for_props(path: &str) -> HashMap<String, String> {
     let mut props = HashMap::new();
-    let mut ini_doc = String::new();
-    File::open(path)
-        .unwrap()
-        .read_to_string(&mut ini_doc)
-        .unwrap();
+	let ini_doc = read_file_as_string(path.into());
     let parser = Parser::new(&*ini_doc).auto_trim(true);
     for item in parser {
         match item {
@@ -503,11 +617,7 @@ fn parse_for_sections(path: &str) -> HashMap<String, HashMap<String, String>> {
     let mut hashmap = HashMap::new();
     let mut old_sec = "";
     let mut props = HashMap::new();
-    let mut ini_doc = String::new();
-    File::open(path)
-        .unwrap()
-        .read_to_string(&mut ini_doc)
-        .unwrap();
+	let ini_doc = read_file_as_string(path.into());
     let parser = Parser::new(&*ini_doc).auto_trim(true);
     for item in parser {
         match item {
@@ -531,13 +641,16 @@ fn parse_for_sections(path: &str) -> HashMap<String, HashMap<String, String>> {
     props = HashMap::new();
     hashmap
 }
-pub fn parse_objects() -> HashMap<usize, ObjectInfo> {
-    let mut objects = HashMap::new();
+type Objects = Vec<ObjectInfo>;
+pub fn parse_objects(assets: &mut HashMap<&str, HashMap<String, Asset<Texture>>>, gfx: &mut Graphics) -> Objects {
+    let mut objects = Vec::new();
     let sections = parse_for_sections("Objects.ini");
+	assets.insert("assets/Objects", HashMap::new());
     for (sec, prop) in sections.iter() {
         let mut category = "".into();
         let mut obj_type = None;
         let mut index = None;
+		let name = sec.clone();
         let mut size = (Some(1), Some(1));
         let mut error_collector: Vec<String> = Vec::new();
         for (k, v) in prop.iter() {
@@ -547,25 +660,25 @@ pub fn parse_objects() -> HashMap<usize, ObjectInfo> {
                         v.parse::<usize>(),
                         &mut error_collector,
                         "Value of field Index ommited as non-usize",
-                    )
+                    );
+					let path = format!("{}.png", sec);
+					let asset = assets
+						.get_mut("assets/Objects").unwrap()
+						.insert(path.clone(),
+								Asset::from_data(&*path.clone(),
+												 gfx.create_texture()
+												 .from_image(&read_file(format!("assets/Objects/{}", path)))
+												 .build()
+												 .unwrap()));
                 }
-                "sizew" => {
-                    size.0 = collect_errors(
-                        v.parse::<u8>(),
-                        &mut error_collector,
-                        "Value of field SizeW ommited as non-u8",
-                    )
-                }
-                "sizeh" => {
-                    size.1 = collect_errors(
-                        v.parse::<u8>(),
-                        &mut error_collector,
-                        "Value of field SizeH ommited as non-u8",
-                    )
+                "size" => {
+                    let mut sizes = v.split(|ch: char| !ch.is_ascii_digit()).map(|string| Some(string.parse().unwrap()));
+					size.0=sizes.next().unwrap(); size.1=sizes.next().unwrap();
                 }
                 "type" => {
                     obj_type = Some(match &**v {
                         "MapDeco" => ObjectType::MapDeco,
+						"Bridge" => ObjectType::Bridge,
                         "Building" => ObjectType::Building,
                         _ => panic!(
                             "{}",
@@ -577,11 +690,16 @@ pub fn parse_objects() -> HashMap<usize, ObjectInfo> {
                 _ => {}
             }
         }
-        assert!(error_collector.is_empty(), "{}", error_collector.join("\n"));
-        objects.insert(
-            index.unwrap(),
+		
+		if !error_collector.is_empty() {
+			panic!("{}", error_collector.join("\n"));
+		}
+		
+        objects.push(
+            (index.unwrap(),
             ObjectInfo {
                 category,
+				name,
                 obj_type: obj_type.expect("Cant find Type key!"),
                 index: index.expect("Cant find Index key!"),
                 size: (
@@ -589,15 +707,15 @@ pub fn parse_objects() -> HashMap<usize, ObjectInfo> {
                     size.1.expect("Cant find SizeH key!"),
                 ),
                 path: sec.clone().add(".png"),
-            },
+            })
         );
     }
-    objects
+	objects.sort_by(|(id, _), (oth_id, _)| id.cmp(oth_id));
+	objects.into_iter().map(|(_, object)| object).collect()
 }
 fn match_magic_variants(
     error_collector: &mut Vec<String>,
     magic_type: String,
-    direction: MagicDirection,
 ) -> Option<MagicVariants> {
     match &*magic_type {
         "LifeMagic" => Some(MagicVariants::Life),
@@ -619,9 +737,10 @@ fn match_magic_variants(
  * p-{stat} - добавление процента
  * f-{stat} - установить
  */
-pub fn parse_items(lang: &String) {
+pub fn parse_items(lang: &String, assets: &mut HashMap<&str, HashMap<String, Asset<Texture>>>, gfx: &mut Graphics) {
     let mut error_collector: Vec<String> = Vec::new();
     let mut items = ITEMS.lock().unwrap();
+	assets.insert("assets/Items", HashMap::new());
     let secs = parse_for_sections(&*format!("{}_Artefacts.ini", lang));
     for (sec, props) in secs {
         let mut cost: Option<i64> = None;
@@ -641,10 +760,21 @@ pub fn parse_items(lang: &String) {
                 "globalindex" => index = handle_parse(value, &mut error_collector, "globalindex"),
                 "name" => name = Some(value.clone()),
                 "descript" => description = Some(value.clone()),
-                "icon" => icon = Some(value.clone()),
+                "icon" => {
+					icon = Some(value.clone());
+					let path = icon.unwrap().to_string();
+					let asset = assets
+						.get_mut("assets/Items").unwrap()
+						.insert(path.clone(),
+								Asset::from_data(&*path.clone(),
+												 gfx.create_texture()
+												 .from_image(&read_file(format!("assets/Items/{}", path)))
+												 .build()
+												 .unwrap()));
+				},
                 "cost" => cost = handle_parse(value, &mut error_collector, "cost"),
                 "magic" => {
-                    magic = match_magic_variants(&mut error_collector, value.into(), direction);
+                    magic = match_magic_variants(&mut error_collector, value.into());
                     itemtype = match itemtype_name {
                         "Staff" => Some(ArtifactType::Weapon(WeaponType::Magic(
                             magic.expect("Item type is Stuff but no Magic field provided"),
@@ -837,4 +967,412 @@ pub fn parse_items(lang: &String) {
             },
         );
     }
+}
+
+trait IsRus {
+	fn is_rus_alphabet(&self) -> bool;
+}
+impl IsRus for char {
+	fn is_rus_alphabet(&self) -> bool {
+		matches!(*self, 'А'..='Я' | 'а'..='я' | 'ё' | 'Ё')
+	}
+}
+
+fn process_locale(locale: impl Into<String>, map_locale: &mut Locale) -> EResult<String> {
+	const LOCALE_START: char = '$';
+	let locale = locale.into();
+	let mut end_string = locale.clone();
+	let mut locale_chars = locale.chars();
+	for i in 0..locale.len() {
+		if locale_chars.nth(i) == Some(LOCALE_START) {
+			let end = locale.chars().skip(i+1).position(|ch| {
+				!(ch.is_ascii_alphabetic() || ch.is_ascii_digit() || ch.is_rus_alphabet() || ch == '_')
+			});
+			if let Some(end) = end {
+				if !i+1 == end {
+					let identificator = locale.chars().skip(i+1).take(end-i+1).collect::<String>();
+					end_string = end_string.replace(&("$".to_owned() + &identificator), &map_locale.get(&identificator));
+				}
+			}
+		}
+	}
+	Ok(end_string)
+}
+
+fn split_and_parse<N: Num>(string: String) -> Vec<N> {
+	string
+		.split(|ch: char| !ch.is_ascii_digit())
+		.map(|string| N::from_str_radix(string, 10).unwrap_or(N::zero()))
+		.collect()
+}
+
+fn register_locale(locale_name: impl Into<String>, locale: impl Into<String>, lang: String, map_locale: &mut Locale) -> EResult<(), > {
+	let end_string = process_locale(locale, map_locale)?;
+	map_locale.insert(locale_name.into(), end_string, &lang);
+	Ok(())
+}
+
+fn parse_cmp<V: Ord + FromStr>(v: String) -> Cmp<V> where <V as FromStr>::Err: Debug {
+	match v {
+		v if v.starts_with("<=") => Cmp::LE(v.split_at(2).1.parse().unwrap()),
+		v if v.starts_with(">=") => Cmp::GE(v.split_at(2).1.parse().unwrap()),
+		v if v.starts_with("<") => Cmp::L(v.split_at(1).1.parse().unwrap()),
+        v if v.starts_with(">") => Cmp::G(v.split_at(1).1.parse().unwrap()),
+		v if v.starts_with("=") => Cmp::E(v.split_at(1).1.parse().unwrap()),
+		_ => Cmp::E(v.parse().unwrap()),
+	}
+}
+
+fn str_bool(v: String) -> bool {         
+    match &*v.to_lowercase() {           
+        "true" | "1" | "t" | "y" => true,
+        _ => false                       
+    }                                    
+}
+
+fn parse_events(path: String, locale: &mut Locale) -> Vec<Event> {
+	let mut events = Vec::new();
+	for (sec, props) in parse_for_sections(&*path) {
+		let mut event = Event {
+			location: Location::Global,
+			name: sec,
+			conditions: Conditions::default(),
+			result: EventResult::default(),
+			position: None,
+			message: None
+		};
+		for prop in props {
+			let prop = (prop.0, process_locale(prop.1, locale).unwrap());
+			match &*prop.0 {
+				"pos" => event.position = {
+					let mut points = prop.1.split(|ch: char| !ch.is_ascii_digit()).map(|string| string.parse().unwrap());
+					Some((points.next().unwrap(), points.next().unwrap()))
+				},
+				"message" => event.message = Some(prop.1),
+				"type" => event.location = match &*prop.1 {
+					"global" => Location::Global,
+					"local" => Location::Local(0),
+					"quest" => Location::Quest,
+					"talks" => Location::Talks(0),
+					_ => Location::Global
+				},
+				"relative_time" => event.conditions.relative_time = str_bool(prop.1),
+				"repeat" => event.conditions.repeat = Some(Time::new(0)),
+				
+				"activation_time" => event.conditions.activation_time = Time::from_data(prop.1, [YEAR, MONTH, DAY, HOUR, MINUTES]),
+				"if_event_executed" => event.conditions.if_event_executed = Some(prop.1.parse().unwrap()),
+				"armys_defeated" => event.conditions.armys_defeated = Some(split_and_parse(prop.1)),
+				"not_executed" => event.conditions.not_executed = Some(split_and_parse(prop.1)),
+				"flag_check" => event.conditions.flag_check = prop.1,
+				"xp_req" => event.conditions.xp_req = Some(parse_cmp(prop.1)),
+				"gold_req" => event.conditions.gold_req = Some(parse_cmp(prop.1)),
+				"mana_req" => event.conditions.mana_req = Some(parse_cmp(prop.1)),
+				"army_req" => event.conditions.army_req = Some(parse_cmp(prop.1)),
+				"power_req" => event.conditions.power_req = Some(parse_cmp(prop.1)),
+
+				"hero_has_1_hp" => event.conditions.hero_has_1_hp = str_bool(prop.1),
+
+				"lit_lights" => event.result.lit_lights = Some(split_and_parse(prop.1)),
+				"delay" => event.result.delay = (Time::from_data(prop.1, [YEAR, MONTH, DAY, HOUR, MINUTES]), false),
+				"flag_change" => event.result.flag_change = prop.1,
+				"sub_events" => event.result.sub_event = Some(prop.1.parse().unwrap()),
+				"delayed_event" => event.result.delayed_event = Some({
+					let things = prop.1.split_once(";").unwrap();
+					DelayedEvent::new(Time::from_data(things.0, [YEAR, MONTH, DAY, HOUR, MINUTES]), things.1.parse().unwrap())
+				}), // 1540:1:12:0,12
+				"minus_items" => event.result.minus_items = Some(split_and_parse(prop.1)),
+                "plus_items" => event.result.plus_items = Some(split_and_parse(prop.1)),
+				"question" => event.result.question = Some({
+					let things = prop.1.split_once(";").unwrap();
+					(things.0.into(), things.1.split(";").map(str::to_string).collect())
+				}),
+				"change_xp" => event.result.change_xp = prop.1.parse().unwrap(),
+				"change_gold" => event.result.change_gold = prop.1.parse().unwrap(),
+				"change_mana" => event.result.change_mana = prop.1.parse().unwrap(),
+
+				"in_building" => event.conditions.in_building = prop.1.parse().ok(),
+				"add_units" => event.result.add_units = Some(split_and_parse(prop.1)),
+				"remove_units" => event.result.remove_units = Some(split_and_parse(prop.1)),
+				"change_personality" => event.result.change_personality = Some(prop.1.parse().unwrap()),
+				_ => {}
+			}
+		}
+		events.push(event);
+	}
+	events
+}
+
+fn parse_mapdata(path: String, units: &HashMap<usize, Unit>, locale: &mut Locale, objects: &Objects) -> (Tilemap<usize>, Tilemap<Option<usize>>, Vec<MapBuildingdata>, Vec<Army>) {
+	let mut tilemap: Option<Tilemap<usize>> = None;
+	let mut decomap: Option<Tilemap<Option<usize>>> = None;
+	
+	let mut armys = Vec::new();
+	let mut buildings = Vec::new();
+	
+	for (sec, props) in parse_for_sections(&*path) {
+		match &*sec {
+			"Tilemaps" => {
+				for prop in props {
+					match &*prop.0 {
+						"tilemap" => tilemap = Some({
+							let mut tiles = prop.1.split(|ch: char| !ch.is_ascii_digit())
+								.map(|ch| ch.parse::<usize>().unwrap());
+							(0..MAP_SIZE)
+							.map(|_|
+								 (0..MAP_SIZE)
+								 .map(|_|
+									  tiles.next().unwrap()
+								 )
+								 .collect::<Vec<_>>()
+								 .try_into().unwrap()
+							)
+							.collect::<Vec<_>>()
+							.try_into().unwrap()
+						}),
+						"decomap" => decomap = Some({
+							let mut tiles = prop.1.split(|ch: char| !ch.is_ascii_digit())
+								.map(|ch|
+									 if ch=="0" {
+										 None
+									 } else { Some(ch.parse().unwrap()) }
+								);
+							(0..MAP_SIZE)
+							.map(|_|
+								 (0..MAP_SIZE)
+								 .map(|_|
+									  tiles.next().unwrap()
+								 )
+								 .collect::<Vec<_>>()
+								 .try_into().unwrap()
+							)
+							.collect::<Vec<_>>()
+							.try_into().unwrap()
+						}),
+						_ => {}
+					}
+				}
+			},
+			x if x.starts_with("Army") => {
+				let mut inv = Vec::new();
+				let mut pos = (0, 0);
+				let mut stats = ArmyStats::default();
+				let mut troops = Vec::new();
+				let mut active = true;
+				let mut control = Control::PC;
+				let mut id: Option<usize> = None;
+				
+				for prop in props {
+					let prop = (prop.0, process_locale(prop.1, locale).unwrap());
+					match &*prop.0 {
+						"id" => id = prop.1.parse().ok(),
+						"name" => stats.army_name = prop.1,
+						"mana" => stats.mana = prop.1.parse().unwrap(),
+						"gold" => stats.gold = prop.1.parse().unwrap(),
+						"inventory" => inv = split_and_parse(prop.1).iter().map(|num| items::item::Item{index:*num}).collect(),
+						"pos" => {
+							let things = prop.1.split_once(|ch: char| !ch.is_ascii_digit()).unwrap();
+							pos = (things.0.parse().unwrap(), things.1.parse().unwrap());
+						},
+						"active" => active = str_bool(prop.1),
+						"troops" => troops.append(&mut
+							prop.1.split(",")
+								.map(|string|
+									 string
+									 .split_once(";").unwrap())
+								.map(|(num, lvl)|
+									 (num.parse().unwrap(), lvl.parse::<i64>().unwrap()))
+								.map(|(num, _)|
+									 SendMut::new({
+										 let mut troop = Troop::empty();
+										 troop.unit = units[&num].clone();
+										 troop.unit.army = armys.len();
+										 troop
+									 })).collect()),
+						"player" => control = Control::Player(prop.1.parse().unwrap()),
+						"main" => {
+							let things = prop.1.split_once(|ch: char| !ch.is_ascii_digit()).unwrap();
+							let troop = Troop {
+								unit: {
+									let mut unit = units[&things.0.parse().unwrap()].clone();
+									unit.army = armys.len();
+									unit
+								},
+								is_main: true,
+								is_free: true,
+								was_payed: true,
+								pos: UnitPos::from_index(troops.len()),
+								custom_name: Some(things.1.into())
+							};
+							troops.push(SendMut::new(troop));
+							
+						},
+						_ => {}
+					}
+				}				
+				armys.push((id.unwrap(), Army::new(troops, stats, inv, control, pos, active)));
+			},
+			x if x.starts_with("Building") => {
+				let mut id : Option<usize> = None;
+				let mut name = String::new();
+				let mut object_name = None;
+				let mut desc = String::new();
+				let mut building_type = None;
+				let mut event = Vec::new();
+				let mut units = Vec::new();
+				let mut recruitment = None;
+				let mut cost_modify = 1.;
+				let mut market = None;
+				let mut items = Vec::new();
+				let mut itemcost_range = Some((0u64, 1000u64));
+				let mut max_items = 10;
+				let mut control = Control::PC;
+				let mut pos = None;
+				let mut defense = Some(0);
+				let mut income = 0;
+				let mut owner = None;
+				for prop in props {
+					let prop = (prop.0, process_locale(prop.1, locale).unwrap());
+					match &*prop.0 {
+						"name" => name = prop.1,
+						"desc" => desc = prop.1,
+						"id" => id = Some(prop.1.parse().unwrap()),
+						"type" => building_type = Some(prop.1),
+						"owner" => owner = Some(prop.1.parse().unwrap()),
+						"items" => items = split_and_parse(prop.1),
+						"defense" => defense = prop.1.parse().ok(),
+						"object" => object_name = prop.1.into(),
+						"itemcost_range" => itemcost_range = {
+							let mut points = prop.1.split(|ch: char| !ch.is_ascii_digit()).map(|string| string.parse().unwrap());
+							Some((points.next().unwrap(), points.next().unwrap()))
+						},
+						"income" => income = prop.1.parse().unwrap(),
+						"recruit" => {
+							units = prop.1.split(",")
+								.map(|string|
+									 string
+									 .split_once(";").unwrap())
+								.map(|(id, num)|
+									 (id.parse().unwrap(), num.parse::<usize>().unwrap()))
+								.map(|(id, num)|
+									 RecruitUnit { unit: id, count: num }
+								).collect();
+						},
+						"pos" => pos = {
+							let mut points = prop.1.split(|ch: char| !ch.is_ascii_digit()).map(|string| string.parse().unwrap());
+							Some((points.next().unwrap(), points.next().unwrap()))
+						},
+						"events" => event = split_and_parse::<usize>(prop.1),
+						_ => {}
+					}
+				}
+				if !items.is_empty() {
+					market = Market {
+						itemcost_range: itemcost_range.unwrap(),
+						items,
+						max_items
+					}.into();
+				}
+				if !units.is_empty() {
+					recruitment = Recruitment {
+						cost_modify,
+						units
+					}.into();
+				}
+				buildings.push((id.unwrap(),
+					MapBuildingdata {
+						id: objects.into_iter().position(|obj| {
+							&obj.name == object_name.as_ref().unwrap()
+						}).unwrap(),
+						name,
+						desc,
+					 	event,
+						market,
+						recruitment,
+						pos: pos.unwrap(),
+						defense: defense.unwrap(),
+						income,
+						owner
+					}
+				));
+			}
+			_ => {}
+		}
+	}
+	(tilemap.unwrap(), decomap.unwrap(), {
+		buildings.sort_by(|(id, _), (oth_id, _)| id.cmp(oth_id));
+		buildings.into_iter().map(|(_, building)| building).collect()
+	}, {
+		armys.sort_by(|(id, _), (oth_id, _)| id.cmp(oth_id));
+		armys.into_iter().map(|(_, army)| army).collect()
+	})
+}
+
+pub fn parse_story(units: &HashMap<usize, Unit>, objects: &Objects, lang: &String, additional_lang: &String) -> (GameMap, Vec<Event>) {
+	let mut err_coll = Vec::new();
+	let map_dir = "map/";
+	let map_path = "MapExample.ini";
+	// Locale
+	let mut locale = Locale::new(lang.clone(), additional_lang.clone());
+
+	// Info
+	let mut name = None;
+	let mut description = None;
+
+	// Settings
+	let mut start_gold = Some(0u64);
+	let mut start_mana = Some(0u64);
+	let mut start_items = vec![];
+	let mut start_time = Time::from_data("1540:1:1:12:0", [YEAR, MONTH, DAY, HOUR, MINUTES]);
+
+	// MapData
+	let mut mapdata_path = None;
+
+	// Eventsandlights
+	let mut events_path = None;
+	
+	for (sec, props) in parse_for_sections(&format!("{map_path}")) {
+		for prop in props {
+			let prop = (prop.0, process_locale(prop.1, &mut locale).unwrap());
+			match &*prop.0 {
+				"filepath" => {					
+					match &*sec {
+						"Locale" => {
+							parse_map_locale(&*format!("{}/{}", map_dir, prop.1), &[&locale.main_lang.clone(), &locale.additional_lang.clone()], &mut locale);
+						},
+						"MapData" => mapdata_path = prop.1.into(),
+						"EventsAndLights" => events_path = prop.1.into(),
+						_ => {}
+					}
+				},
+				"name" => name = Some(prop.1),
+				"desc" => description = Some(prop.1),
+				"start_time" => start_time = Time::from_data(prop.1, [YEAR, MONTH, DAY, HOUR, MINUTES]),
+				"start_gold" => start_gold = handle_parse(prop.1, &mut err_coll, "start_gold"),
+				"start_mana" => start_mana = handle_parse(prop.1, &mut err_coll, "start_mana"),
+				"start_items" => {
+					start_items = prop.1.split(|ch: char| !ch.is_ascii_digit())
+						.map(|string|
+							handle_parse::<usize>(string, &mut err_coll, "start_items") 
+						)
+						.collect();
+				},
+				_ => {}
+			}
+		}
+	}
+	if !err_coll.is_empty() {
+		panic!("{}", err_coll.join("\n"));
+	}
+	let mapdata = parse_mapdata(format!("{map_dir}{}", mapdata_path.unwrap()), units, &mut locale, objects);
+	let events = parse_events(format!("{map_dir}{}", events_path.unwrap()), &mut locale);
+
+	let gamemap = GameMap {
+		armys: mapdata.3,
+		decomap: mapdata.1,
+		tilemap: mapdata.0,
+		buildings: mapdata.2,
+		time: start_time,
+		..Default::default()
+	};
+	(gamemap, events)
 }

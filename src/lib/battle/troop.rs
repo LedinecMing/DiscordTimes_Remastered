@@ -13,6 +13,7 @@ pub struct Troop {
     pub was_payed: bool,
     pub is_free: bool,
     pub is_main: bool,
+	pub pos: UnitPos,
     pub custom_name: Option<String>,
     pub unit: Unit,
 }
@@ -35,6 +36,7 @@ impl Troop {
             was_payed: true,
             is_free: false,
             is_main: false,
+			pos: UnitPos::from_index(0),
             custom_name: None,
             unit: Unit {
                 stats: UnitStats::empty(),
@@ -78,10 +80,5 @@ impl Display for Troop {
                speed = stats.speed,
                moves = stats.moves,
                max_moves = stats.max_moves)
-    }
-}
-impl From<Troop> for TroopType {
-    fn from(troop: Troop) -> Self {
-        SendMut::new(Some(troop))
     }
 }

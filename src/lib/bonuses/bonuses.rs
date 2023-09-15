@@ -8,7 +8,7 @@ use crate::{
         units::{
             unit::{Defence, Power, Unit, UnitPos, UnitStats},
             unitstats::{Modify, ModifyDefence, *},
-        },
+        }, battle::battlefield::BattleInfo,
     },
     LOCALE,
 };
@@ -19,7 +19,7 @@ use std::cmp::min;
 pub struct DefencePiercing {}
 impl Bonus for DefencePiercing {
     fn on_attacking(&self, damage: Power, receiver: &mut Unit, sender: &mut Unit) -> Power {
-        let sender_damage: Power = sender.stats.damage;
+        let sender_damage: Power = sender.modified.damage;
         if sender_damage.magic > sender_damage.ranged && sender_damage.magic > sender_damage.hand {
             Power {
                 magic: sender_damage.magic,
@@ -58,6 +58,7 @@ impl Bonus for DeadDodging {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+		battle: &BattleInfo
     ) -> Power {
         Power {
             ranged: damage.ranged - Percent::new(70),
@@ -79,6 +80,7 @@ impl Bonus for FastDead {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+		battle: &BattleInfo
     ) -> Power {
         Power {
             ranged: damage.ranged - Percent::new(70),
@@ -104,6 +106,7 @@ impl Bonus for Dodging {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+		battle: &BattleInfo
     ) -> Power {
         let percent_70 = Percent::new(70);
         Power {
@@ -127,6 +130,7 @@ impl Bonus for VampiresGist {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+		battle: &BattleInfo
     ) -> Power {
         let percent_70 = Percent::new(75);
         Power {
@@ -136,7 +140,7 @@ impl Bonus for VampiresGist {
         }
     }
     fn on_attacking(&self, damage: Power, receiver: &mut Unit, sender: &mut Unit) -> Power {
-        let sender_damage: Power = sender.stats.damage;
+        let sender_damage: Power = sender.modified.damage;
         if sender_damage.magic > sender_damage.ranged && sender_damage.magic > sender_damage.hand {
             Power {
                 magic: sender_damage.magic,
@@ -174,6 +178,7 @@ impl Bonus for OldVampiresGist {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+		battle: &BattleInfo
     ) -> Power {
         let percent_70 = Percent::new(75);
         Power {
@@ -183,7 +188,7 @@ impl Bonus for OldVampiresGist {
         }
     }
     fn on_attacking(&self, damage: Power, receiver: &mut Unit, sender: &mut Unit) -> Power {
-        let sender_damage: Power = sender.stats.damage;
+        let sender_damage: Power = sender.modified.damage;
         if sender_damage.magic > sender_damage.ranged && sender_damage.magic > sender_damage.hand {
             Power {
                 magic: sender_damage.magic,
@@ -231,7 +236,6 @@ impl Bonus for FastGoing {
 pub struct Berserk {}
 impl Bonus for Berserk {
     fn on_kill(&self, receiver: &mut Unit, sender: &mut Unit) -> bool {
-        let receiver_stats = receiver.stats;
         let percent_10 = Percent::new(10);
         sender.add_effect(Box::new(ToEndEffect {
             info: EffectInfo { lifetime: i32::MAX },
@@ -315,6 +319,7 @@ impl Bonus for Invulnerable {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+		battle: &BattleInfo
     ) -> Power {
         Power {
             hand: min(1, damage.hand),
@@ -367,13 +372,14 @@ impl Bonus for Ghost {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+		battle: &BattleInfo
     ) -> Power {
         let mut corrected_damage_units = damage.magic;
         if corrected_damage_units == 0 {
             corrected_damage_units = 1;
         }
-        if (receiver.stats.hp - corrected_damage_units as i64) < 1 {
-            if sender.stats.defence.death_magic.get() <= 30 * (sender.stats.max_moves as i16) {
+        if (receiver.modified.hp - corrected_damage_units as i64) < 1 {
+            if sender.modified.defence.death_magic.get() <= 30 * (sender.modified.max_moves as i16) {
                 sender.kill();
             }
         }
@@ -397,12 +403,13 @@ impl Bonus for DeathCurse {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+		battle: &BattleInfo
     ) -> Power {
         let mut corrected_damage_units = damage.magic + damage.ranged + damage.hand;
         if corrected_damage_units == 0 {
             corrected_damage_units = 1;
         }
-        if (receiver.stats.hp as i64 - corrected_damage_units as i64) < 1 {
+        if (receiver.modified.hp as i64 - corrected_damage_units as i64) < 1 {
             sender.kill();
         }
         damage
@@ -416,7 +423,7 @@ impl Bonus for DeathCurse {
 pub struct Artillery {}
 impl Bonus for Artillery {
     fn on_attacking(&self, damage: Power, receiver: &mut Unit, sender: &mut Unit) -> Power {
-        let sender_damage: Power = sender.stats.damage;
+        let sender_damage: Power = sender.modified.damage;
         if sender_damage.magic > sender_damage.ranged && sender_damage.magic > sender_damage.hand {
             Power {
                 magic: sender_damage.magic,
@@ -460,8 +467,9 @@ impl Bonus for Counterblow {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+		battle: &BattleInfo
     ) -> Power {
-        sender.attack(receiver, receiver_pos, sender_pos);
+        sender.attack(receiver, receiver_pos, sender_pos, battle);
         damage
     }
     fn id(&self) -> &'static str {
@@ -479,6 +487,7 @@ impl Bonus for Garrison {
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
+        battle: &BattleInfo		
     ) -> Power {
         let percent_70 = Percent::new(70);
         Power {
@@ -512,6 +521,61 @@ impl Bonus for Garrison {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub struct Stealth {}
+impl Bonus for Stealth {
+	fn on_attacked(
+        &self,
+        damage: Power,
+        receiver: &mut Unit,
+        sender: &mut Unit,
+        receiver_pos: UnitPos,
+        sender_pos: UnitPos,
+		battle: &BattleInfo
+    ) -> Power {
+        if receiver.modified.moves == receiver.modified.max_moves {
+			Power::empty()
+		} else {
+			damage
+		}
+	}
+	fn id(&self) -> &'static str {
+		"Stealth"
+	}
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct DeadResurrect {}
+impl Bonus for DeadResurrect {
+	fn on_attacked(
+        &self,
+        damage: Power,
+        receiver: &mut Unit,
+        sender: &mut Unit,
+        receiver_pos: UnitPos,
+        sender_pos: UnitPos,
+		battle: &BattleInfo
+    ) -> Power {
+		let mut corrected_damage_units = damage.magic;
+		if corrected_damage_units == 0 {
+			corrected_damage_units = 1;
+		}
+		if (receiver.modified.hp - corrected_damage_units as i64) < 1 && !receiver.has_effect_kind(EffectKind::Fire) {
+			let hp = receiver.modified.hp;
+			receiver.add_effect(Box::new(RessurectedEffect::new()));
+			Power {
+				hand: hp as u64,
+				..Power::empty()
+			}
+		} else {
+			damage
+		}
+	}
+	fn id(&self) -> &'static str {
+		"DeadRessurect"
+	}
+}
+
+#[derive(Copy, Clone, Debug)]
 pub struct SpearDefence {}
 impl Bonus for SpearDefence {
     fn on_battle_start(&self, unit: &mut Unit) -> bool {
@@ -523,6 +587,17 @@ impl Bonus for SpearDefence {
     fn id(&self) -> &'static str {
         "SpearDefence"
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct ManyTargets {}
+impl Bonus for ManyTargets {
+	fn on_attacking(&self, damage: Power, receiver: &mut Unit, sender: &mut Unit) -> Power {
+		damage
+	}
+	fn id(&self) -> &'static str {
+		"ManyTargets"
+	}
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -541,7 +616,8 @@ impl Bonus for NoBonus {
 // ArmyMedic, GodStrike, Artillery,
 // DeathCurse, AddPayment,
 // HorseAttack, ArmorIgnore, Unvulnerabe, VampirsGist, Counterblow, FlankStrike,
-// SpearDefense,
+// Stealth, DeadRessurect,
+// SpearDefense, 
 // OldVampirsGist
 pub fn match_bonus(bonus: &str) -> Result<Box<dyn Bonus>, ()> {
     Ok(match bonus {
@@ -562,6 +638,8 @@ pub fn match_bonus(bonus: &str) -> Result<Box<dyn Bonus>, ()> {
         "FastDead" => Box::new(FastDead {}),
         "Garrison" => Box::new(Garrison {}),
         "DeathCurse" => Box::new(DeathCurse {}),
+		"DeadRessurect" => Box::new(DeadResurrect {}),
+		"Stealth" => Box::new(Stealth {}),
         "SpearDefence" | "SpearDefense" => Box::new(SpearDefence {}),
         "VampirsGist" | "VampiresGist" => Box::new(VampiresGist {}),
         "OldVampirsGist" | "OldVampiresGist" => Box::new(OldVampiresGist {}),
@@ -636,6 +714,14 @@ pub fn bonus_info(bonus: Box<dyn Bonus>) -> (String, String) {
             locale.get("bonus_oldvampiresgist"),
             locale.get("bonus_oldvampiresgist_desc"),
         ),
+		"DeadRessurect" => (
+			locale.get("bonus_deadressurect"),
+			locale.get("bonus_deadressurect_desc")
+		),
+		"Stealth" => (
+			locale.get("bonus_stealth"),    
+			locale.get("bonus_stealth_desc")
+		),
         "SpearDefence" | "SpearDefense" => (
             locale.get("bonus_speardefense"),
             locale.get("bonus_speardefense_desc"),

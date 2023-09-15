@@ -1,12 +1,14 @@
 #![allow(unused_parens)]
 
 use std::fmt::{Debug, Formatter};
+
+use notan::prelude::Color;
 use {
     std::{
         marker::PhantomData,
         ops::Not
     },
-    derive_builder::Builder,
+    derive_builder::*,
     notan::{
         prelude::{Graphics, Plugins, App, Assets},
         draw::*
@@ -17,7 +19,6 @@ use {
         defs::*
 }   };
 
-type ButtonFunc<State, T> = fn(&mut Button<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State);
 #[derive(Clone, Builder)]
 #[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct Button<State: UIStateCl, T: PosForm<State>> {
@@ -26,9 +27,9 @@ pub struct Button<State: UIStateCl, T: PosForm<State>> {
     #[builder(default)]
     pub rect: Rect,
     #[builder(setter(strip_option), default="None")]
-    pub if_hovered: Option<ButtonFunc<State, T>>,
+    pub if_hovered: Option<UpdateFunction<State, Button<State, T>>>,
     #[builder(setter(strip_option), default="None")]
-    pub if_clicked: Option<ButtonFunc<State, T>>,
+    pub if_clicked: Option<UpdateFunction<State, Button<State, T>>>,
     #[builder(setter(skip), default = "false")]
     pub focused: bool,
     #[builder(setter(skip), default = "false")]
@@ -49,9 +50,9 @@ impl<State: UIStateCl + Clone, T: PosForm<State>> Debug for Button<State, T> {
             .finish()
 }   }
 impl<State: UIStateCl + Clone, T: PosForm<State>> Form<State> for Button<State, T> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
         if let Some(form) = &mut self.inside {
-            form.with_pos(self.rect.pos).draw( app, assets, gfx, plugins, state);
+            form.with_pos(self.rect.pos).draw( app, assets, gfx, plugins, state, draw);
     }   }
     fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         let mouse_pos = Position(app.mouse.x, app.mouse.y);
@@ -77,8 +78,8 @@ impl<State: UIStateCl + Clone, T: PosForm<State>> Positionable for Button<State,
 }
 impl<State: UIStateCl + Clone, T: PosForm<State>> Button<State, T> {
     pub fn new(inside: Option<T>, rect: Rect,
-               if_hovered: Option<fn(&mut Self, &mut App, &mut Assets, &mut Plugins, &mut State)>,
-               if_clicked: Option<fn(&mut Self, &mut App, &mut Assets, &mut Plugins, &mut State)>
+               if_hovered: Option<UpdateFunction<State, Self>>,
+               if_clicked: Option<UpdateFunction<State, Self>>
     ) -> Self {
         Self {
             inside,
@@ -114,9 +115,9 @@ pub struct Slider<State: UIStateCl, T: PosForm<State>> {
     pub boo: PhantomData<State>
 }
 impl<State: UIStateCl, T: PosForm<State>> Form<State> for Slider<State, T> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
         self.scroll_percent = -self.scroll / (self.rect.size.1 as f32) * self.max_scroll;
-        self.slider_inside.with_pos(Position(self.rect.size.0, 0.) + Position(0., self.scroll_percent)).draw(app, assets, gfx, plugins, state);
+        self.slider_inside.with_pos(Position(self.rect.size.0, 0.) + Position(0., self.scroll_percent)).draw(app, assets, gfx, plugins, state, draw);
     }
     fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         self.slider_inside.with_pos(Position(0., self.scroll_percent) + self.rect.size.into()).after(app, assets, plugins, state);
@@ -159,11 +160,11 @@ pub struct Checkbox<State: UIStateCl, T: PosForm<State>> {
     #[builder(default="false")]
     pub checked: bool,
     #[builder(setter(strip_option), default="None")]
-    pub on_draw: Option<fn(&mut Checkbox<State, T>, &mut App, &mut Assets, &mut Graphics, &mut Plugins, &mut State)>,
+    pub on_draw: Option<DrawFunction<State, Checkbox<State, T>>>,
     #[builder(setter(strip_option), default="None")]
-    pub if_hovered: Option<fn(&mut Checkbox<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    pub if_hovered: Option<UpdateFunction<State, Checkbox<State, T>>>,
     #[builder(setter(strip_option), default="None")]
-    pub if_selected: Option<fn(&mut Checkbox<State, T>, &mut App, &mut Assets, &mut Plugins, &mut State)>,
+    pub if_selected: Option<UpdateFunction<State, Checkbox<State, T>>>,
     #[builder(default)]
     pub pos: Position
 }
@@ -183,13 +184,13 @@ impl<State: UIStateCl + Clone, T: PosForm<State>> Debug for Checkbox<State, T> {
             .finish()
 }   }
 impl<State: UIStateCl + Clone, T: PosForm<State>> Form<State> for Checkbox<State, T> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
         if let Some(fun) = self.on_draw {
-            fun(self, app, assets, gfx, plugins, state);
+            fun(self, app, assets, gfx, plugins, state, draw);
         }
         if let Some(form) = &mut self.inside {
             if self.checked {
-                form.with_pos(self.rect.pos).draw( app, assets, gfx, plugins, state);
+                form.with_pos(self.rect.pos).draw( app, assets, gfx, plugins, state, draw);
     }   }   }
     fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
         let mouse_pos = Position(app.mouse.x, app.mouse.y);
@@ -240,15 +241,13 @@ pub struct Mask<State: UIStateCl, T: PosForm<State>> {
     boo: PhantomData<State>
 }
 impl<State: UIStateCl, T: PosForm<State>> Form<State> for Mask<State, T> {
-    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State) {
+    fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
         let mut mask = gfx.create_draw();
         mask.rect(self.mask_rect.pos.into(), self.mask_rect.size.into());
-        let draw = get_mut::<State, Draw>(state);
         draw.mask(Some(&mask));
         if let Some(form) = &mut self.inside {
-            form.draw(app, assets, gfx, plugins, state);
+            form.draw(app, assets, gfx, plugins, state, draw);
         }
-        let draw = get_mut::<State, Draw>(state);
         draw.mask(None);
     }
 
@@ -279,3 +278,37 @@ impl<State: UIStateCl, T: PosForm<State>> Default for Mask<State, T> {
             pos: Default::default(),
             boo: Default::default()
 }   }   }
+
+#[derive(Clone, Debug)]
+struct RectBackForm<State: UIStateCl, Form: PosForm<State>> {
+	pub form: Form,
+	pub back: (Rect, Color),
+	pub boo: PhantomData<State>
+}
+impl<State: UIStateCl, Form: PosForm<State>> Positionable for RectBackForm<State, Form> {
+	fn add_pos(&mut self, to_add: Position) {
+		self.form.add_pos(to_add);
+	}
+	fn get_pos(&self) -> Position {
+		self.form.get_pos()
+	}
+	fn get_rect(&self) -> Rect {
+		self.form.get_rect()
+	}
+	fn get_size(&self) -> Size {
+		self.form.get_size()
+	}
+	fn with_pos(&self, to_add: Position) -> Self {
+		let mut new = self.clone();
+		new.add_pos(to_add);
+		new
+	}
+}
+impl<State: UIStateCl, F: PosForm<State>> Form<State> for RectBackForm<State, F> {
+	fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) { self.form.after(app, assets, plugins, state); }
+	fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
+		draw.rect((self.form.get_pos()-self.back.0.pos).into(), self.get_size().into())
+			.color(self.back.1);
+	}
+}
+// fn rect_back<State: UIStateCl, Form: PosForm<State>>(form: Form, ) -> 
