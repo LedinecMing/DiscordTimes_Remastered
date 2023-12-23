@@ -1,5 +1,7 @@
-use super::{deco::MapDeco, object::{MapBuildingdata, ObjectInfo}, tile::*};
+use super::{object::{MapBuildingdata, ObjectInfo}, tile::*};
 use crate::lib::{battle::army::{Army, Relations}, time::time::Time};
+use advini::{Sections, Ini, Section, SectionError, IniParseError};
+
 
 pub type Tilemap<T> = [[T; MAP_SIZE]; MAP_SIZE];
 #[derive(Copy, Clone, Debug)]
@@ -20,27 +22,59 @@ impl Default for HitboxTile {
 	}
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Sections)]
 pub struct FractionsRelations {
+	#[default_value="Relations::default()"]
     pub ally: Relations,
+	#[default_value="Relations::default()"]
     pub neighbour: Relations,
+	#[default_value="Relations::default()"]
     pub enemy: Relations
 }
-
+impl FractionsRelations {
+	fn new(ally: Relations, neighbour: Relations, enemy: Relations) -> Self {
+		Self { ally, neighbour, enemy }
+	}
+}
 pub const MAP_SIZE: usize = 50;
-#[derive(Clone, Debug)]
+
+#[derive(Clone, Debug, Default, Sections)]
+pub struct StartStats {
+	#[alias([start_time])]
+	pub time: Time,
+	#[alias([start_money])]
+	pub money: u64,
+	#[alias([start_mana])]
+	pub mana: u64
+}
+impl StartStats {
+	pub fn new(time: Time, money: u64, mana: u64) -> Self {
+		Self { time, money, mana }
+	}
+}
+#[derive(Clone, Debug, Sections)]
 pub struct GameMap {
+	#[inline_parsing]
+	pub start: StartStats,
+	#[unused]
     pub time: Time,
+	#[unused]
     pub tilemap: Tilemap<usize>,
+	#[unused]
     pub decomap: Tilemap<Option<usize>>,
+	#[unused]
     pub hitmap: Tilemap<HitboxTile>,
+	#[unused]
     pub buildings: Vec<MapBuildingdata>,
+	#[unused]
     pub armys: Vec<Army>,
+	#[inline_parsing]
     pub relations: FractionsRelations
 }
 impl Default for GameMap {
 	fn default() -> Self {
 		GameMap {
+			start: Default::default(),
 			time: Default::default(),
 			tilemap: [[0; MAP_SIZE]; MAP_SIZE],
 			decomap: [[None; MAP_SIZE]; MAP_SIZE],
@@ -52,6 +86,15 @@ impl Default for GameMap {
 	}
 }
 impl GameMap {
+	pub fn new(start: StartStats, relations: FractionsRelations) -> Self {
+		let time = start.time;
+		Self {
+			start,
+			relations,
+			time,
+			..Default::default()
+		}
+	}
     pub fn calc_hitboxes(&mut self, objects: &[ObjectInfo]) {
         for ((tileline, decoline), x) in self.tilemap.iter().zip(self.decomap.iter()).zip(0..MAP_SIZE) {
             for ((tile, deco), y) in tileline.iter().zip(decoline.iter()).zip(0..MAP_SIZE) {
@@ -71,7 +114,7 @@ impl GameMap {
         }
     }
     pub fn recalc_armies_hitboxes(&mut self) {
-        self.hitmap.iter_mut().for_each(|arr| arr.iter_mut().for_each(|mut el| {el.army = None;}));
+        self.hitmap.iter_mut().for_each(|arr| arr.iter_mut().for_each(|el| {el.army = None;}));
         for (i, army) in self.armys.iter().enumerate() {
 			if !army.active || army.defeated {
 				continue

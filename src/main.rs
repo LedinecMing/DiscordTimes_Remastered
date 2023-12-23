@@ -1,23 +1,23 @@
 #![feature(let_chains)]
-
+#![allow(unused_variables)]
+#![allow(dead_code)]
 mod lib;
 
 use crate::lib::{
     battle::{
-        army::{find_path, Army, ArmyStats, TroopType, MAX_TROOPS, MAX_LINES},
+        army::*,
 		battlefield::*,
-        troop::Troop,
+        troop::{Troop},
     },
-    parse::{parse_items, parse_locale, parse_objects, parse_settings, parse_units, parse_story, Locale},
+    parse::{parse_items, parse_locale, parse_objects, parse_settings, parse_units, parse_story, Locale, load_asset},
     units::{
         unit::{Unit, UnitPos},
         unitstats::ModifyUnitStats,
     },
 	new_forms::{TextureRenderer, SubWindowSys},
-	parse::read_file,
     items::item::*,
-    map::{map::*, object::ObjectInfo, event::{DelayedEvent, Event as GameEvent, Execute, execute_event}, tile::*},
-    time::time::{Time, Data as TimeData},
+    map::{map::*, object::ObjectInfo, event::{Event as GameEvent, Execute, execute_event}, tile::*},
+    time::time::{Data as TimeData},
 };
 use notan::{
     draw::*,
@@ -188,7 +188,7 @@ fn menu_button<T: ToText<State>>(
 
 static FORMS: Lazy<Mutex<HashMap<usize, SingleContainer<State, DynContainer<State>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-static LOCALE: Lazy<Mutex<Locale>> = Lazy::new(|| Mutex::new(Locale::new("Rus".into(), "Rus".into())));
+static LOCALE: Lazy<Mutex<Locale>> = Lazy::new(|| Mutex::new(Locale::new("Rus".into(), "Eng".into())));
 static MONITOR_SIZE: Lazy<Mutex<(f32, f32)>> = Lazy::new(|| Mutex::new((0., 0.)));
 
 #[repr(u32)]
@@ -199,7 +199,6 @@ enum Menu {
     Settings,
     Authors,
     UnitView,
-    JustRectangle,
     Battle,
     Items,
 }
@@ -211,97 +210,121 @@ enum Action {
 fn move_thing(state: &mut State) {
 	check_win(state);
 	if state.battle.winner.is_none() {
-		state.battle.active_unit = state.battle.search_next_active(&*state);
 		check_row_fall(state);
 		if state.battle.active_unit == None {
 			next_move(state);
 			state.battle.active_unit = state.battle.search_next_active(&*state);
 		}
 		state.battle.can_interact = search_interactions(state);
+	} else {
+		state.menu_id = Menu::Start as usize;
 	}
 }
 fn handle_action(action: Action, state: &mut State) {
 	match action {
-		Action::Cell(index, army) => {
+		Action::Cell(pos, army) => {
 			if let Some(_) = state.battle.winner {
 				return
 			}
-			if let Some(troop) = &mut state.gamemap.armys[army].get_troop(index) {
-				let unit_index = troop.get().unit.info.icon_index as u64 + 1;
+			let army = if army == 0 { state.battle.army1 } else { state.battle.army2 };
+			if let Some(icon_index) = state.gamemap.armys[army].hitmap[pos].and_then(|e| Some(state.gamemap.armys[army].troops[e].get().unit.info.icon_index)) {
+				let unit_index = icon_index as u64 + 1;
 				set_menu_value_num(state, "battle_unit_stat", unit_index as i64);
 				set_menu_value_num(state, "battle_unit_stat_changed", 1);
 			}
-			let mut moves = 0;
-			let mut active_is_dead = true;
+
+			let mut unit_inactive = false;
 			
 			if let Some(active_unit) = state.battle.active_unit {
-				let troop = &state.gamemap.armys[active_unit.0]
-					.troops.get(active_unit.1);
-				if let Some(troop) = troop {
-					let mut troop1 = troop.get();
-					let active_unit_index = troop1.pos.into();
-					let unit1 = &mut troop1.unit;
-					moves = unit1.modified.moves;
-					active_is_dead = unit1.is_dead();
-					if moves <= 0 || active_is_dead {
-						
+				if active_unit.0 == army {
+					if let Some(target_index) = state.gamemap.armys[army].hitmap[pos] {
+						if target_index == active_unit.1 {
+							let troop = &mut state.gamemap.armys[army].troops[target_index].get();
+							if troop_inactive(&troop) {
+								unit_inactive = true;
+							} else {
+								let unit = &mut troop.unit;
+								unit.stats.moves -= 1;
+								unit.recalc();
+								if troop_inactive(&troop) {
+									unit_inactive = true;
+								}
+							}
+						}
+					} else {
+						handle_action(Action::Move(active_unit.0, active_unit.1, pos), state);
 					}
-					else {
-						if let Some(troops_index) = state.gamemap.armys[army].hitmap[index] {
-							if !((active_unit.0, active_unit_index) == (army, index)) {
-								let troop = &state.gamemap.armys[army].troops[troops_index];
-								let unit2 = &mut troop.get().unit;
+				} else {
+					let target_troops = &state.gamemap.armys[army].troops;
+					if let Some(target_index) = state.gamemap.armys[army].hitmap[pos] {
+						let the_troops = {
+							let active_index = active_unit.1;
+							let active_army = active_unit.0;
+							(state.gamemap.armys[active_army].troops.get(active_index), target_troops.get(target_index))
+						};
+						if let (Some(active_troop), Some(target_troop)) = the_troops {
+							let (mut active_troop, mut target_troop) = (active_troop.get(), target_troop.get());
+							if troop_inactive(&active_troop) {
+								unit_inactive = true;
+							}
+							else {
+								let active_unit_index = active_troop.pos.into();
+								let unit1 = &mut active_troop.unit;
+								let unit2 = &mut target_troop.unit;
 								if !unit2.is_dead() {
-									if unit1.modified.moves != 0 {
-										if unit1.attack(
-											unit2,
-											UnitPos::from_index(index),
-											UnitPos::from_index(active_unit_index),
-											&state.battle
-										) {
-											unit1.stats.moves -= 1;
-											unit1.recalc();
-											moves = unit1.modified.moves;
+									if unit1.attack(
+										unit2,
+										UnitPos::from_index(pos),
+										UnitPos::from_index(active_unit_index),
+										&state.battle
+									) {
+										unit1.stats.moves -= 1;
+										unit1.recalc();
+										if unit1.is_dead() || unit1.modified.moves < 1 {
+											unit_inactive = true;
 										}
 									}
 								}
-							} else {
-								unit1.stats.moves -= 1;
-								unit1.recalc();
-								moves = unit1.modified.moves;
 							}
-						} else {
-							if army == active_unit.0 {
-								unit1.stats.moves -= 1;
-								unit1.recalc();
-								drop(troop1);
-								handle_action(Action::Move(active_unit.0, active_unit.1, index), state);
-							}
+						};
+					} else {
+						if army == active_unit.0 {
+							handle_action(Action::Move(active_unit.0, active_unit.1, pos), state);
 						}
 					}
-				};
+				}
 				state.gamemap.armys[army].recalc_army_hitmap();
 			}
-			if moves <= 0 || active_is_dead {
-				move_thing(state);
+			if unit_inactive {
+				state.battle.active_unit = state.battle.search_next_active(&*state);
 			}
+			move_thing(state);
 		},
 		Action::Move(army, troop, to) => {
 			if let Some(_) = state.battle.winner {
 				return
 			}
 			let army = &mut state.gamemap.armys[army];
-			army.troops[troop].get().pos = UnitPos::from_index(to);
+			let unit_inactive = {
+				let troop = &mut army.troops[troop].get();
+				troop.pos = UnitPos::from_index(to);
+				let unit = &mut troop.unit;
+				unit.stats.moves -= 1;
+				unit.recalc();
+				unit.modified.moves < 1 || unit.is_dead()
+			};
 			army.recalc_army_hitmap();
+			if unit_inactive {
+				state.battle.active_unit = state.battle.search_next_active(&*state);
+			}
 			move_thing(state);
 		}
 	}
 }
-
 fn gen_forms(size: (f32,f32)) -> Result<(), String> {
     let draw_back: DrawFunction<State, SingleContainer<State, Button<State, Text<State, String>>>> =
-	|container, _app, _assets, _gfx, _plugins, _: &mut State, draw| {
-        draw.rect(
+		|container, _app, _assets, _gfx, _plugins, _: &mut State, draw| {
+			draw.rect(
                 (container.pos - Position(container.get_size().0 / 2., 0.)).into(),
                 container.get_size().into(),
             )
@@ -409,8 +432,7 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
     ) {
         let pos = drawing.pos;
         let index = (pos.0 / 102.) as usize + index;
-        let troop = state.gamemap.armys[army].get_troop(index);
-        if let Some(troop) = troop.as_ref() {
+		if let Some(troop) = state.gamemap.armys[army].get_troop(index) {
 			let troop = troop.get();
             let unit = &troop.unit;
             let texture = &state.get_texture(
@@ -549,17 +571,23 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                                     let army = get_menu_value_num(state, "items_unit_stat_army").unwrap_or(0) as usize;
                                     match &mut container.inside {
                                         Some::<Text<State, String>>(_) => {
-                                            if let Some(troop) = &(state.gamemap.armys[army as usize]).get_troop(index) {
-                                                let troop = &troop.get();
-												let text = troop.unit.to_string();
-											    container.inside.as_mut().unwrap().text = text;
-                                                set_menu_value_num(state, "items_unit_stat_icon", troop.unit.info.icon_index as i64);											
+											let troops = &state.gamemap.armys[army].troops;
+											let troop = state.gamemap.armys[army].hitmap[index].and_then(|e| Some(&troops[e]));
+											if let Some(troop) = troop {
+												let icon_index = {
+													let unit = &troop.get().unit;
+													let text = unit.to_string();
+													container.inside.as_mut().unwrap().text = text;
+													unit.info.icon_index as i64
+												};
+                                                set_menu_value_num(state, "items_unit_stat_icon", icon_index);											
                                             };
                                             set_menu_value_num(state, "items_unit_stat_changed", 0);
                                         }
                                         None => {}
-                                }   }
-                            })
+									}
+								}
+							})
                             .pos(Position(900., 200.))
                             .build()?
                         ),
@@ -568,36 +596,39 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                                 .to_draw(|drawing, _app, _assets, _gfx, _plugins, state: &mut State, draw| {
                                     let pos = drawing.pos;
                                     if let (Some(army), Some(index)) = (get_menu_value_num(state, "items_unit_stat_army"), get_menu_value_num(state, "items_unit_stat_index")) {
-                                        if let Some(troop) = state.gamemap.armys[army as usize].get_troop(index as usize) {
-                                            let troop = &troop.get();
-                                            for i in 0..4 {
+										let troops = &state.gamemap.armys[army as usize].troops;
+										let troop = state.gamemap.armys[army as usize].hitmap[index as usize].and_then(|e| Some(&troops[e]));
+										if let Some(troop) = troop {
+											for i in 0..4 {
                                                 draw.rect((pos.0 + (53. + 5.) * i as f32, pos.1), (53., 53.))
                                                     .stroke_color(Color::BLACK)
                                                     .stroke(5.);
-                                                if let Some(item) = &troop.unit.inventory.items[i] {
+												if let Some(item) = &troop.get().unit.inventory.items[i] {
                                                     let texture = state.get_texture("assets/Items", &*item.get_info().icon);
                                                     draw.image(&texture)
                                                         .position(pos.0 + (53. + 5.) * i as f32, pos.1);
                                                     
                                                 }
                                             }
-                                        }
-                                    }
-                                })
+										}
+									}
+								})
                                 .build()?,
                                 Rect { pos:Position(1000., 147.), size: Size(212., 53.)}
                             ).if_clicked(|button, app, _assets, _plugins, state: &mut State| {
                                 let slot = ((app.mouse.position().0 - 1. - button.rect.pos.0)/53.) as usize;
                                 if let (Some(army), Some(index)) = (get_menu_value_num(state, "items_unit_stat_army"), get_menu_value_num(state, "items_unit_stat_index")) {
-                                    if let Some(troop) = state.gamemap.armys[army as usize].get_troop(index as usize) {
-                                        let troop = &mut *troop.get();
-                                        if troop.unit.inventory.items[slot].is_some() {
-                                            troop.unit.remove_item(slot);
+									if let Some(troop) = state.gamemap.armys[army as usize].get_troop(index as usize) {
+										//if let Some(troop) = state.gamemap.armys[army as usize].get_troop(index as usize) {
+										let troop = &mut troop.get();
+										let unit = &mut troop.unit;
+                                        if unit.inventory.items[slot].is_some() {
+                                            unit.remove_item(slot);
                                             set_menu_value_num(state, "items_unit_stat_changed", 1);
                                             return;
                                         }
                                         if let Some(item_index) = get_menu_value_num(state, "items_item_index") {
-                                            troop.unit.add_item(Item { index: item_index as usize }.into(), slot);
+                                            unit.add_item(Item { index: item_index as usize }.into(), slot);
                                             set_menu_value_num(state, "items_unit_stat_changed", 1);
                                         }                                    
                                     }
@@ -650,16 +681,10 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                                             container.get_size().into(),
                                         )
                                             .color(Color::from_hex(0x033121ff));
-                                        set_menu_value_num(
-                                            state,
-                                            "setting_rectangle_rotate_mode",
-                                            container.checked as i64,
-                                        );
-                                    },
-                                )
-                                .pos(Position(20., 0.))
+                                        LOCALE.lock().unwrap().switch_lang();
+									})
                                 .build()?,
-                            text(locale.get("settings_rect_rotate_type"))
+                            text("Language")
                                 .pos(Position(20., 0.))
                                 .size(20.0)
                                 .build()?,
@@ -677,6 +702,8 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                                     let decomap = gen_decomap(tilemap.1, state.objects.iter().position(|obj| obj.path == "Tree0.png").unwrap());
                                     state.gamemap.tilemap = tilemap.0;
                                     state.gamemap.decomap = decomap;
+									let (objects, gamemap) = (&state.objects, &mut state.gamemap);
+									state.gamemap.calc_hitboxes(&state.objects);
                                 })
                                 .build()?
                         ))
@@ -864,14 +891,19 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 								);
 								if let Some(army) = state.gamemap.hitmap[goal.0][goal.1].army  {
 									if army != 0 {
+										dbg!(army);
 										let pos = state.gamemap.armys[0].pos;
 										let diff = (pos.0 as i64 - goal.0 as i64, pos.1 as i64 - goal.1 as i64);
 										if -1 <= diff.0 && diff.0 <= 1 && -1 <= diff.1 && diff.1 <= 1 {
-											if state.battle.army1 != army && state.battle.army2 != 0 {
-												let battle = BattleInfo::new(state, army, 0);
+											if state.battle.army1 != army {
+												dbg!("starting batle");
+												let mut battle = BattleInfo::new(state, army, 0);
+												battle.start(state);
+												dbg!(&battle);
 												state.battle = battle;
 											}
-											set_menu_value_num(state, "start_menu", 1);
+											state.menu_id = Menu::Battle as usize;
+											//set_menu_value_num(state, "start_menu", 1);
 										}
 									}
 								}
@@ -897,11 +929,13 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 								state.gamemap.time.minutes += 10;
 
 								for i in 0..state.gameevents.len() {
-									if let Some(executions) = execute_event(i, &mut state.gamemap, 0, &mut state.gameevents, &state.units) {
+									if let Some(executions) = execute_event(i, &mut state.gamemap, 0, &mut state.gameevents, &state.units, false) {
 										for exec in executions {
 											match exec {
 												Execute::Wait(t) => {},
-												Execute::Execute(event) => {},
+												Execute::Execute(event) => {
+													execute_event(event.event, &mut state.gamemap, 0, &mut state.gameevents, &state.units, true);
+												},
 												Execute::StartBattle(army) => {
 													if state.battle.army1 != army && state.battle.army2 != 0 {
 														let battle = BattleInfo::new(state, army, 0);
@@ -956,24 +990,24 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 			.build()
 	}
     const SIZE: (f32, f32) = (52., 40.);
+	const VIEW: usize = 20;
 	fn draw_gamemap<Form: PosForm<State>>(drawing: &mut Form, app: &mut App, gfx: &mut Graphics, assets: &mut Assets, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
         let terrain = state.assets.get("assets/Terrain").unwrap();
 		let army = state.assets.get("assets/Armys").unwrap();
-
 		draw.image(&state.assets.get("assets/Map").and_then(|map| map.get("Map")).unwrap().lock().unwrap())
 			.position(0., 0.);
-		
-        for i in 0..MAP_SIZE {
-            for j in 0..MAP_SIZE {
-                // let asset = terrain
-                //     .get(TILES[state.gamemap.tilemap[i][j]].sprite())
-                //     .unwrap();
-                // let texture = asset.lock().unwrap();
+		let pos = state.gamemap.armys[0].pos;
+        for i in 0..MAP_SIZE {//((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
+            for j in 0..MAP_SIZE {//((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
+                let asset = terrain
+                    .get(TILES[state.gamemap.tilemap[i][j]].sprite())
+                    .unwrap();
+                let texture = asset.lock().unwrap();
 
                 let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
-                // draw.image(&texture)
-                //     .position(pos.0, pos.1)
-                //     .size(SIZE.0, SIZE.1);
+                draw.image(&texture)
+                     .position(pos.0, pos.1)
+                     .size(SIZE.0, SIZE.1);
                 if state.gamemap.armys[0].path.contains(&(i, j)) {
                     draw.rect((pos).into(), (10., 10.)).color(Color::RED);
                 }
@@ -985,8 +1019,8 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                 }
             }
         }
-        for i in 0..0 { //}MAP_SIZE {
-            for j in 0..MAP_SIZE {
+        for i in 0..0 {//i in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
+            for j in 0..0 {//j in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
                 let asset = terrain
                     .get(TILES[state.gamemap.tilemap[i][j]].sprite())
                     .unwrap();
@@ -1040,15 +1074,15 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
             }
         }
         let objects = state.assets.get("assets/Objects").unwrap();
-        for i in 0..MAP_SIZE {
-            for j in 0..MAP_SIZE {
+		for i in 0..0 {//i in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
+            for j in 0..0 {//j in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
                 if let Some(index) = state.gamemap.decomap[i][j] {
                     let asset = objects
                         .get(&state.objects[index].path)
                         .expect(&*format!("{}", &state.objects[index].path));
                     let texture = asset.lock().unwrap();
                     let size = state.objects[index].size;
-                    let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
+					let pos = Position((i) as f32 * SIZE.0, (j) as f32 * SIZE.1);
                     draw.image(&texture)
                         .position(pos.0, pos.1 - (size.1 as f32 - 1.) * SIZE.1)
                         .size(SIZE.0 * size.0 as f32, SIZE.1 * size.1 as f32);
@@ -1063,7 +1097,7 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                 .expect(&*format!("{}", &state.objects[index].path));
             let texture = asset.lock().unwrap();
             let size = state.objects[index].size;
-            let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
+			let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
             draw.image(&texture)
                 .position(pos.0, pos.1)// - (size.1 as f32 - 1.) * SIZE.1)
                 .size(SIZE.0 * size.0 as f32, SIZE.1 * size.1 as f32);
@@ -1479,9 +1513,9 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
         army: usize,
         index: usize,
     ) {
-        let troop = state.gamemap.armys[army].get_troop(index);
-        if let Some(troop) = troop {
-			let troop = &troop.get();
+		let army = if army == 0 { state.battle.army1 } else { state.battle.army2 };
+		if let Some(troop) = state.gamemap.armys[army as usize].hitmap[index].and_then(|index| Some(&state.gamemap.armys[army as usize].troops[index])) {
+			let troop = troop.get();
             let unit = &troop.unit;
             let texture = &state
                 .assets
@@ -1498,6 +1532,7 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 			let size = unit.info.size;
             draw.image(&texture).position(pos.0, pos.1)
                 .size(size.0 as f32 * 92., size.1 as f32 * 92.);
+			let size = (1, 1);
 			{
 				let pos = pos + Position( (size.0 - 1) as f32 * 46., (size.1 - 1) as f32 * 92.);
 				draw.rect((pos.0, pos.1 + 92.), (92., 50.))
@@ -1521,7 +1556,7 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                 ),
             );
             draw.rect(health_rect.0, health_rect.1)
-                .color(Color::from_rgba(1., 0., 0.,  1. - stats.hp as f32 / stats.max_hp as f32));
+                 .color(Color::from_rgba(1., 0., 0.,  1. - stats.hp as f32 / stats.max_hp as f32));
 			if let Some(active_unit) = state.battle.active_unit {
 				if active_unit.0 == army && let Some(index) = state.gamemap.armys[army].hitmap[index] {
 					if active_unit.1 == index {
@@ -1916,35 +1951,31 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
 		let asset = assets
 			.get_mut("assets/Terrain").unwrap()
 			.insert(path.to_string(),
-					Asset::from_data(&*path.clone(),
-									 gfx.create_texture()
-									 .from_image(&read_file(format!("assets/Terrain/{}", path)))
-									 .build()
-									 .unwrap()));
+					load_asset(app_assets, gfx, &format!("assets/Terrain/{path}")).unwrap());
 	}
 	assets.insert("assets/Armys", {
 		let mut mapa = HashMap::new();
 		mapa.insert("Army.png".into(),
-					Asset::from_data("Army.png",
-									 
-									 gfx.create_texture()
-									 .from_image(&read_file("assets/Army.png".into()))
-									 .build()
-									 .unwrap()));
+					load_asset(app_assets, gfx, &format!("assets/Army.png")).unwrap());
 		mapa
 	});
-    let settings = parse_settings();
+    let settings = parse_settings(app_assets);
 	
 	app.window().set_fullscreen(settings.fullscreen);
 	app.window().set_size(settings.init_size.0, settings.init_size.1);
-    parse_items(&settings.locale, &mut assets, gfx);
-    parse_locale(&[&settings.locale, &settings.additional_locale], &mut LOCALE.lock().unwrap());
-	
-    let units = parse_units(&mut assets, gfx);
-    let objects = parse_objects(&mut assets, gfx);
+    parse_items(&settings.locale, app_assets, gfx, &mut assets);
+	dbg!(&settings);
+	{
+		let locale = &mut LOCALE.lock().unwrap();
+		parse_locale(app_assets, &[&settings.locale, &settings.additional_locale], locale);
+		locale.set_lang((&settings.locale, &settings.additional_locale));
+	}
+    let units = parse_units(app_assets, &mut assets, gfx);
+    let objects = parse_objects(app_assets, gfx, &mut assets);
 
-	let (mut gamemap, gameevents) = parse_story(&units, &objects, &settings.locale, &settings.additional_locale);
+	let (mut gamemap, gameevents) = parse_story(app_assets, &units, &objects, &settings.locale, &settings.additional_locale);
 	gamemap.calc_hitboxes(&objects);
+	
 	let terrain = assets.get("assets/Terrain").unwrap();
 	let mut draw: Draw = gfx.create_draw();
 	for i in 0..MAP_SIZE {
@@ -1993,8 +2024,8 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
         assets,
         battle: BattleInfo {
 			winner: None,
-            army1: 0,
-            army2: 1,
+            army1: 1,
+            army2: 0,
             battle_ter: 0,
             active_unit: None,
             can_interact: None,
@@ -2008,8 +2039,6 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
     let mut battle = state.battle.clone();
     battle.start(&mut state);
     state.battle = battle;
-    state.battle.active_unit = state.battle.search_next_active(&state);
-    state.battle.can_interact = search_interactions(&mut state);
 	dbg!(&state.battle);
 	let size = gfx.size();
 	let size = (size.0 as f32, size.1 as f32);

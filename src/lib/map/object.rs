@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::lib::{
     battle::{army::Army, troop::Troop},
-    items::item::{Item, ITEMS},
+    items::item::{ITEMS},
     units::unit::Unit,
 };
 use rand::{seq::SliceRandom, thread_rng};

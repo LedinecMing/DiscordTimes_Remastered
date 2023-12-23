@@ -318,12 +318,13 @@ const FIRE_SLOWNESS_PERCENT: Percent = Percent::const_new(10);
 pub struct Fire {
     pub info: EffectInfo,
     addition_speed: i64,
+	additional_power: i64,
 }
 impl Effect for Fire {
     fn update_stats(&mut self, unit: &mut Unit) {
         let mut unitstats = unit.stats;
-        unitstats.hp -= FIRE_PERCENT.calc(unitstats.hp);
-        self.addition_speed = FIRE_SLOWNESS_PERCENT.calc(unitstats.speed);
+        unitstats.hp -= (FIRE_PERCENT + Percent::new(self.additional_power as i16 / 5)).calc(unitstats.hp) * ((unit.info.unit_type == UnitType::Mecha) as i64 + 1);
+        self.addition_speed = FIRE_SLOWNESS_PERCENT.calc(unitstats.speed) + self.additional_power / 10;
         unitstats.speed -= self.addition_speed;
     }
     fn on_tick(&mut self) -> bool {
@@ -344,11 +345,22 @@ impl Effect for Fire {
         EffectKind::Fire
     }
 }
+const STANDART_FIRE_LONG: i32 = 5;
+impl Fire {
+	pub fn new(additional_power: i64) -> Self {
+		Self {
+			info: EffectInfo { lifetime: STANDART_FIRE_LONG + additional_power as i32 / 25 },
+			addition_speed: 0,
+			additional_power
+		}
+	}
+}
 impl Default for Fire {
     fn default() -> Self {
         Self {
             info: EffectInfo { lifetime: 5 },
             addition_speed: 0,
+			additional_power: 0
         }
     }
 }

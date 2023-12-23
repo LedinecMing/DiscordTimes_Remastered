@@ -5,7 +5,7 @@ use notan::{
 	prelude::{App, Assets, Graphics, Plugins}
 };
 use notan_ui::{
-	defs::{DrawFunction, Positionable, UIStateCl, PosForm, ObjPosForm},
+	defs::{DrawFunction, Positionable, UIStateCl, ObjPosForm},
 	rect::{Position, Size, Rect},
 	form::Form
 };

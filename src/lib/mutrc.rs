@@ -1,4 +1,5 @@
-use std::{sync::{Arc, Mutex, MutexGuard}, ops::Drop};
+use std::{sync::{Arc, Mutex, MutexGuard}, ops::Drop, fmt::Debug};
+
 #[derive(Debug)]
 pub struct SendMut<T: ?Sized> {
     inner: Arc<Mutex<T>>,
@@ -31,6 +32,11 @@ impl<T> From<Arc<Mutex<T>>> for SendMut<T> {
     fn from(value: Arc<Mutex<T>>) -> Self {
         Self { inner: value }
     }
+}
+impl<T> Default for SendMut<Vec<T>> {
+    fn default() -> Self {
+		Self { inner: Arc::new(Mutex::new(Vec::new())) }
+	}
 }
 impl<T> From<T> for SendMut<T>
 where

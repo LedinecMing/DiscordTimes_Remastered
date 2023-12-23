@@ -7,7 +7,7 @@ use crate::lib::{
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use tracing_mutex::stdsync::TracingMutex as Mutex;
-
+use advini::{Ini, IniParseError};
 #[derive(Debug, Clone, PartialEq)]
 pub enum ItemType {
     Artifact,
@@ -37,13 +37,22 @@ pub struct ItemInfo {
     pub icon: String,
     pub sells: bool,
     pub itemtype: ArtifactType,
-    pub bonus: Option<Box<dyn Bonus>>,
+    pub bonus: Option<Bonus>,
     pub modify: ModifyUnitStats,
 }
 pub static ITEMS: Lazy<Mutex<HashMap<usize, ItemInfo>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 #[derive(Clone, Copy, Debug)]
 pub struct Item {
     pub index: usize,
+}
+impl Ini for Item {
+	fn eat<'a>(chars: std::str::Chars<'a>) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
+		match <usize as Ini>::eat(chars) {
+			Ok(v) => Ok((Self { index: v.0}, v.1)),
+			Err(err) => Err(err)
+		}
+	}
+	fn vomit(&self) -> String { self.index.vomit() }
 }
 impl Item {
     pub fn get_info(&self) -> ItemInfo {

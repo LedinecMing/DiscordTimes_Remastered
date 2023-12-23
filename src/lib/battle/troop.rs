@@ -1,14 +1,14 @@
 use crate::lib::units::unitstats::ModifyUnitStats;
 
 use crate::lib::{
-    battle::army::{Army, TroopType},
-    bonuses::bonuses::NoBonus,
-    mutrc::SendMut,
+    battle::army::{Army},
+    bonuses::Bonus,
     units::unit::*,
 };
-use std::fmt::{Display, Formatter};
+use std::fmt::{Display, Formatter, Debug};
 
-#[derive(Clone, Debug)]
+
+#[derive(Clone)]
 pub struct Troop {
     pub was_payed: bool,
     pub is_free: bool,
@@ -17,7 +17,15 @@ pub struct Troop {
     pub custom_name: Option<String>,
     pub unit: Unit,
 }
-
+impl Debug for Troop {
+	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Troop")
+			.field("Name", &self.unit.info.name)
+			.field("Army", &self.unit.army)
+			.field("Pos", &self.pos)
+			.finish_non_exhaustive()
+	}
+}
 impl Troop {
     pub fn on_pay(&self, army: &mut Army) -> u64 {
         if self.is_free {
@@ -46,7 +54,7 @@ impl Troop {
                 inventory: UnitInventory::empty(),
                 army: 0,
                 modify: ModifyUnitStats::default(),
-                bonus: Box::new(NoBonus {}),
+                bonus: Bonus::NoBonus,
                 effects: vec![],
             },
         }

@@ -14,7 +14,7 @@ pub enum EffectKind {
 }
 
 dyn_clone::clone_trait_object!(Effect);
-pub trait Effect: DynClone + Debug + Send {
+pub trait Effect: DynClone + Debug + Send + Sync {
     fn update_stats(&mut self, unit: &mut Unit);
     fn on_tick(&mut self) -> bool {
         false

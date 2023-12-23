@@ -11,6 +11,7 @@ use crate::{
 use num::{integer::sqrt, pow};
 use once_cell::sync::Lazy;
 use pathfinding::directed::astar::astar;
+use advini::{Sections, Ini, Section, SectionError, IniParseError};
 
 
 #[derive(Clone, Debug, Default)]
@@ -20,14 +21,33 @@ pub struct Relations {
     neighbour: u8,
     enemy: u8
 }
-
-#[derive(Clone, Debug, Default)]
+impl Ini for Relations {
+	fn eat<'a>(chars: std::str::Chars<'a>) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
+		match <(u8, u8, u8, u8) as Ini>::eat(chars) {
+			Ok(v) => Ok({
+				let rels = v.0;
+				(Self { player: rels.0, ally: rels.1, neighbour: rels.2, enemy: rels.3 }, v.1)
+			}),
+			Err(err) => Err(err)
+		}
+	}
+	fn vomit(&self) -> String {
+		(self.player, self.ally, self.neighbour, self.enemy).vomit()
+	}
+}
+#[derive(Clone, Debug, Default, Sections)]
 pub struct ArmyStats {
+	#[default_value="0_u64"]
     pub gold: u64,
+	#[default_value="0_u64"]
     pub mana: u64,
     pub army_name: String,
 }
-
+impl ArmyStats {
+	fn new(gold: u64, mana: u64, army_name: String) -> Self {
+		Self { gold, mana, army_name }
+	}
+}
 fn eq_fields(index: usize, index1: usize, columns: usize, rows: usize) -> bool {
     let start_field = field_type(index, *MAX_TROOPS);
     let this_field = field_type(index1, *MAX_TROOPS);
@@ -44,17 +64,49 @@ pub enum Control {
 	PC,
 	Player(usize)
 }
+impl Ini for Control {
+	fn eat<'a>(chars: std::str::Chars<'a>) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
+		let (tag, chars) = match <u8 as Ini>::eat(chars) {
+			Ok(v) => Ok(v),
+			Err(err) => Err(err)
+		}?;
+		match tag {
+			0 => Ok((Control::PC, chars)),
+			_ => {
+				let (v, chars) = match <usize as Ini>::eat(chars) {
+					Ok(v) => Ok(v),
+					Err(err) => Err(err)
+				}?;
+				Ok((Control::Player(v), chars))
+			}
+		}
+	}
+	fn vomit(&self) -> String {
+		match self {
+			Control::PC => 0_u8.vomit(),
+			Control::Player(n) => (0_u8, *n).vomit()
+		}
+	}
+}
 #[derive(Clone, Debug, Default)]
 pub struct Army {
-	pub troops: Vec<SendMut<Troop>>, // vec of units
+	pub troops: Vec<TroopType>, // vec of units
+	//#[unused]
 	pub hitmap: Vec<Option<usize>>, // map of maybe units ids
-	pub building: Option<usize>, // what building army inи
+	//#[unused]
+	pub building: Option<usize>, // what building army in
+	//#[inline_parsing]
     pub stats: ArmyStats,
+	//#[default_value="Vec::new()"]
     pub inventory: Vec<Item>,
     pub pos: (usize, usize),
+	//#[default_value="true"]
 	pub active: bool,
+	//#[unused]
 	pub defeated: bool,
+	//#[default_value = "Control::PC"]
 	pub control: Control,
+	//#[unused]
     pub path: Vec<(usize, usize)>,
 }
 pub type TroopType = SendMut<Troop>;
@@ -62,7 +114,33 @@ pub type TroopType = SendMut<Troop>;
 pub static MAX_TROOPS: Lazy<usize> = Lazy::new(|| unsafe{&SETTINGS}.max_troops);
 
 impl Army {
-	pub fn recalc_hitmap(troops: &Vec<SendMut<Troop>>, hitmap: &mut Vec<Option<usize>>, columns: usize) {
+	pub fn new(
+        troops: Vec<TroopType>,
+        stats: ArmyStats,
+        inventory: Vec<Item>,
+        pos: (usize, usize),
+		active: bool,
+		control: Control,
+    ) -> Self {
+		let hitmap: Vec<Option<usize>> = (0..*MAX_TROOPS).map(|_| None::<usize>).collect();
+		let mut army = Army {
+			troops: Vec::new(),
+			building: None,
+			hitmap,
+			defeated: false,
+			stats,
+			control,
+			inventory,
+			pos,
+			active,
+			path: Vec::new()
+		};
+		for troop in troops {
+			army.add_troop(troop).ok();
+		}
+		army
+    }
+	pub fn recalc_hitmap(troops: &Vec<TroopType>, hitmap: &mut Vec<Option<usize>>, columns: usize) {
 		let info = troops.iter().enumerate().map(|(num, troop)| {
 			let troop = troop.get();
 			(troop.unit.info.size, troop.pos, num)
@@ -81,6 +159,30 @@ impl Army {
 		Army::recalc_hitmap(&self.troops, &mut hitmap, *MAX_TROOPS / MAX_LINES);
 		self.hitmap = hitmap
 	}
+	pub fn get_army_slice<'a>(troops: &'a mut Vec<Troop>) -> Vec<&'a mut [Troop]>
+	{
+		let len = troops.len();
+		let mut res = Vec::new();
+		fn get_slices<'a>(mut res: Vec<&'a mut [Troop]>, s: &'a mut [Troop]) -> Vec<&'a mut [Troop]> {
+			let len = s.len();
+			let (troop1, troop2) = s.split_at_mut(len / 2);
+			
+			if troop1.len() == 1 {
+			    res.push(troop1);
+			} else {
+			    res = get_slices(res, troop1);
+			}
+			if troop2.len() == 1 {
+			    res.push(troop2);
+			} else {
+			    res = get_slices(res, troop2);
+			}   
+			
+			res
+		}
+		res = get_slices(res, troops.as_mut_slice());
+		res
+	}
 	/*
 	rffffr - 1;2;3
     rbbbbr - 7;8;9
@@ -89,7 +191,7 @@ impl Army {
   	rbTbTr
 	where f - front; r - reserve; T - troop; b - back
 	 */
-	fn fit_to(hitmap: &[Option<usize>], size: (usize, usize), columns: usize, rows: usize, row: usize, column: usize) -> bool {
+	pub fn fit_to(hitmap: &[Option<usize>], size: (usize, usize), columns: usize, rows: usize, row: usize, column: usize) -> bool {
 		let mut fits = true;
 		let mut index = row*columns+column;
 		'check_rect: for j in 0..size.1 {
@@ -104,7 +206,7 @@ impl Army {
 		}
 		fits
 	}
-	fn fit(hitmap: &[Option<usize>], size: (usize, usize), rows: usize, columns: usize) -> Vec<usize> {
+	pub fn fit(hitmap: &[Option<usize>], size: (usize, usize), rows: usize, columns: usize) -> Vec<usize> {
 		let mut possible = Vec::new();
 		for row in 0..=(rows - size.1) {
 			for column in 0..=(columns - size.0) {
@@ -134,40 +236,15 @@ impl Army {
 			self.inventory.remove(index);
 		}
 	}
-
-    pub fn get_troop(&self, pos: usize) -> Option<TroopType> {
+	pub fn get_troop(&self, pos: usize) -> Option<TroopType> {
 		if let Some(index) = self.hitmap[pos] {
 			return self.troops.get(index).cloned()
 		};
 		None
     }
-    pub fn new(
-        troops: Vec<TroopType>,
-        stats: ArmyStats,
-        inventory: Vec<Item>,
-		control: Control,
-        pos: (usize, usize),
-		active: bool
-    ) -> Self {
-		let hitmap: Vec<Option<usize>> = (0..*MAX_TROOPS).map(|_| None::<usize>).collect();
-		let mut army = Army {
-			troops: Vec::new(),
-			building: None,
-			hitmap,
-			defeated: false,
-			stats,
-			control,
-			inventory,
-			pos,
-			active,
-			path: Vec::new()
-		};
-		for troop in troops {
-			army.add_troop(troop).ok();
-		}
-		army
-    }
+
 }
+
 fn dist(p1: &(usize, usize), p2: &(usize, usize)) -> u32 {
     sqrt((pow(p1.0 as isize - p2.0 as isize, 2) + pow(p1.1 as isize - p2.1 as isize, 2)) as u32)
 }
@@ -241,3 +318,4 @@ pub fn find_path(
     )?;
     Some((path.0[1..].to_vec(), path.1))
 }
+

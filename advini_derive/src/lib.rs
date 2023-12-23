@@ -1,19 +1,22 @@
+use std::str::FromStr;
+
 use proc_macro2::{TokenStream, Span}; 
 use quote::{quote, quote_spanned, format_ident, ToTokens};
 use syn::{
-    parse_macro_input, parse_quote, Data, DeriveInput, Fields, GenericParam, Generics, Index, Ident, MetaNameValue, Meta, Expr,
+    parse_macro_input, parse_quote, Data, DeriveInput, Fields, GenericParam, Generics, Index, Ident, MetaNameValue, Meta, Expr, parse::{Parse, Parser},
 };
 
-#[proc_macro_derive(Sections, attributes(alias, unused, default_value, inline_parsing))]
+#[proc_macro_derive(Sections, attributes(alias, unused, default_value, inline_parsing, additional))]
 pub fn derive_sections(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 	let input = parse_macro_input!(input as DeriveInput);
 	let generics = add_trait_bounds(input.generics);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 	let name = input.ident;
-	let (from, into) = trait_body(&input.data, &name);
+	
+	let (from, into, additional) = trait_body(&input.data, &name);
 	quote!(
 		impl #impl_generics Sections for #name #ty_generics #where_clause {
-			fn from_section(sec: Section) -> Result<(Self, HashMap<String, String>), SectionError> {
+			fn from_section(sec: Section) -> Result<(Self, std::collections::HashMap<String, String>), SectionError> {
 				let prop = sec;
 				#from
 			}
@@ -35,6 +38,7 @@ struct FieldInfo {
 	pub aliases: (Ident, Vec<Ident>),
 	pub used: bool,
 	pub default: Option<syn::Expr>,
+	pub additional: Vec<syn::Expr>,
 	pub inline: bool,
 	pub ty: syn::Type
 }
@@ -42,8 +46,9 @@ fn to_litstr(ident: &Ident) -> syn::LitStr {
 	syn::LitStr::new(&ident.to_string(), ident.span())
 }
 
-fn trait_body(data: &Data, ident: &Ident) -> (TokenStream, TokenStream) {
+fn trait_body(data: &Data, ident: &Ident) -> (TokenStream, TokenStream, TokenStream) {
 	let mut fields = Vec::new();
+	let mut additional_types = Vec::new();
 	match data {
 		Data::Enum(_) => { unimplemented!() },
 		Data::Struct(s) => {
@@ -53,6 +58,7 @@ fn trait_body(data: &Data, ident: &Ident) -> (TokenStream, TokenStream) {
 						fields.push(FieldInfo {
 							aliases: (field.ident.clone().unwrap(), Vec::new()),
 							used: true,
+							additional: Vec::new(),
 							default: None,
 							inline: false,
 							ty: field.ty.clone()
@@ -68,6 +74,21 @@ fn trait_body(data: &Data, ident: &Ident) -> (TokenStream, TokenStream) {
 									},
 									syn::Meta::Path(p) => {
 										fields.last_mut().unwrap().aliases.1.push(p.get_ident().unwrap().clone());
+									},
+									_ => unimplemented!()
+								}
+							}
+							if attr.path().is_ident("additional") {
+								match &attr.meta {
+									syn::Meta::List(ml) => {
+										ml.parse_nested_meta(|meta| {
+											let a = <syn::Expr as Parse>::parse.parse(meta.path.into_token_stream().into()).unwrap();
+											if !additional_types.contains(&a) {
+												additional_types.push(a.clone());
+											};
+											fields.last_mut().unwrap().additional.push(a);
+											Ok(())
+										}).ok();
 									},
 									_ => unimplemented!()
 								}
@@ -117,56 +138,59 @@ fn trait_body(data: &Data, ident: &Ident) -> (TokenStream, TokenStream) {
 			}
 		}
 	});
-	let match_patterns = fields.iter().map(|field| {
-		let ident = &field.aliases.0;
-		let ty = &field.ty;
-		let idents = field.aliases.1
-			.iter()		
-			.map(to_litstr);
-		let name = to_litstr(&ident);
-		let pattern = if field.aliases.1.is_empty() {
-			quote!( #name )
-		} else {
-			quote!( #name | #(#idents)|* )
-		};
-		let res = if let Some(_) = &field.default {
-			quote!(
-				res
-			)
-		} else {
-			quote!(
-				Some(res)
-			)
-		};
-		let mut ty_ = quote!( #ty );
-		let tystr = ty.to_token_stream().to_string();
-		if tystr.starts_with("Option") {
-			let tystr = syn::LitStr::new(tystr.split_once("<").unwrap().1.rsplit_once(">").unwrap().0, Span::call_site()).parse::<syn::Type>().unwrap();
-			ty_ = quote!( #tystr );
-		}
-		if field.inline {
-			quote!(
-				
-			)
-		} else {
-			quote!(
-				#pattern => #ident = match <#ty_ as Ini>::eat(v) {
-					Ok((res, chars)) => {
-						v = chars;
-						#res.into()
-					},
-					Err(IniParseError::Empty(chars)) => {
-						v = chars;
-						continue;
-					},
-					Err(IniParseError::Error(info)) => {
-						println!("{}", info);
-						continue;
-					}
-				},		
- 			)
-		}
-	});
+	let match_patterns = fields
+		.iter()
+		.filter(|f| f.used)
+		.map(|field| {
+			let ident = &field.aliases.0;
+			let ty = &field.ty;
+			let idents = field.aliases.1
+				.iter()		
+				.map(to_litstr);
+			let name = to_litstr(&ident);
+			let pattern = if field.aliases.1.is_empty() {
+				quote!( #name )
+			} else {
+				quote!( #name | #(#idents)|* )
+			};
+			let res = if let Some(_) = &field.default {
+				quote!(
+					res
+				)
+			} else {
+				quote!(
+					Some(res)
+				)
+			};
+			let mut ty_ = quote!( #ty );
+			let tystr = ty.to_token_stream().to_string();
+			if tystr.starts_with("Option") {
+				let tystr = syn::LitStr::new(tystr.split_once("<").unwrap().1.rsplit_once(">").unwrap().0, Span::call_site()).parse::<syn::Type>().unwrap();
+				ty_ = quote!( #tystr );
+			}
+			if field.inline {
+				quote!(
+					
+				)
+			} else {
+				quote!(
+					#pattern => #ident = match <#ty_ as Ini>::eat(v) {
+						Ok((res, chars)) => {
+							v = chars;
+							#res.into()
+						},
+						Err(IniParseError::Empty(chars)) => {
+							v = chars;
+							continue;
+						},
+						Err(IniParseError::Error(info)) => {
+							println!("{}", info);
+							continue;
+						}
+					},		
+ 				)
+			}
+		});
 	let name = &ident;
 	let construct_fields = fields
 		.iter()
@@ -182,6 +206,7 @@ fn trait_body(data: &Data, ident: &Ident) -> (TokenStream, TokenStream) {
 	let struct_construction = quote! {
 		#name::new( #(#construct_fields),* )
 	};
+	dbg!(&struct_construction.to_string());
 	let inlined_fields = fields
 		.iter()
 		.filter(|f|
@@ -191,16 +216,15 @@ fn trait_body(data: &Data, ident: &Ident) -> (TokenStream, TokenStream) {
 			let ident = &f.aliases.0;
 			let ty = &f.ty;
 			quote!(
-				if !remaining.is_empty() {
-					let res = <#ty as Sections>::from_section(remaining).unwrap();
-					(#ident, remaining) = (res.0.into(), res.1);
-				}
+				dbg!("inline");
+				let res = <#ty as Sections>::from_section(remaining).unwrap();
+				(#ident, remaining) = (res.0.into(), res.1);
 			)
 		});
 	
 	let field_declarations = quote! {
 		#(#field_declarations )*
-		let mut remaining = HashMap::new();
+		let mut remaining = std::collections::HashMap::new();
 		for (k, value) in prop.iter() {
 			let mut v = value.chars();
 			match &**k {
@@ -215,7 +239,14 @@ fn trait_body(data: &Data, ident: &Ident) -> (TokenStream, TokenStream) {
 	};
 
 	let to_section = to_section_body(&fields, ident);
-	(field_declarations, to_section )
+	let additional = if additional_types.is_empty() {
+		TokenStream::from_str("()").unwrap()
+	} else {
+		quote!(
+			(#(#additional_types,)*)
+		)
+	};
+	(field_declarations, to_section, additional)
 }
 
 fn to_section_body(fields: &Vec<FieldInfo>, _ident: &Ident) -> TokenStream {
@@ -244,7 +275,7 @@ fn to_section_body(fields: &Vec<FieldInfo>, _ident: &Ident) -> TokenStream {
 			}
 		});
 	quote!(
-		let mut section = HashMap::new();
+		let mut section = std::collections::HashMap::new();
 		#(
 			#fields_declarations
 		)*

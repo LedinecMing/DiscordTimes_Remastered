@@ -4,6 +4,9 @@ use num::Num;
 pub use advini_derive::*;
 
 pub fn parse_for_sections(ini_doc: &str) -> Vec<(String, HashMap<String, String>)> {
+    parse_for_sections_with(ini_doc, |(prop, v, _s)| (prop.to_lowercase(), v.to_string()), &mut 0)
+}
+pub fn parse_for_sections_with<'a, S>(ini_doc: &'a str, with: fn((&'a str, &'a str, &mut S)) -> (String, String), s: &mut S) -> Vec<(String, HashMap<String, String>)> {
     let mut result = Vec::new();
     let mut old_sec = "";
 	let mut last_prop = "".into();
@@ -21,8 +24,8 @@ pub fn parse_for_sections(ini_doc: &str) -> Vec<(String, HashMap<String, String>
                 }
             }
             Item::Property(k, v) => {
-				let prop = k.to_lowercase().to_string();
-                props.insert(prop.clone(), v.into());
+				let (prop, v) = with((k, v, s));
+                props.insert(prop.clone(), v);
 				last_prop = prop;
             }
             Item::Blank | Item::Comment(_) => {},
@@ -158,26 +161,23 @@ impl Ini for String {
 }
 impl Ini for bool {
 	fn eat<'a>(mut chars: Chars<'a>) -> Result<(Self, Chars<'a>), IniParseError> {
-		if let Some(chr) = chars.next() {
-			loop {
-				if chars.next() == Some(SEPARATOR) {
-					break;
+		loop {
+			if let Some(chr) = chars.next() {
+				match chr {
+					SEPARATOR => {
+						break Err(IniParseError::Empty(chars))
+					},
+					't' | 'y' | '1' => {
+						break Ok((true, chars))
+					},
+					'f' | 'n' | '0' => {
+						break Ok((false, chars))
+					},
+					_ => continue
 				}
+			} else {
+				break Err(IniParseError::Empty(chars))
 			}
-			match chr {
-				SEPARATOR => {
-					return Err(IniParseError::Empty(chars))
-				},
-				't' | 'y' | '1' => {
-					Ok((true, chars))
-				},
-				'f' | 'n' | '0' => {
-					Ok((false, chars))
-				},
-				_ => Err(IniParseError::Error("what"))
-			}
-		} else {
-			Err(IniParseError::Empty(chars))
 		}
 	}
 	fn vomit(&self) -> String {
@@ -288,12 +288,12 @@ macro_rules! tuple_impls {
         tuple_impls!([($idx, $typ);] $( ($nidx => $ntyp), )*);
         tuple_impls!($( ($nidx => $ntyp), )*); // invoke macro on tail
     };
-    ([$(($accIdx: tt, $accTyp: ident);)+]  ($idx:tt => $typ:ident), $( ($nidx:tt => $ntyp:ident), )*) => {
+     ([$(($accIdx: tt, $accTyp: ident);)+]  ($idx:tt => $typ:ident), $( ($nidx:tt => $ntyp:ident), )*) => {
       tuple_impls!([($idx, $typ); $(($accIdx, $accTyp); )*] $( ($nidx => $ntyp), ) *);
     };
 
     ([($idx:tt, $typ:ident); $( ($nidx:tt, $ntyp:ident); )*]) => {
-		impl<$typ : Ini, $( $ntyp : Ini ),*> Ini for ($typ, $( $ntyp ),*) {
+		impl<$typ : Ini, $( $ntyp : Ini),*> Ini for ($typ, $( $ntyp ),*) {
 			fn eat<'a>(mut chars: Chars<'a>) -> Result<(Self, Chars<'a>), IniParseError> {
 				let result = (
 					{

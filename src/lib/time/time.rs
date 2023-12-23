@@ -1,7 +1,7 @@
 use std::ops::{Sub, SubAssign};
 
 use derive_more::{Add, AddAssign};
-use advini::{Sections, Ini, Section, SectionError, IniParseError, SEPARATOR};
+use advini::{Ini, IniParseError, SEPARATOR};
 
 const HOUR: u64 = 60;
 const DAY: u64 = 24;
@@ -39,6 +39,9 @@ impl Ini for Time {
 						break;
 					},
 					_ => {
+						if res_str.is_empty() {
+							continue;
+						}
 						times.push(res_str.parse::<u64>().map_err(|_| IniParseError::Error("bado thingo"))?);
 						res_str = String::new();
 					}
@@ -61,16 +64,16 @@ impl Ini for Time {
 			.map(|(i, v)|
 				 match i {
 					 x if x == len - 1 => {
-						 v * HOUR
+						 v * Data::HOUR as u64
 					 },
 					 x if x == len - 2 => {
-						 v * DAY
+						 v * Data::DAY as u64
 					 }
 					 x if x == len - 3 => {
-						 v * MONTH
+						 v * Data::MONTH as u64
 					 }
 					 x if x == len - 4 => {
-						 v * YEAR
+						 v * Data::YEAR as u64
 					 }
 					 _ => 0
 				 }
@@ -86,7 +89,7 @@ impl Ini for Time {
 		} else if self.get_day() > 0 {
 			self.to_data([Data::DAY, Data::HOUR], ":")
 		} else {
-			self.to_data([Data::HOUR], ";")
+			self.to_data([Data::HOUR], ":")
 		}
 	}
 }

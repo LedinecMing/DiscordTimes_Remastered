@@ -1,6 +1,5 @@
 use crate::lib::{
-	time::time::Time,
-	items::item::ITEMS, units::unit::{
+	time::time::Time, units::unit::{
 		Unit,
 		UnitPos
 	},
@@ -127,21 +126,21 @@ impl<V: Ord + Ini> Ini for Cmp<V> {
 #[derive(Clone, Debug, Default)]
 pub enum Location {
 	#[default] Global,
-	Local(usize),
+	Local(usize), // building id
+	Place((usize, usize)), // map xy
 	Quest,
-	Talks(usize)
+	Sub,
+	Talks(usize) // building id
 }
 impl Ini for Location {
-	fn eat<'a>(mut chars: std::str::Chars<'a>) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
-		let mut res_string = String::new();
-		while let Some(chr) = chars.next() {
-			if chr == SEPARATOR {
-				break;
-			} else {
-				res_string.push(chr);
-			}
-		}
-		match &*res_string {
+	fn eat<'a>(chars: std::str::Chars<'a>) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
+		let (res, chars) = match <String as Ini>::eat(chars) {
+			Ok(v) => {
+				v
+			},
+			Err(err) => return Err(err)
+		};
+		match &*res {
 			"Global" => {
 				return Ok((Self::Global, chars));
 			},
@@ -160,14 +159,19 @@ impl Ini for Location {
 					Err(err) => Err(err)
 				}
 			},
+			"Sub" => {
+				return Ok((Self::Sub, chars));
+			}
 			_ => Err(IniParseError::Error("netu"))
 		}
 	}
 	fn vomit(&self) -> String {
 		match self {
 			Location::Global => "Global".into(),
-			Location::Local(v) => "Local,".to_string() + &v.to_string(),
-			Location::Talks(v) => "Talks,".to_string() + &v.to_string(),
+			Location::Place(p) => "Place".to_string() + "," + &p.vomit(),
+			Location::Local(v) => "Local,".to_string() + "," + &v.to_string(),
+			Location::Talks(v) => "Talks,".to_string() + "," + &v.to_string(),
+			Location::Sub => "Sub".to_string(),
 			Location::Quest => "Quest".into(),
 		}
 	}
@@ -190,6 +194,7 @@ pub struct Conditions {
 	pub armys_defeated: Option<Vec<usize>>,
 	#[default_value="None"]
 	pub not_executed: Option<Vec<usize>>,
+	#[default_value="String::new()"]
 	pub flag_check: String,
 
 	#[default_value="None"]
@@ -203,6 +208,7 @@ pub struct Conditions {
 	#[default_value="None"]
 	pub power_req: Option<Cmp<u64>>,
 
+	#[default_value="false"]
 	pub hero_has_1_hp: bool,
 	#[default_value="None"]
 	pub in_building: Option<usize>
@@ -238,7 +244,7 @@ pub struct EventResult {
 	#[default_value="String::new()"]
 	pub flag_change: String,
 	#[default_value="None"]
-	pub sub_event: Option<usize>,
+	pub sub_event: Option<Vec<usize>>,
 	#[default_value="None"]
 	pub delayed_event: Option<DelayedEvent>,
 	#[default_value="None"]
@@ -248,11 +254,11 @@ pub struct EventResult {
 	#[default_value="None"]
 	pub question: Option<(String, Vec<String>)>,
 
-	#[default_value=0]
+	#[default_value="0"]
 	pub change_xp: i64,
-	#[default_value=0]
+	#[default_value="0"]
 	pub change_gold: i64,
-	#[default_value=0]
+	#[default_value="0"]
 	pub change_mana: i64,
 
 	#[default_value="None"]
@@ -263,7 +269,7 @@ pub struct EventResult {
 	pub change_personality: Option<usize>,
 }
 impl EventResult {
-	fn new(lit_lights: Option<Vec<usize>>, delay: (Time, bool), flag_change: String, sub_event: Option<usize>, delayed_event: Option<DelayedEvent>, minus_items: Option<Vec<usize>>, plus_items: Option<Vec<usize>>, question: Option<(String, Vec<String>)>, change_xp: i64, change_gold: i64, change_mana: i64, add_units: Option<Vec<usize>>, remove_units: Option<Vec<usize>>, change_personality: Option<usize>,) -> Self {
+	fn new(lit_lights: Option<Vec<usize>>, delay: (Time, bool), flag_change: String, sub_event: Option<Vec<usize>>, delayed_event: Option<DelayedEvent>, minus_items: Option<Vec<usize>>, plus_items: Option<Vec<usize>>, question: Option<(String, Vec<String>)>, change_xp: i64, change_gold: i64, change_mana: i64, add_units: Option<Vec<usize>>, remove_units: Option<Vec<usize>>, change_personality: Option<usize>,) -> Self {
 		Self {
 			lit_lights,
 			delay,
@@ -284,45 +290,60 @@ impl EventResult {
 }
 #[derive(Clone, Debug, Default, Sections)]
 pub struct Event {
+	#[default_value="String::new()"]
 	pub name: String,
+	#[default_value="Location::Global"]
 	pub location: Location,
 	#[inline_parsing]
 	pub conditions: Conditions,
 	#[inline_parsing]
 	pub result: EventResult,
 	#[default_value="None"]
-	pub position: Option<(usize, usize)>,
-	#[default_value="None"]
 	pub message: Option<String>,
 }
 impl Event {
-	fn new(name: String, location: Location, conditions: Conditions, result: EventResult, position: Option<(usize, usize)>, message: Option<String>) -> Self {
+	fn new(name: String, location: Location, conditions: Conditions, result: EventResult, message: Option<String>) -> Self {
 		Self {
 			name,
 			location,
 			conditions,
 			result,
-			position,
 			message
 		}
 	}
 }
-pub fn execute_event(event: usize, gamemap: &mut GameMap, player: usize, events: &mut Vec<Event>, units: &HashMap<usize, Unit>) -> Option<Vec<Execute>> {
+pub fn execute_event(event: usize, gamemap: &mut GameMap, player: usize, events: &mut Vec<Event>, units: &HashMap<usize, Unit>, executed_as_sub: bool) -> Option<Vec<Execute>> {
 	let conds = &events[event].conditions;
 	let location = &events[event].location;
-	if let Location::Local(building) = location {
-		if !gamemap.armys[player].building.is_some_and(|v| v==*building) {
-			return None;
+	match location {
+		Location::Local(building) => {
+			if !gamemap.armys[player].building.is_some_and(|v| v==*building) {
+				return None;
+			}
+		},
+		Location::Talks(building) => {
+			if !gamemap.armys[player].building.is_some_and(|v| v==*building) {
+				return None;
+			}
+		},
+		Location::Place(pos) => {
+			if gamemap.armys[player].pos != *pos {
+				return None;
+			}
+		},
+		Location::Sub => {
+			if !executed_as_sub {
+				return None;
+			}
 		}
+		_ => {}
 	}
-	if let Location::Talks(building) = location {
-        if !gamemap.armys[player].building.is_some_and(|v| v==*building) {
-            return None;                                                  
-        }                                                                 		
-	}
-		
-	if  ((!conds.executed || conds.repeat.is_some()) && conds.activation_time <= gamemap.time)
-		&& (events[event].position.is_some_and(|pos| pos==gamemap.armys[player].pos) || events[event].position.is_none())
+	let time = if conds.relative_time {
+		gamemap.time - gamemap.time
+	} else {
+		gamemap.time
+	};
+	if ((!conds.executed || conds.repeat.is_some()) && conds.activation_time <= gamemap.time)
 		&& (conds.if_event_executed.is_some_and(|event| events[event].conditions.executed) || conds.if_event_executed.is_none())
 		&& (conds.armys_defeated.as_ref().is_some_and(|armys_index| armys_index.iter().all(|army| gamemap.armys[*army].defeated)) || conds.armys_defeated.is_none())
 		&& (conds.not_executed.as_ref().is_some_and(|events_index| events_index.iter().all(|event| !events[*event].conditions.executed)) || conds.not_executed.is_none())
@@ -375,13 +396,16 @@ pub fn execute_event(event: usize, gamemap: &mut GameMap, player: usize, events:
 		if result.delay.1 == true {
 			res.push(Execute::Wait(result.delay.0.clone()));
 		}
-		if let Some(event) = result.sub_event {
-			res.push(Execute::Execute(DelayedEvent::new(Time::new(0), event)));
+		if let Some(event) = &result.sub_event {
+			for event in event {
+				res.push(Execute::Execute(DelayedEvent::new(Time::new(0), *event)));
+			}
 		}
 		if let Some(event) = result.delayed_event.clone() {                                
 		    res.push(Execute::Execute(event));
 		}
         if let Some(time) = repeat {
+			dbg!(time, gamemap.time);
 			events[event].conditions.activation_time = gamemap.time + time;
 		}
 		events[event].conditions.executed = true;
@@ -404,7 +428,7 @@ impl DelayedEvent {
 	}
 	pub fn execute(&self, gamemap: &mut GameMap, events: &mut Vec<Event>, player: usize, units: &HashMap<usize, Unit>) -> Option<()> {
 		if self.time <= gamemap.time {
-			execute_event(self.event, gamemap, player, events, units);
+			execute_event(self.event, gamemap, player, events, units, false);
 		}
 		None
 	} 

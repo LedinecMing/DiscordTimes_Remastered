@@ -21,7 +21,7 @@ lto = true
 dyn-clone = "1.0.6"
 derive_more = {version="0.99.16"}
 rand = "^0.8.0"
-notan = {git = "https://github.com/Nazariglez/notan.git", features=["text"], rev="dbe1a0d"}
+notan = {git = "https://github.com/Nazariglez/notan.git", features=["text", "log"], rev="dbe1a0d"}
 notan_ui = {path = "notan_ui"}
 math_thingies = {path = "math_thingies"}
 num = "0.4.0"
@@ -33,6 +33,4 @@ ini_core = { path = "ini_core" }
 worldgen = "0.5.3"
 pathfinding = "4.3.1"
 parking_lot = "0.12.1"
-reqwest = {version="0.11.17"}
-wasm-rs-async-executor = "0.9.0"
 advini = { path = "advini" }

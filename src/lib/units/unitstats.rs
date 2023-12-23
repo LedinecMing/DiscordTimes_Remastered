@@ -15,7 +15,7 @@ pub struct Modify<V: Num + NumCast> {
     pub percent_set: Option<Percent>,
 }
 impl<K: Num + NumCast + Add<Percent, Output = K> + Copy> Modify<K> {
-    pub fn apply<V: Num + NumCast + Add<Percent, Output = V> + Copy>(&self, mut v: V) -> V {
+    pub fn apply<V: Num + NumCast + Add<Percent, Output = V> + Copy>(&self, v: V) -> V {
         let mut v: K =
             <K as NumCast>::from(v).unwrap() + self.add.unwrap_or(K::zero());
         if let Some(percent_add) = &self.percent_add {

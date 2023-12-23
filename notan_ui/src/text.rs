@@ -1,5 +1,7 @@
 #![allow(unused_parens)]
 
+use notan::prelude::Texture;
+
 use {
     std::{
         marker::PhantomData,
@@ -13,6 +15,8 @@ use {
     super::{
         form::Form,
         rect::*,
+		wrappers::Background,
+		containers::{Centered, center},
         defs::*
 }   };
 
@@ -27,27 +31,7 @@ impl Default for FontId {
         Self(0)
 }   }
 
-pub trait ToText<State: UIStateCl>: Clone + Send  {
-	fn to_text(&self, _state: &State) -> String;
-	fn try_to_text(&self) -> Option<String>;
-}
-impl<State: UIStateCl> ToText<State> for String {
-	fn to_text(&self, _state: &State) -> String { self.to_string() }
-	fn try_to_text(&self) -> Option<String> { self.to_string().into() }
-}
-impl<State: UIStateCl> ToText<State> for &str {
-	fn to_text(&self, _state: &State) -> String { self.to_string() }
-	fn try_to_text(&self) -> Option<String> { self.to_string().into() }
-}
-impl<T: ToString, F: Fn(&State) -> T + Clone + Send, State: UIStateCl> ToText<State> for F {
-	fn to_text(&self, _state: &State) -> String {
-		(self)(_state).to_string()
-	}
-	fn try_to_text(&self) -> Option<String> {
-		None
-	}
-}
-
+pub trait ToText<State> = TryToWith<State, String>;
 #[derive(Clone, Builder)]
 #[builder(build_fn(error = "StructBuildError"), pattern="owned")]
 pub struct Text<State: UIStateCl, T: ToText<State>> {
@@ -93,7 +77,7 @@ impl<State: UIStateCl, T: ToText<State>> Form<State> for Text<State, T> {
             .get(self.font.0)
             .expect(&*format!("Cant find font with index {}", self.font.0)).clone();
         {
-			let text = &*self.text.to_text(&state);
+			let text = &*self.text.with_to(&state);
             let mut text_builder = draw.text(&font, text);
             let mut text_builder = match self.align_h {
                 AlignHorizontal::Left => text_builder.h_align_left(),
@@ -133,12 +117,23 @@ impl<State: UIStateCl, T: ToText<State>> Positionable for Text<State, T> {
         if let Some(width) = self.max_width {
             size.0 = width;
         }
-		if let Some(text) = self.text.try_to_text(){
+		if let Some(text) = self.text.try_to(){
             return Size(if size.0 == 0. { self.size * (text.chars().count() as f32) } else { size.0 }, self.size)
         }
         size
     }
     fn get_pos(&self) -> Position { self.pos }
+}
+impl<'a, State: UIStateCl, T: ToText<State> + 'a, Tex: ToTexture<'a, State> + 'a> Styled<'a, State, Tex> for Text<State, T> where {
+	type Output = Centered<State, Background<'a, State, Text<State, T>, Tex>>;
+	fn style(self, style: Style<'a, State, Tex>) -> Self::Output {
+		center(
+			style.centered,
+			Background::new(
+				self, style.background
+			)
+		)
+	}
 }
 impl<State: UIStateCl, T: ToText<State> + Default> Default for Text<State, T> {
     fn default() -> Self {
@@ -173,7 +168,7 @@ impl<State: UIStateCl, T: ToText<State>> Text<State, T> {
             max_width,
             color,
             boo: PhantomData
-}   }   }
+		}   }   }
 #[derive(Clone, Debug, Builder)]
 #[builder(build_fn(error = "StructBuildError"))]
 pub struct TextChain<State: UIStateCl, T: ToText<State>> {

@@ -9,7 +9,7 @@ use num::abs;
 
 use super::unitstats::ModifyUnitStats;
 use crate::lib::{
-    bonuses::{bonus::Bonus, bonuses::*},
+    bonuses::*,
     effects::{
         effect::{Effect, EffectKind},
         effects::{AttackMagic, DisableMagic, ElementalSupport, HealMagic},
@@ -182,7 +182,7 @@ impl UnitLvl {
     }
 }
 
-#[derive(Debug, Copy, Clone, Add, AddAssign, Sub, SubAssign, Mul, MulAssign, Div, DivAssign)]
+#[derive(Debug, Copy, Clone, Add, AddAssign, Sub, SubAssign, Mul, MulAssign, Div, DivAssign, PartialEq, Eq)]
 pub struct UnitPos(pub usize, pub usize);
 impl UnitPos {
     pub fn from_index(index: usize) -> Self {
@@ -220,7 +220,7 @@ pub struct Unit {
     pub lvl: UnitLvl,
     pub inventory: UnitInventory,
     pub army: usize,
-    pub bonus: Box<dyn Bonus>,
+    pub bonus: Bonus,
     pub effects: Vec<Box<dyn Effect>>,
 }
 
@@ -353,7 +353,7 @@ impl Unit {
         lvl: UnitLvl,
         inventory: UnitInventory,
         army: usize,
-        bonus: Box<dyn Bonus>,
+        bonus: Bonus,
         effects: Vec<Box<dyn Effect>>,
     ) -> Self {
         let mut army = Self {
@@ -377,17 +377,17 @@ impl Unit {
 		let is_in_back = my_field == Field::Back;
         let enemy_field = field_type(target_pos.into(), *MAX_TROOPS);
         let damage = effected.damage;
-        /*
-         * C(`B`(`A`|D)) | `C`(`A^B`)
-         */
         let enemy_in_reserve = enemy_field == Field::Reserve;
         let me_in_reserve = my_field == Field::Reserve;
         let both_in_reserve = me_in_reserve && enemy_in_reserve;
         let both_not_in_reserve = !me_in_reserve && !enemy_in_reserve;
-        let a = (is_enemy && (!me_in_reserve || self.bonus.id() == "Ghost") && !enemy_in_reserve)
+		/*
+         * C(`B`(`A`|D)) | `C`(`A^B`)
+         */
+        let can_attack = (is_enemy && (!me_in_reserve || self.bonus.can_attack_from_reserve() ) && !enemy_in_reserve)
             || (!is_enemy && (both_not_in_reserve || both_in_reserve));
-		//dbg!(&self.info.name, &target.info.name, &a, &target_pos, &my_pos, my_field, enemy_field, is_enemy);
-        return if !a {
+		
+        return if !can_attack {
             false
         } else if damage.ranged > 0
             && (target_pos.1 == my_pos.1 && abs(target_pos.0 as i64 - my_pos.0 as i64) < 2
@@ -473,7 +473,7 @@ impl Unit {
         let me_in_reserve = my_field == Field::Reserve;
         let both_in_reserve = me_in_reserve && enemy_in_reserve;
         let both_not_in_reserve = !me_in_reserve && !enemy_in_reserve;
-        let a = (is_enemy && (!me_in_reserve || self.bonus.id() == "Ghost") && !enemy_in_reserve)
+        let a = (is_enemy && (!me_in_reserve || self.bonus.can_attack_from_reserve()) && !enemy_in_reserve)
             || (!is_enemy && (both_not_in_reserve || both_in_reserve));
         return if !a {
             false
@@ -622,8 +622,8 @@ impl Unit {
         self.modify -= item_info.modify;
         self.recalc();
     }
-    pub fn get_bonus(&self) -> Box<dyn Bonus> {
-        let mut bonus = self.bonus.clone();
+    pub fn get_bonus(&self) -> Bonus {
+        let mut bonus = self.bonus;
         if let Some(item) = self
             .inventory
             .items
@@ -646,15 +646,15 @@ impl Unit {
         damage: &Power,
         sender: &mut Unit,
         my_pos: UnitPos,
-        target_pos: UnitPos,
+        attacker_pos: UnitPos,
 		battle: &BattleInfo
     ) -> u64 {
         let corrected_damage = self.correct_damage(damage, sender.info.magic_type);
         let unit_bonus = sender.get_bonus();
-        let corrected_damage = unit_bonus.on_attacking(corrected_damage, self, sender);
+        let corrected_damage = unit_bonus.on_attacking(corrected_damage, self, sender, my_pos, attacker_pos);
         let corrected_damage =
             self.get_bonus()
-                .on_attacked(corrected_damage, self, sender, my_pos, target_pos, battle);
+                .on_attacked(corrected_damage, self, sender, my_pos, attacker_pos, battle);
         let mut corrected_damage_units =
             corrected_damage.magic + corrected_damage.ranged + corrected_damage.hand;
         if corrected_damage_units == 0 {
@@ -708,10 +708,14 @@ impl Unit {
         true
     }
 }
-
+fn get_bonus_info(bonus: Bonus) -> (String, String) {
+	let locale_ids = bonus.locale_id();
+	let locale = LOCALE.lock().unwrap();
+	(locale.get(locale_ids.0), locale.get(locale_ids.1))
+}
 impl Display for Unit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let bonus_info = bonus_info(self.get_bonus());
+        let bonus_info = get_bonus_info(self.bonus);
         let locale = LOCALE.lock().unwrap();
         let stats = self.modified;
         let damage = stats.damage;
@@ -822,4 +826,95 @@ impl Display for Unit {
             locale.get("unitstats_bonus"),
             format!("{} - {}", bonus_info.0, bonus_info.1)))
     }
+}
+
+pub fn calclate_unit_power(unit: &Unit) -> f32 {
+	let stats = unit.modified;
+	let health = stats.max_hp as f32;
+	let defence = stats.defence;
+	let (hand_defence, ranged_defence) = (defence.hand_units as f32, defence.ranged_units as f32);
+	let (death_defence, elemental_defence, life_defence) = (defence.death_magic.get() as f32, defence.elemental_magic.get() as f32, defence.life_magic.get() as f32);
+	let damage = stats.damage;
+	let (hand_damage, ranged_damage, magic_damage) = (damage.hand as f32, damage.ranged as f32, damage.magic as f32);
+	let speed = stats.speed as f32;
+	let moves = stats.max_moves as f32;
+	let regen = stats.regen.get() as f32;
+	let vamp = stats.vamp.get() as f32;
+	/*
+	((атака/45+инициатива/20)/2*ходы+(защита/10)+(маг смерти/100+маг жизни/100*2+маг стихий/100)*2+реген/100*2+вампиризм/100*3 + health / 50) * множ бонуса
+	 */
+	let health_points = health / 50.;
+	let attack_points = hand_damage / 45. + ranged_damage / 45. + magic_damage / 30.;
+	let speed_points = speed / 20.;
+	let moves_modifier = moves;
+	let defence_points = hand_defence / 10. +  ranged_defence / 10.;
+	let magic_points = death_defence / 100. + elemental_defence / 100. * 2. + life_defence / 100. * 2.;
+
+	let regen_points = regen / 100.;
+	let vamp_points = vamp / 100.;
+  
+	let (bonus_defence_modifier, bonus_attack_modifier, bonus_health_modifier) = match unit.bonus {
+		Bonus::SpearDefence => {
+			(1.5, 1., 1.)
+		},
+		Bonus::GodAnger => {
+			(1., 1.1, 1.)
+		},
+		Bonus::GodStrike => {
+			(1., 1.2, 1.)
+		},
+		Bonus::AncientVampiresGist => {
+			(1., 1. + attack_points, 1.3)
+		},
+		Bonus::Artillery => {
+			(1., 2. + attack_points , 1.)
+		},
+		Bonus::Berserk => {
+			(1., 1.5, 1.)
+		},
+		Bonus::Block => {
+			(1.3, 1., 1.)
+		},
+		Bonus::DeadDodging | Bonus::Dodging => {
+			(1., 1., 1.3)
+		},
+		Bonus::Fast => {
+			(1., 2., 1.)
+		},
+		Bonus::DeadRessurect => {
+			(1., 1., 1.25)
+		},
+		Bonus::FireAttack | Bonus::PoisonAttack => {
+			(1., 1.3, 1.)
+		},
+		Bonus::Ghost => {
+			(1., 1.5, 2.)
+		},
+		Bonus::Invulrenable => {
+			(1., 1., 2.)
+		},
+		Bonus::DefencePiercing => {
+			(1., 1. + attack_points, 1.)
+		},
+		Bonus::FastDead => {
+			(1., 2., 1.)
+		},
+		Bonus::FlankStrike => {
+			(1., 1.5, 1.)
+		},
+		Bonus::Garrison => {
+			(1.5, 1.5, 1.5)
+		},
+		Bonus::Stealth => {
+			(1., 1.5, 1.)
+		}
+		_ => (1., 1., 1.)
+	};
+	
+	(attack_points * bonus_attack_modifier + speed_points) / 2. * moves_modifier
+		+ (defence_points * bonus_defence_modifier)
+		+ magic_points * 2.
+		+ regen_points * 2.
+		+ vamp_points * 3.
+	 + health_points * bonus_health_modifier
 }

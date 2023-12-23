@@ -113,11 +113,15 @@ d-Vampirizm=[{отсутствие строки}/1-100] — +вампиризм
  */
 use math_thingies::add_opt;
 use num::Num;
-use std::{any::type_name, fs::File, io::Read, ops::Add, fmt::Debug};
+
+use std::{any::type_name, io::Read, ops::Add, fmt::Debug};
 use std::{collections::HashMap, fmt::Display, str::FromStr};
-use notan::prelude::{Asset, Texture, Graphics};
+use notan::{
+	prelude::{Asset, Texture, Graphics, Assets},
+	log
+};
 use super::{
-    bonuses::bonuses::*,
+    bonuses::*,
 	battle::{troop::Troop, army::Control},
     items::item::{ItemInfo, *},
     map::{
@@ -138,30 +142,49 @@ use math_thingies::Percent;
 use ini_core::{Item, Parser};
 use advini::*;
 
-#[cfg(target_arch="wasm32")]
-mod wasm_tools {
-	use wasm_rs_async_executor::single_threaded::block_on;
-	use reqwest;
-	pub async fn read_url(url: &str) -> String {
-		reqwest::get(url.clone()).await.unwrap()
-			.text().await.unwrap()
-	}
-	pub fn read_file(path: String) -> Vec<u8> {
-		block_on(read_url(&*format!("http://localhost:8080/{}", path))).as_bytes().iter().map(|v|*v).collect()
-	}
+//#[cfg(target_arch = "wasm32")]
+//use wasm_bindgen_futures::spawn_local;
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_file_as_string(assets: &mut Assets, path: String) -> String {
+	// let asset = assets.load_asset::<Vec<u8>>(&path);
+	//let mut fut = load_file(&path);
+	log::warn!("Loading {path}");
+	let res = String::from_utf8(std::fs::read(path.clone()).unwrap()).unwrap();
+	log::warn!("Loaded {path}");
+	return res;
+}
+#[cfg(target_arch = "wasm32")]
+pub fn read_file_as_string(assets: &mut Assets, path: String) -> String {
+	use std::sync::{Arc, Mutex};
+	use std::task;
+	// use ehttp::fetch;
+	// let asset = assets.load_asset::<Vec<u8>>(&path);
+	//let mut fut = load_file(&path);
+	// log::warn!("Loading {path}");
+	// let request = ehttp::Request::get(&format!("localhost:8080/{path}"));
+	// let mut content: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+	// let mut res = content.clone();
+	// ehttp::fetch(request, move |result: ehttp::Result<ehttp::Response>| {
+	// 	let text = String::from_utf8(result.unwrap().bytes).unwrap();
+	// 	log::warn!("{text}");
+	// 	*res.lock().unwrap() = Some(text);
+	// });
+	// loop {
+	// 	if let Some(v) = &*content.lock().unwrap() {
+	// 		log::warn!("Loaded {path}");
+	// 		let x = v.clone(); return x;
+	// 	}
+	// }
+	String::new()
 }
 
-#[cfg(target_arch="wasm32")]
-use wasm_tools::*;
-
-#[cfg(not(target_arch="wasm32"))]
-pub fn read_file(path: String) -> Vec<u8> {
-	File::open(format!("{}", path))
-        .unwrap().bytes().map(Result::unwrap).collect()
-}
-
-pub fn read_file_as_string(path: String) -> String {
-	String::from_utf8(read_file(path)).unwrap()
+pub fn load_asset(manager: &mut Assets, gfx: &mut Graphics, path: &str) -> Result<Asset<Texture>, String> {
+	//manager.load_asset(path)
+	log::warn!("Loading {path}");
+	Ok(Asset::from_data(&*path,
+						gfx.create_texture()
+						.from_image(&std::fs::read(path).unwrap())
+						.build().unwrap()))
 }
 
 fn collect_errors<T, K: Display>(
@@ -217,9 +240,9 @@ pub fn match_magictype(
         }
     }
 }
-pub fn parse_units(asset_map: &mut HashMap<&str, HashMap<String, Asset<Texture>>>, gfx: &mut Graphics) -> HashMap<usize, Unit> {
+pub fn parse_units(manager: &mut Assets, asset_map: &mut HashMap<&str, HashMap<String, Asset<Texture>>>, gfx: &mut Graphics) -> HashMap<usize, Unit> {
     let mut units = HashMap::new();
-    let sections = parse_for_sections("Units.ini");
+    let sections = parse_for_sections(manager, "Units.ini");
     let mut counter = None;
 	asset_map.insert("assets/Icons", HashMap::new());
 	let mut upgrades: HashMap<usize, Vec<String>> = HashMap::new();
@@ -234,7 +257,7 @@ pub fn parse_units(asset_map: &mut HashMap<&str, HashMap<String, Asset<Texture>>
 
         let mut cost_hire = None;
 		let mut size = (1, 1);
-        let mut cost = None::<u64>;
+        let cost = None::<u64>;
         let mut surrender = None;
         let mut icon_index = None;
 
@@ -357,11 +380,12 @@ pub fn parse_units(asset_map: &mut HashMap<&str, HashMap<String, Asset<Texture>>
 					asset_map
 						.get_mut("assets/Icons").unwrap()
 						.insert(format!("img_{}.png", counter.unwrap() - 1),
-								Asset::from_data(&*path.clone(),
-												 gfx.create_texture()
-												 .from_image(&read_file(path))
-												 .build()
-												 .unwrap()));
+								load_asset(manager, gfx, &*path.clone())
+								// Asset::from_data(&*path.clone(),
+								// 				 gfx.create_texture()
+								// 				 .from_image(&read_file(path))
+								//				 .build()
+												 .unwrap());
 					
                 }
                 _ => {}
@@ -387,17 +411,7 @@ pub fn parse_units(asset_map: &mut HashMap<&str, HashMap<String, Asset<Texture>>
             }
         };
         let magic_type = match_magictype(&mut error_collector, magic_type, magic_direction);
-        let bonus = match match_bonus(bonus_name) {
-            Ok(bonus) => bonus,
-            Err(_) => {
-                collect_errors(
-                    MATCH_ERR,
-                    &mut error_collector,
-                    &*format!("Field Bonus is invalid: {}", bonus_name),
-                );
-                Box::new(NoBonus {})
-            }
-        };
+        let bonus = Bonus::from(bonus_name);
         let unit_type = match nature {
             "People" | "" => UnitType::People,
             "Rogue" => UnitType::Rogue,
@@ -494,6 +508,27 @@ pub fn parse_units(asset_map: &mut HashMap<&str, HashMap<String, Asset<Texture>>
 		let upgrade = up.iter().map(|name| units.iter().filter(|unit| unit.1.info.name == *name).map(|unit| *unit.0).next().unwrap() ).collect();
 		units.get_mut(&index).unwrap().info.next_unit = upgrade;
 	}
+	let powered = units.clone();
+	let bycost = units.clone();
+	let mut bycost = bycost.into_values()
+		.map(|v| {
+			let cost = v.info.cost;
+			 (v, cost as f32)
+		})
+		.collect::<Vec<(Unit, f32)>>();
+	let mut powered = powered.into_values()
+		.map(|v| {
+			let power = calclate_unit_power(&v);
+			 (v, power)
+		})
+		.collect::<Vec<(Unit, f32)>>();
+	bycost.sort_by(|a, b|
+					a.1.total_cmp(&b.1));
+	powered.sort_by(|a, b|
+					a.1.total_cmp(&b.1));
+	for (unit, cost) in powered.iter().zip(bycost) {
+		println!("{} is {} costs {} and {} costs {}", &unit.0.info.name, unit.1, unit.0.info.cost, &cost.0.info.name, cost.0.info.cost);
+	}
     units
 }
 
@@ -521,6 +556,16 @@ pub struct Locale {
 	additional_lang: String
 }
 impl Locale {
+	pub fn switch_lang(&mut self) {
+		let main = self.main_lang.clone();
+		let add = self.additional_lang.clone();
+		self.main_lang = add;
+		self.additional_lang = main;
+	}
+	pub fn set_lang(&mut self, lang: (&String, &String)) {
+		self.main_lang = lang.0.clone();
+		self.additional_lang = lang.1.clone();
+	}
     pub fn get<K: Into<String> + Copy>(&self, id: K) -> String {
         self.map
             .get(&self.main_lang)
@@ -535,9 +580,11 @@ impl Locale {
             .unwrap_or(id.into())
     }
     pub fn insert<V: Into<String>, K: Into<String>>(&mut self, key: K, value: V, lang: &String) {
+		let (k, v) = (key.into(), value.into());
+		log::warn!("{}; ({}; {})", lang, &k, &v);
 		self.map.entry(lang.clone())
 			.or_insert_with(HashMap::new)
-			.insert(key.into(), value.into());
+			.insert(k, v);
     }
     pub fn new(main_lang: String, additional_lang: String) -> Self {
         Locale {
@@ -547,8 +594,8 @@ impl Locale {
 		}
     }
 }
-pub fn parse_settings() -> Settings {
-    let sections = parse_for_sections("Settings.ini");
+pub fn parse_settings(assets: &mut Assets) -> Settings {
+    let sections = parse_for_sections(assets, "Settings.ini");
     let mut max_troops: usize = 0;
     let mut locale = String::new();
 	let mut additional_locale = String::new();
@@ -580,16 +627,17 @@ pub fn parse_settings() -> Settings {
 	settings
 }
 
-pub fn parse_locale(languages: &[&String], locale: &mut Locale) {
+pub fn parse_locale(assets: &mut Assets, languages: &[&String], locale: &mut Locale) {
 	for language in languages {
-		let props = parse_for_props(&*format!("{}_Locale.ini", language));
+		let props = parse_for_props(assets, &*format!("{}_Locale.ini", language));
+		log::warn!("{props:?}");
 		for (k, value) in props {
 			locale.insert(k, value, &language);
 		}
 	}
 }
-pub fn parse_map_locale(path: &str, languages: &[&String], locale: &mut Locale) {
-	for (sec, props) in parse_for_sections(path) {
+pub fn parse_map_locale(assets: &mut Assets, path: &str, languages: &[&String], locale: &mut Locale) {
+	for (sec, props) in parse_for_sections(assets, path) {
 		if !languages.contains(&&sec) { continue; }
 		for prop in props {
 			register_locale(prop.0, prop.1, sec.clone(), locale).unwrap();
@@ -597,9 +645,9 @@ pub fn parse_map_locale(path: &str, languages: &[&String], locale: &mut Locale) 
 	}
 }
 
-fn parse_for_props(path: &str) -> HashMap<String, String> {
+fn parse_for_props(assets: &mut Assets, path: &str) -> HashMap<String, String> {
     let mut props = HashMap::new();
-	let ini_doc = read_file_as_string(path.into());
+	let ini_doc = read_file_as_string(assets, path.into());
     let parser = Parser::new(&*ini_doc).auto_trim(true);
     for item in parser {
         match item {
@@ -613,38 +661,18 @@ fn parse_for_props(path: &str) -> HashMap<String, String> {
     }
     props
 }
-fn parse_for_sections(path: &str) -> HashMap<String, HashMap<String, String>> {
-    let mut hashmap = HashMap::new();
-    let mut old_sec = "";
-    let mut props = HashMap::new();
-	let ini_doc = read_file_as_string(path.into());
-    let parser = Parser::new(&*ini_doc).auto_trim(true);
-    for item in parser {
-        match item {
-            Item::Section(sec) => {
-                if !old_sec.is_empty() {
-                    hashmap.insert(old_sec.into(), props);
-                    props = HashMap::new();
-                    old_sec = sec;
-                } else {
-                    old_sec = sec
-                }
-            }
-            Item::Property(k, v) => {
-                props.insert(k.to_lowercase().into(), v.into());
-            }
-            Item::Blank | Item::Action(_) | Item::Comment(_) => {}
-            Item::Error(err) => panic!("{}", err),
-        }
-    }
-    hashmap.insert(old_sec.into(), props);
-    props = HashMap::new();
-    hashmap
+fn parse_for_sections(assets: &mut Assets, path: &str) -> Vec<(String, HashMap<String, String>)> {
+	let ini_doc = read_file_as_string(assets, path.into());
+	advini::parse_for_sections(&ini_doc)
+}
+fn parse_for_sections_localised(assets: &mut Assets, path: &str, locale: &mut Locale) -> Vec<(String, HashMap<String, String>)> {
+	let ini_doc = read_file_as_string(assets, path.into());
+	advini::parse_for_sections_with(&ini_doc, |(prop, v, s)| (prop.to_lowercase(), process_locale(v, s).unwrap_or(v.to_string())), locale)
 }
 type Objects = Vec<ObjectInfo>;
-pub fn parse_objects(assets: &mut HashMap<&str, HashMap<String, Asset<Texture>>>, gfx: &mut Graphics) -> Objects {
+pub fn parse_objects(manager: &mut Assets, gfx: &mut Graphics, assets: &mut HashMap<&str, HashMap<String, Asset<Texture>>>) -> Objects {
     let mut objects = Vec::new();
-    let sections = parse_for_sections("Objects.ini");
+    let sections = parse_for_sections(manager, "Objects.ini");
 	assets.insert("assets/Objects", HashMap::new());
     for (sec, prop) in sections.iter() {
         let mut category = "".into();
@@ -661,15 +689,16 @@ pub fn parse_objects(assets: &mut HashMap<&str, HashMap<String, Asset<Texture>>>
                         &mut error_collector,
                         "Value of field Index ommited as non-usize",
                     );
-					let path = format!("{}.png", sec);
+					let path = format!("{sec}.png");
 					let asset = assets
 						.get_mut("assets/Objects").unwrap()
 						.insert(path.clone(),
-								Asset::from_data(&*path.clone(),
-												 gfx.create_texture()
-												 .from_image(&read_file(format!("assets/Objects/{}", path)))
-												 .build()
-												 .unwrap()));
+								load_asset(manager, gfx, &*format!("assets/Objects/{path}"))
+  								// Asset::from_data(&*path.clone(),
+								// 				 gfx.create_texture()
+								// 				 .from_image(&read_file(format!("assets/Objects/{}", path)))
+								// 				 .build()
+								.unwrap());
                 }
                 "size" => {
                     let mut sizes = v.split(|ch: char| !ch.is_ascii_digit()).map(|string| Some(string.parse().unwrap()));
@@ -737,11 +766,11 @@ fn match_magic_variants(
  * p-{stat} - добавление процента
  * f-{stat} - установить
  */
-pub fn parse_items(lang: &String, assets: &mut HashMap<&str, HashMap<String, Asset<Texture>>>, gfx: &mut Graphics) {
+pub fn parse_items(lang: &String, manager: &mut Assets, gfx: &mut Graphics, assets: &mut HashMap<&str, HashMap<String, Asset<Texture>>>) {
     let mut error_collector: Vec<String> = Vec::new();
     let mut items = ITEMS.lock().unwrap();
 	assets.insert("assets/Items", HashMap::new());
-    let secs = parse_for_sections(&*format!("{}_Artefacts.ini", lang));
+    let secs = parse_for_sections(manager, &*format!("{}_Artefacts.ini", "Rus")); //lang));
     for (sec, props) in secs {
         let mut cost: Option<i64> = None;
         let mut description = None;
@@ -753,24 +782,25 @@ pub fn parse_items(lang: &String, assets: &mut HashMap<&str, HashMap<String, Ass
         let mut magic = None;
         let mut index = None;
         let mut bonus = None;
-        let mut itemtype_name = "";
+        let itemtype_name = "";
         for (k, value) in props.iter() {
             let value = &**value;
             match &**k {
                 "globalindex" => index = handle_parse(value, &mut error_collector, "globalindex"),
-                "name" => name = Some(value.clone()),
-                "descript" => description = Some(value.clone()),
+                "name" => name = Some(value),
+                "descript" => description = Some(value),
                 "icon" => {
-					icon = Some(value.clone());
-					let path = icon.unwrap().to_string();
+					icon = Some(value);
+					let path = format!("assets/Items/{}", icon.unwrap().to_string());
 					let asset = assets
 						.get_mut("assets/Items").unwrap()
-						.insert(path.clone(),
-								Asset::from_data(&*path.clone(),
-												 gfx.create_texture()
-												 .from_image(&read_file(format!("assets/Items/{}", path)))
-												 .build()
-												 .unwrap()));
+						.insert(value.to_string(),
+								load_asset(manager, gfx, &*path.clone())
+								// Asset::from_data(&*path.clone(),
+								// 				 gfx.create_texture()
+								// 				 .from_image(&read_file(format!("assets/items/{}", path)))
+								//.build()
+												 .unwrap());
 				},
                 "cost" => cost = handle_parse(value, &mut error_collector, "cost"),
                 "magic" => {
@@ -942,7 +972,7 @@ pub fn parse_items(lang: &String, assets: &mut HashMap<&str, HashMap<String, Ass
                 "f-initiative" => modify.speed.set = value.parse().ok(),
                 "f-vampirizm" => modify.vamp.set = value.parse().ok(),
                 "f-regen" => modify.regen.add = value.parse().ok(),
-                "bonus" => bonus = match_bonus(&*value).ok(),
+                "bonus" => bonus = Some(Bonus::from(value)),
                 _ => {}
             }
         }
@@ -987,12 +1017,10 @@ fn process_locale(locale: impl Into<String>, map_locale: &mut Locale) -> EResult
 		if locale_chars.nth(i) == Some(LOCALE_START) {
 			let end = locale.chars().skip(i+1).position(|ch| {
 				!(ch.is_ascii_alphabetic() || ch.is_ascii_digit() || ch.is_rus_alphabet() || ch == '_')
-			});
-			if let Some(end) = end {
-				if !i+1 == end {
-					let identificator = locale.chars().skip(i+1).take(end-i+1).collect::<String>();
-					end_string = end_string.replace(&("$".to_owned() + &identificator), &map_locale.get(&identificator));
-				}
+			}).unwrap_or(locale.len() - 1);
+			if !(i+1 == end) {
+				let identificator = locale.chars().skip(i+1).take(end-i+1).collect::<String>();
+				end_string = end_string.replace(&("$".to_owned() + &identificator), &map_locale.get(&identificator));
 			}
 		}
 	}
@@ -1030,86 +1058,23 @@ fn str_bool(v: String) -> bool {
     }                                    
 }
 
-fn parse_events(path: String, locale: &mut Locale) -> Vec<Event> {
+fn parse_events(assets: &mut Assets, path: String, locale: &mut Locale) -> Vec<Event> {
 	let mut events = Vec::new();
-	for (sec, props) in parse_for_sections(&*path) {
-		let mut event = Event {
-			location: Location::Global,
-			name: sec,
-			conditions: Conditions::default(),
-			result: EventResult::default(),
-			position: None,
-			message: None
-		};
-		for prop in props {
-			let prop = (prop.0, process_locale(prop.1, locale).unwrap());
-			match &*prop.0 {
-				"pos" => event.position = {
-					let mut points = prop.1.split(|ch: char| !ch.is_ascii_digit()).map(|string| string.parse().unwrap());
-					Some((points.next().unwrap(), points.next().unwrap()))
-				},
-				"message" => event.message = Some(prop.1),
-				"type" => event.location = match &*prop.1 {
-					"global" => Location::Global,
-					"local" => Location::Local(0),
-					"quest" => Location::Quest,
-					"talks" => Location::Talks(0),
-					_ => Location::Global
-				},
-				"relative_time" => event.conditions.relative_time = str_bool(prop.1),
-				"repeat" => event.conditions.repeat = Some(Time::new(0)),
-				
-				"activation_time" => event.conditions.activation_time = Time::from_data(prop.1, [YEAR, MONTH, DAY, HOUR, MINUTES]),
-				"if_event_executed" => event.conditions.if_event_executed = Some(prop.1.parse().unwrap()),
-				"armys_defeated" => event.conditions.armys_defeated = Some(split_and_parse(prop.1)),
-				"not_executed" => event.conditions.not_executed = Some(split_and_parse(prop.1)),
-				"flag_check" => event.conditions.flag_check = prop.1,
-				"xp_req" => event.conditions.xp_req = Some(parse_cmp(prop.1)),
-				"gold_req" => event.conditions.gold_req = Some(parse_cmp(prop.1)),
-				"mana_req" => event.conditions.mana_req = Some(parse_cmp(prop.1)),
-				"army_req" => event.conditions.army_req = Some(parse_cmp(prop.1)),
-				"power_req" => event.conditions.power_req = Some(parse_cmp(prop.1)),
-
-				"hero_has_1_hp" => event.conditions.hero_has_1_hp = str_bool(prop.1),
-
-				"lit_lights" => event.result.lit_lights = Some(split_and_parse(prop.1)),
-				"delay" => event.result.delay = (Time::from_data(prop.1, [YEAR, MONTH, DAY, HOUR, MINUTES]), false),
-				"flag_change" => event.result.flag_change = prop.1,
-				"sub_events" => event.result.sub_event = Some(prop.1.parse().unwrap()),
-				"delayed_event" => event.result.delayed_event = Some({
-					let things = prop.1.split_once(";").unwrap();
-					DelayedEvent::new(Time::from_data(things.0, [YEAR, MONTH, DAY, HOUR, MINUTES]), things.1.parse().unwrap())
-				}), // 1540:1:12:0,12
-				"minus_items" => event.result.minus_items = Some(split_and_parse(prop.1)),
-                "plus_items" => event.result.plus_items = Some(split_and_parse(prop.1)),
-				"question" => event.result.question = Some({
-					let things = prop.1.split_once(";").unwrap();
-					(things.0.into(), things.1.split(";").map(str::to_string).collect())
-				}),
-				"change_xp" => event.result.change_xp = prop.1.parse().unwrap(),
-				"change_gold" => event.result.change_gold = prop.1.parse().unwrap(),
-				"change_mana" => event.result.change_mana = prop.1.parse().unwrap(),
-
-				"in_building" => event.conditions.in_building = prop.1.parse().ok(),
-				"add_units" => event.result.add_units = Some(split_and_parse(prop.1)),
-				"remove_units" => event.result.remove_units = Some(split_and_parse(prop.1)),
-				"change_personality" => event.result.change_personality = Some(prop.1.parse().unwrap()),
-				_ => {}
-			}
-		}
-		events.push(event);
+	for (sec, props) in parse_for_sections_localised(assets, &*path, locale) {
+		let event = <Event as Sections>::from_section(props).unwrap();
+		events.push(event.0);
 	}
 	events
 }
 
-fn parse_mapdata(path: String, units: &HashMap<usize, Unit>, locale: &mut Locale, objects: &Objects) -> (Tilemap<usize>, Tilemap<Option<usize>>, Vec<MapBuildingdata>, Vec<Army>) {
+fn parse_mapdata(assets: &mut Assets, path: String, units: &HashMap<usize, Unit>, locale: &mut Locale, objects: &Objects) -> (Tilemap<usize>, Tilemap<Option<usize>>, Vec<MapBuildingdata>, Vec<Army>) {
 	let mut tilemap: Option<Tilemap<usize>> = None;
 	let mut decomap: Option<Tilemap<Option<usize>>> = None;
 	
 	let mut armys = Vec::new();
 	let mut buildings = Vec::new();
 	
-	for (sec, props) in parse_for_sections(&*path) {
+	for (sec, props) in parse_for_sections(assets, &*path) {
 		match &*sec {
 			"Tilemaps" => {
 				for prop in props {
@@ -1130,18 +1095,22 @@ fn parse_mapdata(path: String, units: &HashMap<usize, Unit>, locale: &mut Locale
 							.try_into().unwrap()
 						}),
 						"decomap" => decomap = Some({
-							let mut tiles = prop.1.split(|ch: char| !ch.is_ascii_digit())
-								.map(|ch|
-									 if ch=="0" {
-										 None
-									 } else { Some(ch.parse().unwrap()) }
-								);
+							let (tiles, _) = <Vec<usize> as Ini>::eat(prop.1.chars()).unwrap();
+							// prop.1.split(|ch: char| !ch.is_ascii_digit())
+							// 	.map(|ch|
+							// 		 if ch=="0" {
+							// 			 None
+							// 		 } else { Some(ch.parse().unwrap()) }
+							// 	);
 							(0..MAP_SIZE)
 							.map(|_|
 								 (0..MAP_SIZE)
-								 .map(|_|
-									  tiles.next().unwrap()
-								 )
+								 .zip(tiles.iter())
+								 .map(|(_, v)| {
+									 if *v == 0 {
+										 None
+									 } else { Some(*v) }
+								 })
 								 .collect::<Vec<_>>()
 								 .try_into().unwrap()
 							)
@@ -1156,7 +1125,8 @@ fn parse_mapdata(path: String, units: &HashMap<usize, Unit>, locale: &mut Locale
 				let mut inv = Vec::new();
 				let mut pos = (0, 0);
 				let mut stats = ArmyStats::default();
-				let mut troops = Vec::new();
+				let mut in_troops = Vec::new();
+				let mut main = None;
 				let mut active = true;
 				let mut control = Control::PC;
 				let mut id: Option<usize> = None;
@@ -1174,7 +1144,7 @@ fn parse_mapdata(path: String, units: &HashMap<usize, Unit>, locale: &mut Locale
 							pos = (things.0.parse().unwrap(), things.1.parse().unwrap());
 						},
 						"active" => active = str_bool(prop.1),
-						"troops" => troops.append(&mut
+						"troops" => in_troops =
 							prop.1.split(",")
 								.map(|string|
 									 string
@@ -1182,12 +1152,12 @@ fn parse_mapdata(path: String, units: &HashMap<usize, Unit>, locale: &mut Locale
 								.map(|(num, lvl)|
 									 (num.parse().unwrap(), lvl.parse::<i64>().unwrap()))
 								.map(|(num, _)|
-									 SendMut::new({
+									 {
 										 let mut troop = Troop::empty();
 										 troop.unit = units[&num].clone();
 										 troop.unit.army = armys.len();
-										 troop
-									 })).collect()),
+										 SendMut::new(troop)
+									 }).collect(),
 						"player" => control = Control::Player(prop.1.parse().unwrap()),
 						"main" => {
 							let things = prop.1.split_once(|ch: char| !ch.is_ascii_digit()).unwrap();
@@ -1200,16 +1170,19 @@ fn parse_mapdata(path: String, units: &HashMap<usize, Unit>, locale: &mut Locale
 								is_main: true,
 								is_free: true,
 								was_payed: true,
-								pos: UnitPos::from_index(troops.len()),
+								pos: UnitPos::from_index(0),
 								custom_name: Some(things.1.into())
 							};
-							troops.push(SendMut::new(troop));
+							main = Some(SendMut::new(troop));
 							
 						},
 						_ => {}
 					}
-				}				
-				armys.push((id.unwrap(), Army::new(troops, stats, inv, control, pos, active)));
+				}
+				let mut troops = vec![main.unwrap()];
+				troops.append(&mut in_troops);
+				
+				armys.push((id.unwrap(), Army::new(troops, stats, inv, pos, active, control)));
 			},
 			x if x.starts_with("Building") => {
 				let mut id : Option<usize> = None;
@@ -1220,12 +1193,12 @@ fn parse_mapdata(path: String, units: &HashMap<usize, Unit>, locale: &mut Locale
 				let mut event = Vec::new();
 				let mut units = Vec::new();
 				let mut recruitment = None;
-				let mut cost_modify = 1.;
+				let cost_modify = 1.;
 				let mut market = None;
 				let mut items = Vec::new();
 				let mut itemcost_range = Some((0u64, 1000u64));
-				let mut max_items = 10;
-				let mut control = Control::PC;
+				let max_items = 10;
+				let control = Control::PC;
 				let mut pos = None;
 				let mut defense = Some(0);
 				let mut income = 0;
@@ -1307,7 +1280,7 @@ fn parse_mapdata(path: String, units: &HashMap<usize, Unit>, locale: &mut Locale
 	})
 }
 
-pub fn parse_story(units: &HashMap<usize, Unit>, objects: &Objects, lang: &String, additional_lang: &String) -> (GameMap, Vec<Event>) {
+pub fn parse_story(assets: &mut Assets, units: &HashMap<usize, Unit>, objects: &Objects, lang: &String, additional_lang: &String) -> (GameMap, Vec<Event>) {
 	let mut err_coll = Vec::new();
 	let map_dir = "map/";
 	let map_path = "MapExample.ini";
@@ -1330,14 +1303,14 @@ pub fn parse_story(units: &HashMap<usize, Unit>, objects: &Objects, lang: &Strin
 	// Eventsandlights
 	let mut events_path = None;
 	
-	for (sec, props) in parse_for_sections(&format!("{map_path}")) {
+	for (sec, props) in parse_for_sections(assets, &format!("{map_path}")) {
 		for prop in props {
 			let prop = (prop.0, process_locale(prop.1, &mut locale).unwrap());
 			match &*prop.0 {
 				"filepath" => {					
 					match &*sec {
 						"Locale" => {
-							parse_map_locale(&*format!("{}/{}", map_dir, prop.1), &[&locale.main_lang.clone(), &locale.additional_lang.clone()], &mut locale);
+							parse_map_locale(assets, &*format!("{}/{}", map_dir, prop.1), &[&locale.main_lang.clone(), &locale.additional_lang.clone()], &mut locale);
 						},
 						"MapData" => mapdata_path = prop.1.into(),
 						"EventsAndLights" => events_path = prop.1.into(),
@@ -1346,7 +1319,7 @@ pub fn parse_story(units: &HashMap<usize, Unit>, objects: &Objects, lang: &Strin
 				},
 				"name" => name = Some(prop.1),
 				"desc" => description = Some(prop.1),
-				"start_time" => start_time = Time::from_data(prop.1, [YEAR, MONTH, DAY, HOUR, MINUTES]),
+				"start_time" => start_time = Time::from_data(prop.1, [YEAR, MONTH, DAY, HOUR]),
 				"start_gold" => start_gold = handle_parse(prop.1, &mut err_coll, "start_gold"),
 				"start_mana" => start_mana = handle_parse(prop.1, &mut err_coll, "start_mana"),
 				"start_items" => {
@@ -1363,8 +1336,8 @@ pub fn parse_story(units: &HashMap<usize, Unit>, objects: &Objects, lang: &Strin
 	if !err_coll.is_empty() {
 		panic!("{}", err_coll.join("\n"));
 	}
-	let mapdata = parse_mapdata(format!("{map_dir}{}", mapdata_path.unwrap()), units, &mut locale, objects);
-	let events = parse_events(format!("{map_dir}{}", events_path.unwrap()), &mut locale);
+	let mapdata = parse_mapdata(assets, format!("{map_dir}{}", mapdata_path.unwrap()), units, &mut locale, objects);
+	let events = parse_events(assets, format!("{map_dir}{}", events_path.unwrap()), &mut locale);
 
 	let gamemap = GameMap {
 		armys: mapdata.3,

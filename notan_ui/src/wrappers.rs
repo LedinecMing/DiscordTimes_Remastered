@@ -2,7 +2,8 @@
 
 use std::fmt::{Debug, Formatter};
 
-use notan::prelude::Color;
+use notan::prelude::{Color, Texture};
+
 use {
     std::{
         marker::PhantomData,
@@ -15,6 +16,7 @@ use {
     },
     super::{
         form::Form,
+		containers::{Centered, center},
         rect::*,
         defs::*
 }   };
@@ -39,6 +41,17 @@ pub fn button<State: UIStateCl, T: PosForm<State>>(inside: T, rect: Rect) -> But
     ButtonBuilder::default()
         .inside(inside)
         .rect(rect)
+}
+impl<'a, State: UIStateCl, T: PosForm<State> + 'a, Tex: ToTexture<'a, State> + 'a> Styled<'a, State, Tex> for Button<State, T> where {
+	type Output = Centered<State, Background<'a, State, Button<State, T>, Tex>>;
+	fn style(self, style: Style<'a, State, Tex>) -> Self::Output {
+		center(
+			style.centered,
+			Background::new(
+				self, style.background
+			)
+		)
+	}
 }
 impl<State: UIStateCl + Clone, T: PosForm<State>> Debug for Button<State, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -160,7 +173,7 @@ pub struct Checkbox<State: UIStateCl, T: PosForm<State>> {
     #[builder(default="false")]
     pub checked: bool,
     #[builder(setter(strip_option), default="None")]
-    pub on_draw: Option<DrawFunction<State, Checkbox<State, T>>>,
+	pub on_draw: Option<DrawFunction<State, Checkbox<State, T>>>,
     #[builder(setter(strip_option), default="None")]
     pub if_hovered: Option<UpdateFunction<State, Checkbox<State, T>>>,
     #[builder(setter(strip_option), default="None")]
@@ -279,13 +292,26 @@ impl<State: UIStateCl, T: PosForm<State>> Default for Mask<State, T> {
             boo: Default::default()
 }   }   }
 
-#[derive(Clone, Debug)]
-struct RectBackForm<State: UIStateCl, Form: PosForm<State>> {
+#[derive(Clone)]
+pub struct Background<'a, State: UIStateCl, Form: PosForm<State>, Tex: ToTexture<'a, State>> {
 	pub form: Form,
-	pub back: (Rect, Color),
-	pub boo: PhantomData<State>
+	pub back: (Back<'a, State, Tex>, BackSize),
+	pub boo: PhantomData<&'a State>
 }
-impl<State: UIStateCl, Form: PosForm<State>> Positionable for RectBackForm<State, Form> {
+impl<'a, State: UIStateCl + 'a, Form: PosForm<State>, Tex: ToTexture<'a, State>> Background<'a, State, Form, Tex> {
+	pub fn new(form: Form, back: (Back<'a, State, Tex>, BackSize)) -> Self {
+		Self { form, back, boo: PhantomData }
+	}
+}
+impl<'a, State: UIStateCl + 'a, Form: PosForm<State>, Tex: ToTexture<'a, State>> Debug for Background<'a, State, Form, Tex> {
+	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Background")
+			.field("form", &self.form)
+			.field("back", &self.back)
+			.finish()
+	}
+}
+impl<'a, State: UIStateCl + 'a, Form: PosForm<State>, Tex: ToTexture<'a, State>> Positionable for Background<'a, State, Form, Tex> {
 	fn add_pos(&mut self, to_add: Position) {
 		self.form.add_pos(to_add);
 	}
@@ -304,11 +330,68 @@ impl<State: UIStateCl, Form: PosForm<State>> Positionable for RectBackForm<State
 		new
 	}
 }
-impl<State: UIStateCl, F: PosForm<State>> Form<State> for RectBackForm<State, F> {
+impl<'a, State: UIStateCl + Sync, F: PosForm<State>, Tex: ToTexture<'a, State>> Form<State> for Background<'a, State, F, Tex> {
 	fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) { self.form.after(app, assets, plugins, state); }
 	fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
-		draw.rect((self.form.get_pos()-self.back.0.pos).into(), self.get_size().into())
-			.color(self.back.1);
+		let back_size = match self.back.1 {
+			BackSize::Size(size) => size,
+			BackSize::Max => self.form.get_size()
+		};
+		let pos = self.form.get_pos();
+		let size = self.form.get_size();
+		let draw_pos = (pos.0 + (size.0 - back_size.0) / 2., pos.1 + (size.1 - back_size.1) / 2. );
+		match &self.back.0 {
+			Back::Color(color) => {
+				draw.rect(
+					draw_pos,
+					back_size.into()
+				).color(*color);
+			},
+			Back::Image(get_texture) => {
+				draw.image(get_texture.with_to(&state))
+					.size(back_size.0, back_size.1)
+					.position(draw_pos.0, draw_pos.1);
+			},
+			_ => { }
+		}
 	}
 }
+#[derive(Clone, Debug)]
+struct WindowD<State: UIStateCl, T: PosForm<State>, W: TryToWith<State, Option<usize>>> {
+	pub inside: T,
+	pub subwindows: Vec<WindowD<State, T, W>>,
+	pub current_subwindow: W,
+	pub focused: bool,
+	boo: PhantomData<State>
+}
+impl<State: UIStateCl, F: PosForm<State>, W: TryToWith<State, Option<usize>>> Form<State> for WindowD<State, F, W> {
+	fn after(&mut self, app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut State) {
+		if self.current_subwindow.with_to(&state).is_some() {
+			
+		}
+	}
+	fn draw(&mut self, app: &mut App, assets: &mut Assets, gfx: &mut Graphics, plugins: &mut Plugins, state: &mut State, draw: &mut Draw) {
+		
+	}
+}
+impl<State: UIStateCl, Form: PosForm<State>, W: TryToWith<State, Option<usize>>> Positionable for WindowD<State, Form, W> {
+	fn add_pos(&mut self, to_add: Position) {
+		self.inside.add_pos(to_add);
+	}
+	fn get_pos(&self) -> Position {
+		self.inside.get_pos()
+	}
+	fn get_rect(&self) -> Rect {
+		self.inside.get_rect()
+	}
+	fn get_size(&self) -> Size {
+		self.inside.get_size()
+	}
+	fn with_pos(&self, to_add: Position) -> Self {
+		let mut new = self.clone();
+		new.add_pos(to_add);
+		new
+	}
+}
+
 // fn rect_back<State: UIStateCl, Form: PosForm<State>>(form: Form, ) -> 
