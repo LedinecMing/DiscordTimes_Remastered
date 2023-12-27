@@ -18,10 +18,12 @@ use crate::lib::{
     items::item::*,
     map::{map::*, object::ObjectInfo, event::{Event as GameEvent, Execute, execute_event}, tile::*},
     time::time::{Data as TimeData},
+	network::net::*
 };
 use notan::{
     draw::*,
     prelude::*,
+	log,
     text::TextConfig,
 	fragment_shader, app::GfxRenderer
 };
@@ -41,12 +43,14 @@ use rand::{
     prelude::ThreadRng,
     thread_rng, Rng,
 };
+use renet::{DefaultChannel, ClientId};
 use std::{
     array::from_fn,
     collections::{HashMap, VecDeque},
     fmt::{Debug, Display},
-    mem::size_of, time::Duration,
+    mem::size_of, time::{Duration, Instant},
 };
+use alkahest::{serialize, serialized_size};
 use tracing_mutex::stdsync::TracingMutex as Mutex;
 use worldgen::{
     constraint,
@@ -71,6 +75,7 @@ pub struct State {
     pub draw: Draw,
     pub shaders: Vec<(Pipeline, Buffer)>,
     pub gamemap: GameMap,
+	pub connection: Option<ConnectionManager>,
 	pub gameevents: Vec<GameEvent>,
 	pub gameloop_time: Duration,
 	pub pause: bool,
@@ -201,110 +206,111 @@ enum Menu {
     UnitView,
     Battle,
     Items,
+	Connect
 }
 
 enum Action {
 	Cell(usize, usize),
 	Move(usize, usize, usize)
 }
-fn move_thing(state: &mut State) {
-	check_win(state);
-	if state.battle.winner.is_none() {
-		check_row_fall(state);
-		if state.battle.active_unit == None {
-			next_move(state);
-			state.battle.active_unit = state.battle.search_next_active(&*state);
+fn move_thing(battle: &mut BattleInfo, gamemap: &mut GameMap) {
+	check_win(battle, gamemap);
+	check_row_fall(battle, gamemap);
+	battle.remove_corpses(gamemap);
+	if battle.winner.is_none() {
+		if battle.active_unit == None {
+		 	next_move(battle, gamemap);
+			battle.active_unit = battle.search_next_active(gamemap);
 		}
-		state.battle.can_interact = search_interactions(state);
+		battle.can_interact = search_interactions(battle, gamemap);
 	} else {
-		state.menu_id = Menu::Start as usize;
+		//state.menu_id = Menu::Start as usize;
 	}
 }
-fn handle_action(action: Action, state: &mut State) {
+
+fn unit_interaction(battle: &mut BattleInfo, gamemap: &mut GameMap, pos: usize, army: usize) -> bool {
+	if let Some(_) = battle.winner {
+		// state.menu_id = Menu::Start as usize;
+		return true;
+	}
+	let army = if army == 0 { battle.army1 } else { battle.army2 };
+	// if let Some(icon_index) = gamemap.armys[army].hitmap[pos].and_then(|e| Some(gamemap.armys[army].troops[e].get().unit.info.icon_index)) {
+	// 	let unit_index = icon_index as u64 + 1;
+	// 	set_menu_value_num(state, "battle_unit_stat", unit_index as i64);
+	// 	set_menu_value_num(state, "battle_unit_stat_changed", 1);
+	//}
+
+	let mut unit_inactive = false;
+	
+	let Some(active_unit) = battle.active_unit else {
+		battle.active_unit = battle.search_next_active(gamemap);
+		move_thing(battle, gamemap);
+		return true;
+	};
+	let Some(target_index) = gamemap.armys[army].hitmap[pos] else {
+		if army == active_unit.0 {
+			handle_action(Action::Move(active_unit.0, active_unit.1, pos), battle, gamemap);
+		};
+		return false;
+	};
+	if active_unit.0 == army && target_index == active_unit.1 {
+		let troop = &mut gamemap.armys[army].troops[target_index].get();
+		if troop_inactive(&troop) {
+			return true;
+		}
+		let unit = &mut troop.unit;
+		unit.stats.moves -= 1;
+		unit.recalc();
+	return troop_inactive(&troop);
+	} else {
+		let target_troops = &gamemap.armys[army].troops;
+		let the_troops = {
+			let active_index = active_unit.1;
+			let active_army = active_unit.0;
+			(gamemap.armys[active_army].troops.get(active_index), target_troops.get(target_index))
+		};
+		let (Some(active_troop), Some(target_troop)) = the_troops else {
+			return unit_inactive;
+		};
+		let (mut active_troop, mut target_troop) = (active_troop.get(), target_troop.get());
+		if troop_inactive(&active_troop) {
+			return true;
+		}
+		let active_unit_index = active_troop.pos.into();
+		let unit1 = &mut active_troop.unit;
+		let unit2 = &mut target_troop.unit;
+		if !unit2.is_dead() {
+			if unit1.attack(
+				unit2,
+				UnitPos::from_index(pos),
+				UnitPos::from_index(active_unit_index),
+				&battle
+			) {
+				unit1.stats.moves -= 1;
+				unit1.recalc();
+				if unit1.is_dead() || unit1.modified.moves < 1 {
+					unit_inactive = true;
+				}
+			}
+		}
+	};
+	unit_inactive
+}
+
+fn handle_action(action: Action, battle: &mut BattleInfo, gamemap: &mut GameMap) {
 	match action {
 		Action::Cell(pos, army) => {
-			if let Some(_) = state.battle.winner {
+			if let Some(_) = battle.winner {
+				// state.menu_id = Menu::Start as usize;
 				return
 			}
-			let army = if army == 0 { state.battle.army1 } else { state.battle.army2 };
-			if let Some(icon_index) = state.gamemap.armys[army].hitmap[pos].and_then(|e| Some(state.gamemap.armys[army].troops[e].get().unit.info.icon_index)) {
-				let unit_index = icon_index as u64 + 1;
-				set_menu_value_num(state, "battle_unit_stat", unit_index as i64);
-				set_menu_value_num(state, "battle_unit_stat_changed", 1);
+			if unit_interaction(battle, gamemap, pos, army) {
+				battle.active_unit = battle.search_next_active(gamemap);
 			}
-
-			let mut unit_inactive = false;
-			
-			if let Some(active_unit) = state.battle.active_unit {
-				if active_unit.0 == army {
-					if let Some(target_index) = state.gamemap.armys[army].hitmap[pos] {
-						if target_index == active_unit.1 {
-							let troop = &mut state.gamemap.armys[army].troops[target_index].get();
-							if troop_inactive(&troop) {
-								unit_inactive = true;
-							} else {
-								let unit = &mut troop.unit;
-								unit.stats.moves -= 1;
-								unit.recalc();
-								if troop_inactive(&troop) {
-									unit_inactive = true;
-								}
-							}
-						}
-					} else {
-						handle_action(Action::Move(active_unit.0, active_unit.1, pos), state);
-					}
-				} else {
-					let target_troops = &state.gamemap.armys[army].troops;
-					if let Some(target_index) = state.gamemap.armys[army].hitmap[pos] {
-						let the_troops = {
-							let active_index = active_unit.1;
-							let active_army = active_unit.0;
-							(state.gamemap.armys[active_army].troops.get(active_index), target_troops.get(target_index))
-						};
-						if let (Some(active_troop), Some(target_troop)) = the_troops {
-							let (mut active_troop, mut target_troop) = (active_troop.get(), target_troop.get());
-							if troop_inactive(&active_troop) {
-								unit_inactive = true;
-							}
-							else {
-								let active_unit_index = active_troop.pos.into();
-								let unit1 = &mut active_troop.unit;
-								let unit2 = &mut target_troop.unit;
-								if !unit2.is_dead() {
-									if unit1.attack(
-										unit2,
-										UnitPos::from_index(pos),
-										UnitPos::from_index(active_unit_index),
-										&state.battle
-									) {
-										unit1.stats.moves -= 1;
-										unit1.recalc();
-										if unit1.is_dead() || unit1.modified.moves < 1 {
-											unit_inactive = true;
-										}
-									}
-								}
-							}
-						};
-					} else {
-						if army == active_unit.0 {
-							handle_action(Action::Move(active_unit.0, active_unit.1, pos), state);
-						}
-					}
-				}
-				state.gamemap.armys[army].recalc_army_hitmap();
-			}
-			if unit_inactive {
-				state.battle.active_unit = state.battle.search_next_active(&*state);
-			}
-			move_thing(state);
+			move_thing(battle, gamemap);
 		},
 		Action::Move(army, troop, to) => {
-			if let Some(_) = state.battle.winner {
-				return
-			}
-			let army = &mut state.gamemap.armys[army];
+			let army = &mut gamemap.armys[army];
 			let unit_inactive = {
 				let troop = &mut army.troops[troop].get();
 				troop.pos = UnitPos::from_index(to);
@@ -315,9 +321,9 @@ fn handle_action(action: Action, state: &mut State) {
 			};
 			army.recalc_army_hitmap();
 			if unit_inactive {
-				state.battle.active_unit = state.battle.search_next_active(&*state);
+				battle.active_unit = battle.search_next_active(gamemap);
 			}
-			move_thing(state);
+			move_thing(battle, gamemap);
 		}
 	}
 }
@@ -378,6 +384,11 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                             locale.get("menu_battle_title"),
                             draw_back,
                             redirect_menu::<_, {Menu::Battle as usize}>
+                        ),
+						menu_button(
+                            locale.get("menu_pvp_title"),
+                            draw_back,
+                            redirect_menu::<_, {Menu::Connect as usize}>
                         ),
                         menu_button(
                             locale.get("menu_load_title"),
@@ -448,7 +459,7 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                 } else {
                     Color::BROWN
                 });
-            draw_unit_info(unit, pos, &*state, draw);
+            draw_unit_info(unit, pos, &state.fonts[0], draw);
             draw.text(&state.fonts[0], &*format!("{};{};{}", army, index, pos.0))
                 .color(Color::BLACK)
                 .position(pos.0, pos.1);
@@ -757,7 +768,7 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 														pos.0 = cont.pos.0 + i as f32 * 102.;
 														pos.1 = cont.pos.1 + army as f32 * 250. + row as f32 * 112.;
 														if app.mouse.left_was_released() && (Rect { pos: pos, size: Size(92., 102.) }).collides((app.mouse.x, app.mouse.y).into()) {
-															handle_action(Action::Cell(i + (army as i64 - row as i64).abs() as usize * half_troops, army), state);
+															handle_action(Action::Cell(i + (army as i64 - row as i64).abs() as usize * half_troops, army), &mut state.battle, &mut state.gamemap);
 														}
 													}
 												}
@@ -891,15 +902,11 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 								);
 								if let Some(army) = state.gamemap.hitmap[goal.0][goal.1].army  {
 									if army != 0 {
-										dbg!(army);
 										let pos = state.gamemap.armys[0].pos;
 										let diff = (pos.0 as i64 - goal.0 as i64, pos.1 as i64 - goal.1 as i64);
 										if -1 <= diff.0 && diff.0 <= 1 && -1 <= diff.1 && diff.1 <= 1 {
 											if state.battle.army1 != army {
-												dbg!("starting batle");
-												let mut battle = BattleInfo::new(state, army, 0);
-												battle.start(state);
-												dbg!(&battle);
+												let battle = BattleInfo::new(&mut state.gamemap, army, 0);
 												state.battle = battle;
 											}
 											state.menu_id = Menu::Battle as usize;
@@ -909,6 +916,7 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 								}
 								let path = find_path(&state.gamemap, &state.objects, start, goal, false);
 								state.gamemap.armys[0].path = if let Some(path) = path {
+									state.pause = false;
 									path.0
 								} else {
 									Vec::new()
@@ -919,7 +927,12 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 							if !state.pause {
 								for i in 0..state.gamemap.armys.len() {
 									let army = &mut state.gamemap.armys[i];
-									if army.path.len() < 1 { continue; }
+									if army.path.len() < 1 {
+										if i == 0 {
+											state.pause = true;
+										}
+										continue;
+									}
 									army.pos = army.path.remove(0);
 									if let Some(building) = state.gamemap.hitmap[army.pos.0][army.pos.1].building {
 										army.building = Some(building);
@@ -938,7 +951,7 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 												},
 												Execute::StartBattle(army) => {
 													if state.battle.army1 != army && state.battle.army2 != 0 {
-														let battle = BattleInfo::new(state, army, 0);
+														let battle = BattleInfo::new(&mut state.gamemap, army, 0);
 														state.battle = battle;		
 													}
 													set_menu_value_num(state, "start_menu", 1);
@@ -999,15 +1012,15 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 		let pos = state.gamemap.armys[0].pos;
         for i in 0..MAP_SIZE {//((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
             for j in 0..MAP_SIZE {//((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
-                let asset = terrain
-                    .get(TILES[state.gamemap.tilemap[i][j]].sprite())
-                    .unwrap();
-                let texture = asset.lock().unwrap();
+                // let asset = terrain
+                //     .get(TILES[state.gamemap.tilemap[i][j]].sprite())
+                //     .unwrap();
+                //let texture = asset.lock().unwrap();
 
                 let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
-                draw.image(&texture)
-                     .position(pos.0, pos.1)
-                     .size(SIZE.0, SIZE.1);
+                // draw.image(&texture)
+                //      .position(pos.0, pos.1)
+                //     .size(SIZE.0, SIZE.1);
                 if state.gamemap.armys[0].path.contains(&(i, j)) {
                     draw.rect((pos).into(), (10., 10.)).color(Color::RED);
                 }
@@ -1314,7 +1327,7 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 					draw.rect(pos.into(), (92., 102.))
 						.color(Color::BLACK);
 					
-					unit_card_draw(pos, app, gfx, state, draw, army, i + (army as i64 - row as i64).abs() as usize * half_troops);
+					unit_card_draw(pos, app, gfx, &state.assets, &state.fonts[0], &mut state.battle, &mut state.gamemap, draw, army, i + (army as i64 - row as i64).abs() as usize * half_troops);
 				}
 			}
 		}
@@ -1467,7 +1480,7 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
             pos: Position(0., 0.),
         }
     );
-    fn draw_unit_info(unit: &Unit, pos: Position, state: &State, draw: &mut Draw) {
+    fn draw_unit_info(unit: &Unit, pos: Position, font: &Font, draw: &mut Draw) {
         let stats = &unit.modified;
         let damage_info = &*if stats.damage.hand > 0 {
             format!("A: {}", stats.damage.hand)
@@ -1485,21 +1498,21 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
         let speed_info = &*format!("Ini: {}", stats.speed);
         let move_info = &*format!("Mnvr: {}/{}", stats.moves, stats.max_moves);
         let health_info = &*format!("Hits: {}/{}", stats.hp, stats.max_hp);
-        draw.text(&state.fonts[0], damage_info)
+        draw.text(font, damage_info)
             .size(10.)
             .position(pos.0, pos.1 + 92.);
-        draw.text(&state.fonts[0], move_info)
+        draw.text(font, move_info)
             .size(10.)
             .position(pos.0, pos.1 + 102.);
 
-        draw.text(&state.fonts[0], defence_info)
+        draw.text(font, defence_info)
             .size(10.)
             .position(pos.0 + 40., pos.1 + 92.);
-        draw.text(&state.fonts[0], speed_info)
+        draw.text(font, speed_info)
             .size(10.)
             .position(pos.0 + 50., pos.1 + 102.);
 
-        draw.text(&state.fonts[0], health_info)
+        draw.text(font, health_info)
             .size(10.)
             .position(pos.0 + 46., pos.1 + 112.)
             .h_align_center();
@@ -1507,18 +1520,20 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
     fn unit_card_draw(
         pos: Position,
         _: &mut App,
-        _: &mut Graphics,      
-        state: &mut State,
+        _: &mut Graphics,
+		assets: &HashMap<&'static str, HashMap<String, Asset<Texture>>>,
+        font: &Font,
+		battle: &mut BattleInfo,
+		gamemap: &mut GameMap,
 		draw: &mut Draw,
         army: usize,
         index: usize,
     ) {
-		let army = if army == 0 { state.battle.army1 } else { state.battle.army2 };
-		if let Some(troop) = state.gamemap.armys[army as usize].hitmap[index].and_then(|index| Some(&state.gamemap.armys[army as usize].troops[index])) {
+		let army = if army == 0 { battle.army1 } else { battle.army2 };
+		if let Some(troop) = gamemap.armys[army as usize].get_troop(index) {
 			let troop = troop.get();
             let unit = &troop.unit;
-            let texture = &state
-                .assets
+            let texture = assets
                 .get("assets/Icons")
                 .unwrap()
                 .get(&*format!("img_{}.png", unit.info.icon_index))
@@ -1526,9 +1541,9 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                 .lock()
                 .unwrap();
             let stats = unit.modified;
-			if <UnitPos as Into<usize>>::into(troop.pos) != index {
-				return;
-			}
+			// if <UnitPos as Into<usize>>::into(troop.pos) != index {
+			// 	return;
+			//}
 			let size = unit.info.size;
             draw.image(&texture).position(pos.0, pos.1)
                 .size(size.0 as f32 * 92., size.1 as f32 * 92.);
@@ -1543,9 +1558,9 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 					} else {
 						Color::BROWN
 					});
-				draw_unit_info(unit, pos, &*state, draw);
+				draw_unit_info(unit, pos, font, draw);
 			}
-			draw.text(&state.fonts[0], &*format!("{};{};{}", army, index, pos.0))
+			draw.text(font, &*format!("{};{};{}", army, index, pos.0))
                 .color(Color::BLACK)
                 .position(pos.0, pos.1);
             let health_rect = (
@@ -1557,15 +1572,15 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
             );
             draw.rect(health_rect.0, health_rect.1)
                  .color(Color::from_rgba(1., 0., 0.,  1. - stats.hp as f32 / stats.max_hp as f32));
-			if let Some(active_unit) = state.battle.active_unit {
-				if active_unit.0 == army && let Some(index) = state.gamemap.armys[army].hitmap[index] {
+			if let Some(active_unit) = battle.active_unit {
+				if active_unit.0 == army && let Some(index) = gamemap.armys[army].hitmap[index] {
 					if active_unit.1 == index {
 						draw.rect((pos.0, pos.1), (92., 92.))
 							.color(Color::TRANSPARENT)
 							.stroke_color(Color::from_rgba(0., 255., 0., 0.3))
 							.stroke(10.);
 					}	
-				} else if let Some(can_interact) = &state.battle.can_interact {
+				} else if let Some(can_interact) = &battle.can_interact {
                     if can_interact.contains(&(army, index)) {
                         draw.rect((pos.0, pos.1), (92., 92.))
                             .color(Color::TRANSPARENT)
@@ -1592,14 +1607,14 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                                         button(
                                             Drawing {
                                                 pos: Position(0., 0.),
-                                                to_draw: |drawing, app, _, gfx, _, state, draw| {
-                                                    unit_card_draw(drawing.pos, app, gfx, state, draw, 0, 0 * *MAX_TROOPS / 2 + (drawing.pos.0 / 102.) as usize);
+                                                to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
+                                                    unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], &mut state.battle, &mut state.gamemap, draw, 0, 0 * *MAX_TROOPS / 2 + (drawing.pos.0 / 102.) as usize);
                                                 }
                                             },
                                             Rect { pos: Position(0., 0.), size: Size(92., 92.) }
                                         ).if_clicked(|button, _app, _assets, _plugins, state| {
                                             let index = (button.rect.pos.0 / 102.) as usize;
-                                            handle_action(Action::Cell(index, 0), state)
+                                            handle_action(Action::Cell(index, 0), &mut state.battle, &mut state.gamemap)
                                         }).build().unwrap()
                                     }).collect::<Vec<_>>())
                                 .interval(Position(10., 0.))
@@ -1608,14 +1623,14 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                                 button(
                                     Drawing {
                                         pos: Position(0., 0.),
-                                        to_draw: |drawing, app, _, gfx, _, state, draw| {
-                                            unit_card_draw(drawing.pos, app, gfx, state, draw, 0, *MAX_TROOPS / 2 + (drawing.pos.0 / 102.) as usize);
+                                        to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
+                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], &mut state.battle, &mut state.gamemap, draw, 0, *MAX_TROOPS / 2 + (drawing.pos.0 / 102.) as usize);
                                         }
                                     },
                                     Rect { pos: Position(0., 0.), size: Size(92., 92.) }
                                 ).if_clicked(|button, _app, _assets, _plugins, state| {
                                     let index = (button.rect.pos.0 / 102.) as usize + *MAX_TROOPS / 2;
-                                    handle_action(Action::Cell(index, 0), state);
+                                    handle_action(Action::Cell(index, 0), &mut state.battle, &mut state.gamemap);
                                 })
                                     .build().unwrap()
                             }).collect::<Vec<_>>())
@@ -1634,14 +1649,14 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                                 button(
                                     Drawing {
                                         pos: Position(0., 0.),
-                                        to_draw: |drawing, app, _, gfx, _, state, draw| {
-                                            unit_card_draw(drawing.pos, app, gfx, state, draw, 1, *MAX_TROOPS / 2 + (drawing.pos.0 / 102.) as usize);
+                                        to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
+                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], &mut state.battle, &mut state.gamemap, draw, 1, *MAX_TROOPS / 2 + (drawing.pos.0 / 102.) as usize);
                                         }
                                     },
                                     Rect { pos: Position(0., 0.), size: Size(92., 92.) }
                                 ).if_clicked(|button, _app, _assets, _plugins, state| {
                                     let index = (button.rect.pos.0 / 102.) as usize + *MAX_TROOPS / 2;
-                                    handle_action(Action::Cell(index, 1), state)
+                                    handle_action(Action::Cell(index, 1), &mut state.battle, &mut state.gamemap)
                                 }).build().unwrap()
                             }).collect::<Vec<_>>())
                                 .interval(Position(10., 0.))
@@ -1650,14 +1665,14 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                                 button(
                                     Drawing {
                                         pos: Position(0., 0.),
-                                        to_draw: |drawing, app, assets, gfx, plugins, state, draw| {
-                                            unit_card_draw(drawing.pos, app, gfx, state, draw, 1, 0 + (drawing.pos.0 / 102.) as usize);
+                                        to_draw: |drawing, app, assets, gfx, plugins, state: &mut State, draw| {
+                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], &mut state.battle, &mut state.gamemap, draw, 1, 0 + (drawing.pos.0 / 102.) as usize);
                                         }
                                     },
                                     Rect { pos: Position(0., 0.), size: Size(92., 92.) }
                                 ).if_clicked(|button, _app, _assets, _plugins, state| {
                                     let index = (button.rect.pos.0 / 102.) as usize;
-                                    handle_action(Action::Cell(index, 1), state)
+                                    handle_action(Action::Cell(index, 1), &mut state.battle, &mut state.gamemap)
                                 })
                                     .build().unwrap()
                             }).collect::<Vec<_>>())
@@ -1720,7 +1735,214 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
             if app.keyboard.is_down(KeyCode::Escape) { state.menu_id = Menu::Main as usize; }
             if app.keyboard.was_pressed(KeyCode::Space) {
 				if let Some(active_unit) = state.battle.active_unit {
-					handle_action(Action::Cell(active_unit.1, active_unit.0), state);
+					handle_action(Action::Cell(active_unit.1, active_unit.0), &mut state.battle, &mut state.gamemap);
+				}
+            }
+        }),
+        pos: Position(0., 0.)
+    });
+	fn handle_server_action(connection: &mut Option<ConnectionManager>, action: (usize, usize)) {
+		let Some(connection) = connection else {
+			return;
+		};
+		match &mut connection.con {
+			Connection::Client(con) => {
+				let message = ClientMessage::Action((action.0 as u64, action.1 as u64));
+				let size = serialized_size::<ClientMessage, _>(&message);
+				let mut output = vec![0u8; size.0];
+				serialize::<ClientMessage, ClientMessage>(message, &mut output);
+				con.client.send_message(renet::DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
+			},
+			Connection::Host(server) => {
+				if server.auth.get(&HOST_CLIENT_ID) != connection.battle.active_unit.and_then(|v| Some(v.0)).as_ref() {
+					return;
+				}
+				handle_action(Action::Cell(action.0, action.1), &mut connection.battle, &mut connection.gamemap);
+				let message = ServerMessage::State(
+					BattleState::from((connection.battle.clone(), connection.gamemap.clone()))
+				);
+				let size = serialized_size::<ServerMessage, _>(&message);
+				let mut output = vec![0u8; size.0];
+				serialize::<ServerMessage, ServerMessage>(message, &mut output).ok();
+				
+				server.server.send_message(ClientId::from_raw(255), DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
+			}
+		};
+	}
+
+	
+	hashmap.insert(Menu::Connect as usize, SingleContainer {
+        inside: Some(DynContainer {
+            inside: vec![
+                Box::new(StraightDynContainer {
+                    inside: vec![
+                        Box::new(single(container(vec![
+                                    container((0..half_troops).map(|_| {
+                                        button(
+                                            Drawing {
+                                                pos: Position(0., 0.),
+                                                to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
+													let Some(conn) = &mut state.connection else { return; };
+													let (gamemap, battle) = (&mut conn.gamemap, &mut conn.battle);
+                                                    unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, gamemap, draw, 0, 0 * *MAX_TROOPS / 2 + (drawing.pos.0 / 102.) as usize);
+                                                }
+                                            },
+                                            Rect { pos: Position(0., 0.), size: Size(92., 92.) }
+                                        ).if_clicked(|button, _app, _assets, _plugins, state| {
+                                            let index = (button.rect.pos.0 / 102.) as usize;
+											handle_server_action(&mut state.connection, (index, 0));
+                                        }).build().unwrap()
+                                    }).collect::<Vec<_>>())
+                                .interval(Position(10., 0.))
+                                .build()?,
+                            container((0..half_troops).map(|_| {
+                                button(
+                                    Drawing {
+                                        pos: Position(0., 0.),
+                                        to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
+											let Some(conn) = &mut state.connection else { return; };
+											let (gamemap, battle) = (&mut conn.gamemap, &mut conn.battle);
+                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, gamemap, draw, 0, *MAX_TROOPS / 2 + (drawing.pos.0 / 102.) as usize);
+                                        }
+                                    },
+                                    Rect { pos: Position(0., 0.), size: Size(92., 92.) }
+                                ).if_clicked(|button, _app, _assets, _plugins, state| {
+                                    let index = (button.rect.pos.0 / 102.) as usize + *MAX_TROOPS / 2;
+									handle_server_action(&mut state.connection, (index, 0));
+                                })
+                                    .build().unwrap()
+                            }).collect::<Vec<_>>())
+                                .interval(Position(10., 0.))
+                                .build()?
+                        ])
+										.align_direction(Direction::Bottom)
+										.interval(Position(0., 50.))
+										.build()?
+                        )
+								 .pos(Position(10., 30.))
+								 .build()?
+                        ),
+                        Box::new(single(container(vec![
+                            container((0..half_troops).map(|_| {
+                                button(
+                                    Drawing {
+                                        pos: Position(0., 0.),
+                                        to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
+											let Some(conn) = &mut state.connection else { return; };
+											let (gamemap, battle) = (&mut conn.gamemap, &mut conn.battle);
+                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, gamemap, draw, 1, *MAX_TROOPS / 2 + (drawing.pos.0 / 102.) as usize);
+                                        }
+                                    },
+                                    Rect { pos: Position(0., 0.), size: Size(92., 92.) }
+                                ).if_clicked(|button, _app, _assets, _plugins, state| {
+                                    let index = (button.rect.pos.0 / 102.) as usize + *MAX_TROOPS / 2;
+									handle_server_action(&mut state.connection, (index, 1));
+                                }).build().unwrap()
+                            }).collect::<Vec<_>>())
+                                .interval(Position(10., 0.))
+                                .build()?,
+                            container((0..half_troops).map(|_| {
+                                button(
+                                    Drawing {
+                                        pos: Position(0., 0.),
+                                        to_draw: |drawing, app, assets, gfx, plugins, state: &mut State, draw| {
+											let Some(conn) = &mut state.connection else { return; };
+											let (gamemap, battle) = (&mut conn.gamemap, &mut conn.battle);
+                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, gamemap, draw, 1, 0 + (drawing.pos.0 / 102.) as usize);
+                                        }
+                                    },
+                                    Rect { pos: Position(0., 0.), size: Size(92., 92.) }
+                                ).if_clicked(|button, _app, _assets, _plugins, state| {
+                                    let index = (button.rect.pos.0 / 102.) as usize;
+									handle_server_action(&mut state.connection, (index, 1));
+                                })
+                                    .build().unwrap()
+                            }).collect::<Vec<_>>())
+                                .interval(Position(10., 0.))
+                                .build()?
+                        ])
+										.align_direction(Direction::Bottom)
+										.interval(Position(0., 50.))
+										.build()?
+                        )
+								 .pos(Position(10., 500.))
+								 .build()?
+                        ),
+                        Box::new(
+                            single(text("Статус".to_string())
+                                   .size(20.0)
+                                   .max_width((MONITOR_SIZE.lock().unwrap().0 - 900.).max(100.))
+                                .build()?
+                            )
+                            .after_draw(|container, app, _assets, _plugins, state: &mut State| {
+                                if app.keyboard.is_down(KeyCode::Escape) { state.menu_id = Menu::Main as usize; }
+								if app.keyboard.was_pressed(KeyCode::C) {
+									let (client, transport) = create_renet_client();
+									state.connection = Some(
+										ConnectionManager {
+											con: Connection::Client(
+												ClientConnection {
+													client: Box::new(client),
+													transport: Box::new(transport)
+												}
+											),
+											gamemap: state.gamemap.clone(),
+											battle: state.battle.clone(),
+											last_updated: Instant::now()
+										}
+									);
+								}
+								if app.keyboard.was_pressed(KeyCode::H) {
+									state.connection = Some(
+										ConnectionManager {
+											con: Connection::Host(
+												GameServer::new()
+											),
+											gamemap: state.gamemap.clone(),
+											battle: state.battle.clone(),
+											last_updated: Instant::now()
+										}
+									);
+								}
+                                if let Some(conn) = &mut state.connection {
+                                    container.inside.as_mut().unwrap().text = match &conn.con {
+										Connection::Client(client) => {
+											if client.client.is_connected() {
+												"Client-Connection Connected"
+											} else if client.client.is_connecting() {
+												"Client-Connection Connecting"
+											} else {
+												"Client-Connection"
+											}
+										}
+                                        Connection::Host(server) => {
+											"Server-Connection"
+										}
+									}.to_string();
+									conn.updates();
+								}
+                            })
+                            .pos(Position(900., 200.))
+                            .build()?
+                        ),
+                    ],
+                    pos: Position(0., 0.)
+                })
+            ],
+            pos: Position(0., 0.),
+            align_direction: Direction::Bottom,
+            interval: Position(0., 0.)
+        }),
+        on_draw: Some(|_container, _app, _assets, _gfx, _plugins, state: &mut State, draw| {
+            draw
+                .rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
+                .color(Color::ORANGE);
+        }),
+        after_draw: Some(|_container, app, _assets, _plugins, state: &mut State| {
+            if app.keyboard.is_down(KeyCode::Escape) { state.menu_id = Menu::Main as usize; }
+            if app.keyboard.was_pressed(KeyCode::Space) {
+				if let Some(active_unit) = state.battle.active_unit {
+					handle_action(Action::Cell(active_unit.1, active_unit.0), &mut state.battle, &mut state.gamemap);
 				}
             }
         }),
@@ -2015,6 +2237,7 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
         draw: gfx.create_draw(),
         frame: 0,
 		pause: true,
+		connection: None,
         gamemap,
 		gameevents,
 		gameloop_time: Duration::new(0, 0),
@@ -2037,7 +2260,7 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
     };
     state.gamemap.calc_hitboxes(&state.objects);
     let mut battle = state.battle.clone();
-    battle.start(&mut state);
+    battle.start(&mut state.gamemap);
     state.battle = battle;
 	dbg!(&state.battle);
 	let size = gfx.size();
@@ -2093,6 +2316,7 @@ fn main() -> Result<(), String> {
         .add_config(win)
         .add_config(TextConfig)
         .add_config(DrawConfig)
+        .add_config(log::LogConfig::info())
         .draw(draw)
         .event(event)
         .update(update)

@@ -7,6 +7,7 @@ use crate::{
     State, Menu,
 };
 use std::cmp::Ordering::*;
+use alkahest::alkahest;
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub enum Field {
@@ -37,43 +38,51 @@ pub struct BattleInfo {
     pub dead: Vec<TroopType>,
 }
 impl BattleInfo {
-	pub fn new(state: &mut State, army1: usize, army2: usize) -> Self {
+	pub fn new(gamemap: &mut GameMap, army1: usize, army2: usize) -> Self {
 		let mut battle = BattleInfo {
 			army1,
 			army2,
-			battle_ter: state.gamemap.armys[army2].building.unwrap_or(0),
+			battle_ter: gamemap.armys[army2].building.unwrap_or(0),
 			winner: None,
 			..Default::default()
 		};
-		battle.start(state);
+		battle.start(gamemap);
 		battle
 	}
-    pub fn start(&mut self, state: &mut State) {
-        let army1 = &mut state.gamemap.armys[self.army1];
+    pub fn start(&mut self, gamemap: &mut GameMap) {
+        let army1 = &mut gamemap.armys[self.army1];
 
         army1.troops.iter_mut().for_each(|troop| {
             let unit = &mut troop.get().unit;
             let bonus = unit.get_bonus();
-            bonus.on_battle_start(unit, &state.battle);
+            bonus.on_battle_start(unit, &self);
             unit.bonus = bonus;
             unit.recalc();
         });
-        let army2 = &mut state.gamemap.armys[self.army2];
+        let army2 = &mut gamemap.armys[self.army2];
         army2.troops.iter_mut().for_each(|troop| {
             let unit = &mut troop.get().unit;
             let bonus = unit.get_bonus();
-            bonus.on_battle_start(unit, &state.battle);
+            bonus.on_battle_start(unit, &self);
             unit.bonus = bonus;
             unit.recalc();
         });
 		self.winner = None;
-		self.active_unit = self.search_next_active(state);
-		self.can_interact = search_interactions(state);
+		self.active_unit = self.search_next_active(gamemap);
+		self.can_interact = search_interactions(self, gamemap);
     }
-    pub fn search_next_active(&self, state: &State) -> Option<(usize, usize)> {
-        let army1 = &state.gamemap.armys[self.army1];
-        let army2 = &state.gamemap.armys[self.army2];
-		if state.battle.winner.is_some() {
+	pub fn remove_corpses(&mut self, gamemap: &mut GameMap) {
+		let army1 = &mut gamemap.armys[self.army1];
+		remove_corpses(self, &mut army1.troops);
+		army1.recalc_army_hitmap();
+		let army2 = &mut gamemap.armys[self.army2];
+		remove_corpses(self, &mut army2.troops);
+		army2.recalc_army_hitmap();
+	}
+    pub fn search_next_active(&self, gamemap: &mut GameMap) -> Option<(usize, usize)> {
+        let army1 = &gamemap.armys[self.army1];
+        let army2 = &gamemap.armys[self.army2];
+		if self.winner.is_some() {
 			return None;
 		}
 		
@@ -121,6 +130,11 @@ impl BattleInfo {
 			for dead in corpses {
 				let army = dead.get().unit.army;
 				gamemap.armys[army].add_troop(dead).ok();
+			}
+		}
+		fn trigger_end(gamemap: &mut GameMap, battle: &mut BattleInfo) {
+			for troop in &mut gamemap.armys[battle.army1].troops {
+				troop.get().on_battle_end();
 			}
 		}
 		fn move_goods(gamemap: &mut GameMap, battle: &mut BattleInfo, winner: usize) -> (Vec<Item>, u64, u64){
@@ -189,10 +203,9 @@ impl BattleInfo {
 	} 
 }
 
-pub fn search_interactions(state: &mut State) -> Option<Vec<(usize, usize)>> {
-    let battle = &mut state.battle;
-    let army1 = &state.gamemap.armys[battle.army1];
-    let army2 = &state.gamemap.armys[battle.army2];
+pub fn search_interactions(battle: &mut BattleInfo, gamemap: &mut GameMap) -> Option<Vec<(usize, usize)>> {
+    let army1 = &gamemap.armys[battle.army1];
+    let army2 = &gamemap.armys[battle.army2];
     let mut can_interact = Vec::new();
     if let Some(active_unit) = battle.active_unit {
 		let active_army = active_unit.0;
@@ -235,48 +248,44 @@ pub fn search_interactions(state: &mut State) -> Option<Vec<(usize, usize)>> {
     None
 }
 const MAX_MOVES: u64 = 25;
-pub fn next_move(state: &mut State) {
-	if state.battle.winner.is_some() {
-		state.menu_id = Menu::Start as usize;
-		state.battle.end(&mut state.gamemap);
+pub fn remove_corpses(battle: &mut BattleInfo, troops: &mut Vec<TroopType>) {
+	let mut i = 0;
+	loop {
+		if troops[i].get().is_dead() {
+			battle.dead.push(troops.remove(i));
+			i -= 1;
+		}
+		if i + 1 >= troops.len() {
+			break
+		}
+		i += 1;
+	}
+}
+pub fn restore_moves(troops: &mut Vec<TroopType>) {
+	for troop in troops {
+		let unit = &mut troop.get().unit;
+		unit.tick();
+		unit.stats.moves = unit.modified.max_moves;
+		unit.recalc()
+	}
+}
+pub fn next_move(battle: &mut BattleInfo, gamemap: &mut GameMap) {
+	if battle.winner.is_some() {
+		//state.menu_id = Menu::Start as usize;
+		battle.end(gamemap);
 		return
 	}
-	fn remove_corpses(battle: &mut BattleInfo, troops: &mut Vec<TroopType>) {
-		let mut i = 0;
-		loop {
-			if troops[i].get().is_dead() {
-				battle.dead.push(troops.remove(i));
-				i -= 1;
-			}
-			if i + 1 >= troops.len() {
-				break
-			}
-			i += 1;
-		}
-	}
-	fn restore_moves(troops: &mut Vec<TroopType>) {
-		for troop in troops {
-			let unit = &mut troop.get().unit;
-			unit.tick();
-			unit.stats.moves = unit.modified.max_moves;
-			unit.recalc()
-		}
-	}
-	
-    let army1 = &mut state.gamemap.armys[state.battle.army1];
-	remove_corpses(&mut state.battle, &mut army1.troops);
+    let army1 = &mut gamemap.armys[battle.army1];
 	restore_moves(&mut army1.troops);
 	army1.recalc_army_hitmap();
-    let army2 = &mut state.gamemap.armys[state.battle.army2];
-	remove_corpses(&mut state.battle, &mut army2.troops);
+    let army2 = &mut gamemap.armys[battle.army2];
 	restore_moves(&mut army2.troops);
 	army2.recalc_army_hitmap();
-	state.battle.move_count += 1;
-	check_win(state);
+	battle.move_count += 1;
+	check_win(battle, gamemap);
 }
-pub fn check_win(state: &mut State) {
-	fn check_army_win(state: &mut State, army: usize) -> bool {
-		let army = &state.gamemap.armys[army];
+pub fn check_win(battle: &mut BattleInfo, gamemap: &mut GameMap) {
+	fn check_army_win(army: &Army) -> bool {
 		let troops = &army.troops;
 		// If there are no more troops or all troops are ready to surrender
 		troops.is_empty() ||
@@ -286,19 +295,16 @@ pub fn check_win(state: &mut State) {
 			})
 	}
 	
-	if state.battle.move_count == MAX_MOVES {
-		state.battle.winner = Some(state.battle.army1);
+	if battle.move_count == MAX_MOVES {
+		battle.winner = Some(battle.army1);
 	}
-	if check_army_win(state, state.battle.army1) {
-		state.battle.winner = Some(state.battle.army2);
-	} else if check_army_win(state, state.battle.army2) {
-		state.battle.winner = Some(state.battle.army1);
-	}
-	if state.battle.winner.is_some() {
-		state.battle.end(&mut state.gamemap);
+	if check_army_win(&gamemap.armys[battle.army1]) {
+		battle.winner = Some(battle.army2);
+	} else if check_army_win(&gamemap.armys[battle.army2]) {
+		battle.winner = Some(battle.army1);
 	}
 }
-pub fn check_row_fall(state: &mut State) {
+pub fn check_row_fall(battle: &mut BattleInfo, gamemap: &mut GameMap) {
 	fn check_row(army: &mut Army) -> bool {
 		let max_troops = *MAX_TROOPS;
 		let lower_row_empty = army.hitmap.iter().enumerate().skip(max_troops/2).all(|(i, hit)| hit.is_none() || field_type(i, max_troops) == Field::Reserve);
@@ -318,8 +324,8 @@ pub fn check_row_fall(state: &mut State) {
 		army.recalc_army_hitmap();
 	}
 	
-	for army in [state.battle.army1, state.battle.army2] {
-		let army = &mut state.gamemap.armys[army];
+	for army in [battle.army1, battle.army2] {
+		let army = &mut gamemap.armys[army];
 		if check_row(army) {
 			row_fall(army);
 		}

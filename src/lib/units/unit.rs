@@ -19,9 +19,11 @@ use crate::lib::{
 };
 use derive_more::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 use math_thingies::Percent;
+use alkahest::alkahest;
 use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Copy, Clone, Debug, Add, Sub)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Defence {
     pub death_magic: Percent,
     pub elemental_magic: Percent,
@@ -48,6 +50,7 @@ impl Defence {
 }
 
 #[derive(Copy, Clone, Debug, Add, Sub)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Power {
     pub magic: u64,
     pub ranged: u64,
@@ -64,6 +67,7 @@ impl Power {
 }
 
 #[derive(Copy, Clone, Debug, Add, Sub)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct UnitStats {
     pub hp: i64,
     pub max_hp: i64,
@@ -382,7 +386,7 @@ impl Unit {
         let both_in_reserve = me_in_reserve && enemy_in_reserve;
         let both_not_in_reserve = !me_in_reserve && !enemy_in_reserve;
 		/*
-         * C(`B`(`A`|D)) | `C`(`A^B`)
+         * C(`B`(`A`|D)) | `C`(`A^B`) 
          */
         let can_attack = (is_enemy && (!me_in_reserve || self.bonus.can_attack_from_reserve() ) && !enemy_in_reserve)
             || (!is_enemy && (both_not_in_reserve || both_in_reserve));
@@ -692,19 +696,21 @@ impl Unit {
         }
     }
     pub fn tick(&mut self) -> bool {
-        let mut effect: Box<dyn Effect>;
-        let mut removed = 0;
-        for effect_num in 0..self.effects.len() {
-            effect = self.effects[effect_num - removed].clone();
-            effect.tick(self);
-            self.effects[effect_num - removed].on_tick();
-            if effect.is_dead() {
-                self.effects.remove(effect_num - removed).kill(self);
-                removed += 1;
-                self.recalc();
-            }
-        }
+		let mut i = 0;
+		loop {
+			if i >= self.effects.len() {
+			    break;
+			}
+			let mut effect = self.effects.remove(i);
+			effect.tick(self);
+			if effect.is_dead() {
+				effect.kill(self);
+				i -= 1;
+			} else { self.effects.push(effect); };
+			i += 1;
+		}
         self.get_bonus().on_tick(self);
+		self.recalc();
         true
     }
 }

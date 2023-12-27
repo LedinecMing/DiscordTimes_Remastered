@@ -34,3 +34,5 @@ worldgen = "0.5.3"
 pathfinding = "4.3.1"
 parking_lot = "0.12.1"
 advini = { path = "advini" }
+renet = "0.0.14"
+alkahest = { version = "0.3.0", features=["derive"] }

@@ -9,3 +9,4 @@ license = "Apache-2.0"
 [dependencies]
 boolinator = "2.4.0"
 num = "0.4.0"
+alkahest = { version = "0.3.0", features=["derive"] }

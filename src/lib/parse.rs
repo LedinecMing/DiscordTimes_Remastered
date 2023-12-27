@@ -538,7 +538,8 @@ pub struct Settings {
     pub locale: String,
 	pub additional_locale: String,
 	pub fullscreen: bool,
-	pub init_size: (u32, u32)
+	pub init_size: (u32, u32),
+	pub port: u64
 }
 
 pub static mut SETTINGS: Settings = Settings {
@@ -546,7 +547,8 @@ pub static mut SETTINGS: Settings = Settings {
 	locale: String::new(),
 	additional_locale: String::new(),
 	fullscreen: true,
-	init_size: (1600, 1200)
+	init_size: (1600, 1200),
+	port: 0
 };
 
 #[derive(Debug)]
@@ -566,22 +568,23 @@ impl Locale {
 		self.main_lang = lang.0.clone();
 		self.additional_lang = lang.1.clone();
 	}
-    pub fn get<K: Into<String> + Copy>(&self, id: K) -> String {
+    pub fn get<K: AsRef<str> + ToString>(&self, id: K) -> String {
+		let id = id.as_ref();
         self.map
             .get(&self.main_lang)
             .and_then(|lang_map| 
-                lang_map.get(&id.into()).cloned().or_else(||
+                lang_map.get(id).or_else(||
                     self.map.get(&self.additional_lang)
                         .and_then(|lang_map|
-                            lang_map.get(&id.into()).cloned()
+                            lang_map.get(id)
                         )
 				)
 			)
-            .unwrap_or(id.into())
+            .cloned()
+            .unwrap_or(id.to_string())
     }
     pub fn insert<V: Into<String>, K: Into<String>>(&mut self, key: K, value: V, lang: &String) {
 		let (k, v) = (key.into(), value.into());
-		log::warn!("{}; ({}; {})", lang, &k, &v);
 		self.map.entry(lang.clone())
 			.or_insert_with(HashMap::new)
 			.insert(k, v);
@@ -601,6 +604,7 @@ pub fn parse_settings(assets: &mut Assets) -> Settings {
 	let mut additional_locale = String::new();
 	let mut fullscreen = false;
 	let mut init_size = None;
+	let mut port = 0;
     for (sec, prop) in sections.iter() {
         for (k, value) in prop.iter() {
             match &**k {
@@ -616,11 +620,12 @@ pub fn parse_settings(assets: &mut Assets) -> Settings {
 					let mut parsed = value.split(",");
 					init_size = Some((parsed.next().unwrap().parse().unwrap(), parsed.next().unwrap().parse().unwrap()));
 				}
+				"port" => { port = value.parse::<u64>().unwrap(); }
                 _ => {}
             }
         }
     }
-	let settings = Settings { max_troops, locale, additional_locale, fullscreen, init_size: init_size.unwrap() };
+	let settings = Settings { max_troops, locale, additional_locale, fullscreen, init_size: init_size.unwrap(), port };
 	unsafe {
 		SETTINGS=settings.clone();
 	}

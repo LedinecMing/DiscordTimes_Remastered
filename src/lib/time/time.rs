@@ -57,11 +57,11 @@ impl Ini for Time {
 			return Err(IniParseError::Empty(chars));
 		}
 		
-		let len = times.len().max(4);
+		let len = times.len().min(5);
 		let value = times
 			.iter()
 			.enumerate()
-			.map(|(i, v)|
+			.map(|(i, v)| {
 				 match i {
 					 x if x == len - 1 => {
 						 v * Data::HOUR as u64
@@ -77,7 +77,7 @@ impl Ini for Time {
 					 }
 					 _ => 0
 				 }
-			)
+			})
 			.sum();
 		Ok((Time::new(value), chars))
 	}

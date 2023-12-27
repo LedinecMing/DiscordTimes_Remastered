@@ -1,12 +1,11 @@
 use crate::lib::units::unitstats::ModifyUnitStats;
 
 use crate::lib::{
-    battle::army::{Army},
+    battle::army::Army,
     bonuses::Bonus,
     units::unit::*,
 };
 use std::fmt::{Display, Formatter, Debug};
-
 
 #[derive(Clone)]
 pub struct Troop {
@@ -36,6 +35,22 @@ impl Troop {
     pub fn on_hour(&self, army: &mut Army) -> bool {
         true
     }
+	pub fn on_battle_end(&mut self) {
+		let unit = &mut self.unit;
+		let mut i = 0;
+		loop {
+			if unit.effects[i].on_battle_end() && unit.effects[i].is_dead() {
+				let mut effect = unit.effects.remove(i);
+				effect.kill(unit);
+				i -= 1;
+			};
+			if i + 1 >= unit.effects.len() {
+				break;
+			}
+			i += 1;
+		}
+		unit.recalc();
+	}
     pub fn is_dead(&self) -> bool {
         self.unit.is_dead()
     }

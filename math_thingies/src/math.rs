@@ -9,7 +9,7 @@ use {
     boolinator::Boolinator,
     num::{Num, NumCast, ToPrimitive, Zero, One}
 };
-
+use alkahest::alkahest; 
 pub trait PartOrdNum = Num + PartialOrd;
 pub trait CopyPartOrdNum = PartOrdNum + Copy;
 pub trait OrdNum = Num + Ord;
@@ -74,6 +74,7 @@ impl<V: CopyPartOrdNum + NumCast> IsInRange<V> for InUnsignedRange<V> {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Percent(i16);
 impl Percent {
     pub fn new(value: i16) -> Self {
