@@ -348,12 +348,13 @@ impl<'a, State: UIStateCl + Sync, F: PosForm<State>, Tex: ToTexture<'a, State>> 
 				).color(*color);
 			},
 			Back::Image(get_texture) => {
-				draw.image(get_texture.with_to(&state))
+				draw.image(&get_texture.with_to(&state))
 					.size(back_size.0, back_size.1)
 					.position(draw_pos.0, draw_pos.1);
 			},
 			_ => { }
 		}
+		self.form.draw(app, assets, gfx, plugins, state, draw);
 	}
 }
 #[derive(Clone, Debug)]

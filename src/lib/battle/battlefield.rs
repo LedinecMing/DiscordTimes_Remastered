@@ -27,6 +27,7 @@ pub fn troop_inactive(troop: &Troop) -> bool {
 }
 
 #[derive(Clone, Default, Debug)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct BattleInfo {
     pub army1: usize,
     pub army2: usize,

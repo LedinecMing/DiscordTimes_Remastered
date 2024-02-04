@@ -35,4 +35,6 @@ pathfinding = "4.3.1"
 parking_lot = "0.12.1"
 advini = { path = "advini" }
 renet = "0.0.14"
-alkahest = { version = "0.3.0", features=["derive"] }
+alkahest = { git = "https://github.com/zakarumych/alkahest.git", rev = "99a5b68", features=["derive"] }
+enum_dispatch = "0.3.12"
+bytemuck = "1.14.1"

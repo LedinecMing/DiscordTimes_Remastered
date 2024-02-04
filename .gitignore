@@ -6,6 +6,8 @@
 /dt/*
 DT_THINGS/*
 Water/**
+notan/**
+notan
 Cargo.lock
 
 !*/assets/*

@@ -2,6 +2,7 @@ use std::ops::{Sub, SubAssign};
 
 use derive_more::{Add, AddAssign};
 use advini::{Ini, IniParseError, SEPARATOR};
+use alkahest::alkahest;
 
 const HOUR: u64 = 60;
 const DAY: u64 = 24;
@@ -19,6 +20,7 @@ pub enum Data {
 }
 
 #[derive(Add, AddAssign, PartialEq, Eq, PartialOrd, Ord, Clone, Debug, Default, Copy)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Time {
     pub minutes: u64,
 }

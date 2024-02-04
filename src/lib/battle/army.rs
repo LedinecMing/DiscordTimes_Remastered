@@ -12,9 +12,10 @@ use num::{integer::sqrt, pow};
 use once_cell::sync::Lazy;
 use pathfinding::directed::astar::astar;
 use advini::{Sections, Ini, Section, SectionError, IniParseError};
-
+use alkahest::{alkahest, private::*};
 
 #[derive(Clone, Debug, Default)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Relations {
     player: u8,
     ally: u8,
@@ -36,6 +37,7 @@ impl Ini for Relations {
 	}
 }
 #[derive(Clone, Debug, Default, Sections)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ArmyStats {
 	#[default_value="0_u64"]
     pub gold: u64,
@@ -59,6 +61,7 @@ fn eq_fields(index: usize, index1: usize, columns: usize, rows: usize) -> bool {
 pub const MAX_LINES : usize = 2;
 
 #[derive(Clone, Debug, Default)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum Control {
 	#[default]
 	PC,
@@ -89,6 +92,8 @@ impl Ini for Control {
 	}
 }
 #[derive(Clone, Debug, Default)]
+//#[alkahest(Formula)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Army {
 	pub troops: Vec<TroopType>, // vec of units
 	//#[unused]
@@ -109,6 +114,19 @@ pub struct Army {
 	//#[unused]
     pub path: Vec<(usize, usize)>,
 }
+// [TODO REMOVE NAHUJ]
+// impl<'de> Deserialize<'de, Self> for Army {
+// 	fn deserialize(mut de: Deserializer<'de>) -> Result<Self, DeserializeError>
+//     where
+//         Self: Sized {
+// 		let formula = with_formula(|s: &Self| match *s {
+// 			Self { ref troops, ref hitmap, ref building, ref stats, ref inventory, ref pos, ref active, ref defeated, ref control, ref path } => hitmap,
+// 			_ => unreachable!()
+// 		});
+// 		let hitmap = formula.read_field(&mut de, false)?;
+// 		Ok(Self { hitmap, ..Default::default() })
+// 	}
+// }
 pub type TroopType = SendMut<Troop>;
 
 pub static MAX_TROOPS: Lazy<usize> = Lazy::new(|| unsafe{&SETTINGS}.max_troops);

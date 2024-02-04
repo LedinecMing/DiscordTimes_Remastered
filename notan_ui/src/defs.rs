@@ -144,7 +144,7 @@ impl_trytome! { usize }
 impl_trytome! { Fuckingstr }
 impl_trytowith! { Fuckingstr, String }
 impl_trytome_owned!{ String }
-pub trait ToTexture<'a, State: 'a> = TryToWith<State, &'a Texture>;
+pub trait ToTexture<'a, State: 'a> = TryToWith<State, Texture>;
 #[derive(Debug, Clone)]
 pub enum BackSize {
 	Size(Size),

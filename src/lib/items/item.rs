@@ -8,6 +8,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use tracing_mutex::stdsync::TracingMutex as Mutex;
 use advini::{Ini, IniParseError};
+use alkahest::alkahest;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ItemType {
     Artifact,
@@ -42,6 +43,7 @@ pub struct ItemInfo {
 }
 pub static ITEMS: Lazy<Mutex<HashMap<usize, ItemInfo>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 #[derive(Clone, Copy, Debug)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Item {
     pub index: usize,
 }

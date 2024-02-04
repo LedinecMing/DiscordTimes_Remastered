@@ -6,6 +6,7 @@ use crate::lib::{
     units::unit::Unit,
 };
 use rand::{seq::SliceRandom, thread_rng};
+use alkahest::alkahest;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ObjectType {
@@ -31,6 +32,7 @@ enum Building {
 }
 
 #[derive(Clone, Debug)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct MapBuildingdata {
 	pub name: String,
 	pub desc: String,
@@ -46,6 +48,7 @@ pub struct MapBuildingdata {
 
 const RECRUIT_COST: f64 = 2.0;
 #[derive(Clone, Debug)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Market {
     pub itemcost_range: (u64, u64),
     pub items: Vec<usize>,
@@ -104,11 +107,13 @@ impl Market {
     }
 }
 #[derive(Clone, Debug)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct RecruitUnit {
     pub unit: usize,
     pub count: usize,
 }
 #[derive(Clone, Debug)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Recruitment {
     pub units: Vec<RecruitUnit>,
     pub cost_modify: f64,

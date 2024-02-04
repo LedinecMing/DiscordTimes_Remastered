@@ -1,10 +1,7 @@
 use dyn_clone::DynClone;
 use crate::{
     lib::{
-        effects::{
-            effect::{EffectInfo, EffectKind},
-            effects::*,
-        },
+        effects::effect::*,
 		time::time::Time,
         units::{
             unit::{Power, Unit, UnitPos, MagicType, UnitType},
@@ -21,44 +18,11 @@ use std::{
 	cmp::min,
 	fmt::Debug
 };
-
-
-dyn_clone::clone_trait_object!(BBonus);
-pub trait BBonus: DynClone + Debug + Send + Sync {
-    fn on_attacked(
-        &self,
-        damage: Power,
-        receiver: &mut Unit,
-        sender: &mut Unit,
-        receiver_pos: UnitPos,
-        sender_pos: UnitPos,
-		battle: &BattleInfo
-    ) -> Power {
-        damage
-    }
-    fn on_attacking(&self, damage: Power, receiver: &mut Unit, sender: &mut Unit) -> Power {
-        damage
-    }
-    fn on_kill(&self, receiver: &mut Unit, sender: &mut Unit) -> bool {
-        false
-    }
-    fn on_tick(&self, unit: &mut Unit) -> bool {
-        false
-    }
-    fn on_hour(&self, unit: &mut Unit, time: Time) -> bool {
-        false
-    }
-    fn on_battle_start(&self, unit: &mut Unit) -> bool {
-        false
-    }
-    fn on_move_skip(&self, unit: &mut Unit) -> bool {
-        false
-    }
-    fn id(&self) -> &'static str;
-}
+use alkahest::alkahest;
 
 #[derive(Copy, Debug, Clone)]
 #[repr(u32)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum Bonus {
 	DefencePiercing,
 	Dodging,
@@ -147,7 +111,7 @@ impl Bonus {
 				}
 				if (receiver.modified.hp - corrected_damage_units as i64) < 1 && !receiver.has_effect_kind(EffectKind::Fire) {
 					let hp = receiver.modified.hp;
-					receiver.add_effect(Box::new(RessurectedEffect::new()));
+					receiver.add_effect(RessurectedEffect::new());
 					Power {
 						hand: hp as u64,
 						..Power::empty()
@@ -184,7 +148,7 @@ impl Bonus {
 			Self::PoisonAttack => {
 				if !receiver.has_effect_kind(EffectKind::Poison) && receiver.info.unit_type != UnitType::Undead {
 					if damage.ranged > 1 || damage.hand > 1 {
-						receiver.add_effect(Box::new(Poison::default()));
+						receiver.add_effect(Poison::default());
 					}
 				}
 				damage
@@ -192,9 +156,9 @@ impl Bonus {
 			Self::FireAttack => {
 				if !receiver.has_effect_kind(EffectKind::Fire) {
 					if damage.ranged > 1 || damage.hand > 1 {
-						receiver.add_effect(Box::new(Fire::default()));
+						receiver.add_effect(Fire::default());
 					} else if damage.magic > 1 && matches!(sender.info.magic_type, Some(MagicType::Elemental(_))) {
-						receiver.add_effect(Box::new(Fire::new(sender.modified.damage.magic as i64)));
+						receiver.add_effect(Fire::new(sender.modified.damage.magic as i64));
 					}
 				}
 				damage
@@ -230,7 +194,7 @@ impl Bonus {
 		match self {
 			Self::Berserk => {
 				let percent_10 = Percent::new(10);
-				sender.add_effect(Box::new(ToEndEffect {
+				sender.add_effect(ToEndEffect {
 					info: EffectInfo { lifetime: i32::MAX },
 					modify: ModifyUnitStats {
 						damage: ModifyPower {
@@ -240,7 +204,7 @@ impl Bonus {
 						},
 						..Default::default()
 					},
-				}));
+				});
 				true
 			}
 			_ => false
@@ -262,17 +226,17 @@ impl Bonus {
     pub fn on_battle_start(&self, unit: &mut Unit, battle: &BattleInfo) -> bool {
         match self {
 			Self::Fast | Self::FastDead | Self::AncientVampiresGist => {
-				unit.add_effect(Box::new(MoreMoves::default()));
+				unit.add_effect(MoreMoves::default());
 				true
 			},
 			Self::Artillery => {
-				unit.add_effect(Box::new(ArtilleryEffect {
+				unit.add_effect(ArtilleryEffect {
 					info: EffectInfo { lifetime: 1 },
-				}));
+				});
 				true
 			},
 			Self::Garrison => {
-				unit.add_effect(Box::new(ToEndEffect {
+				unit.add_effect(ToEndEffect {
 					info: EffectInfo { lifetime: i32::MAX },
 					modify: ModifyUnitStats {
 						damage: ModifyPower {
@@ -287,7 +251,7 @@ impl Bonus {
 						},
 						..Default::default()
 					},
-				}))
+				})
 			}
 			_ => false
 		}
@@ -295,7 +259,7 @@ impl Bonus {
     pub fn on_move_skip(&self, unit: &mut Unit) -> bool {
         match self {
 			Self::Block => {
-				unit.add_effect(Box::new(ItemEffect {
+				unit.add_effect(ItemEffect {
 					info: EffectInfo { lifetime: 1 },
 					modify: ModifyUnitStats {
 						defence: ModifyDefence {
@@ -305,7 +269,7 @@ impl Bonus {
 						},
 						..ModifyUnitStats::default()
 					},
-				}));
+				});
 				true
 			},
 			_ => { false }

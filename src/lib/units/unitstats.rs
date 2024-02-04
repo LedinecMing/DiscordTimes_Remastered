@@ -6,8 +6,10 @@ use std::{
     fmt::Debug,
     ops::{Add, AddAssign, Neg, Sub, SubAssign},
 };
+use alkahest::alkahest;
 
 #[derive(Copy, Clone, Debug)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Modify<V: Num + NumCast> {
     pub set: Option<V>,
     pub add: Option<V>,
@@ -99,6 +101,7 @@ impl<V: Num + NumCast> Default for Modify<V> {
 }
 
 #[derive(Copy, Clone, Debug, Add, Sub, AddAssign, SubAssign)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ModifyDefence {
     pub death_magic: Modify<i16>,
     pub elemental_magic: Modify<i16>,
@@ -139,6 +142,7 @@ impl Default for ModifyDefence {
 }
 
 #[derive(Copy, Clone, Debug, Add, Sub, AddAssign, SubAssign)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ModifyPower {
     pub magic: Modify<i64>,
     pub ranged: Modify<i64>,
@@ -164,6 +168,7 @@ impl ModifyPower {
 }
 
 #[derive(Copy, Clone, Debug, Add, Sub, AddAssign, SubAssign)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ModifyUnitStats {
     pub hp: Modify<i64>,
     pub max_hp: Modify<i64>,

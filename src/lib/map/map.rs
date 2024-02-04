@@ -1,10 +1,11 @@
 use super::{object::{MapBuildingdata, ObjectInfo}, tile::*};
 use crate::lib::{battle::army::{Army, Relations}, time::time::Time};
 use advini::{Sections, Ini, Section, SectionError, IniParseError};
-
+use alkahest::alkahest;
 
 pub type Tilemap<T> = [[T; MAP_SIZE]; MAP_SIZE];
 #[derive(Copy, Clone, Debug)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct HitboxTile {
     pub passable: bool,
     pub need_transport: bool,
@@ -23,6 +24,7 @@ impl Default for HitboxTile {
 }
 
 #[derive(Clone, Debug, Default, Sections)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct FractionsRelations {
 	#[default_value="Relations::default()"]
     pub ally: Relations,
@@ -39,6 +41,7 @@ impl FractionsRelations {
 pub const MAP_SIZE: usize = 50;
 
 #[derive(Clone, Debug, Default, Sections)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct StartStats {
 	#[alias([start_time])]
 	pub time: Time,
@@ -53,6 +56,7 @@ impl StartStats {
 	}
 }
 #[derive(Clone, Debug, Sections)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct GameMap {
 	#[inline_parsing]
 	pub start: StartStats,
@@ -69,7 +73,9 @@ pub struct GameMap {
 	#[unused]
     pub armys: Vec<Army>,
 	#[inline_parsing]
-    pub relations: FractionsRelations
+    pub relations: FractionsRelations,
+	#[unused]
+	pub pause: bool
 }
 impl Default for GameMap {
 	fn default() -> Self {
@@ -81,7 +87,8 @@ impl Default for GameMap {
 			hitmap: [[HitboxTile::default(); MAP_SIZE]; MAP_SIZE],
 			buildings: Vec::new(),
 			armys: Vec::new(),
-			relations: Default::default()
+			relations: Default::default(),
+			pause: false
 		}
 	}
 }

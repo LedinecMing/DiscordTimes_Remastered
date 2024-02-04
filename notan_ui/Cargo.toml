@@ -14,3 +14,4 @@ dyn-clone = "1.0.9"
 notan = {git = "https://github.com/Nazariglez/notan.git", features=["text"], rev="dbe1a0d"}
 math_thingies = {version = "0.1.0"}
 derive_builder = "0.12.0"
+parking_lot = "0.12.1"

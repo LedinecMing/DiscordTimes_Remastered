@@ -4,10 +4,13 @@ use crate::lib::{
     battle::army::Army,
     bonuses::Bonus,
     units::unit::*,
+	effects::effect::EffectTrait
 };
 use std::fmt::{Display, Formatter, Debug};
+use alkahest::alkahest;
 
 #[derive(Clone)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Troop {
     pub was_payed: bool,
     pub is_free: bool,

@@ -1,0 +1,3 @@
+[submodule "ini_core"]
+	path = ini_core
+	url = https://github.com/LedinecMing/ini_core.git

@@ -2,14 +2,15 @@ use std::{
     collections::HashMap,
     io,
     net::{UdpSocket, SocketAddr, Ipv4Addr, IpAddr},
-    time::{Duration, SystemTime, Instant},
+    time::{Duration, SystemTime, Instant}, mem::size_of,
 };
-use crate::{lib::{battle::{army::{TroopType, Army}, troop::Troop}, units::unit::{UnitInfo, UnitLvl, UnitInventory}, parse::SETTINGS}, handle_action};
+use crate::{lib::{battle::{army::{TroopType, Army, find_path}, troop::Troop}, units::unit::{UnitInfo, UnitLvl, UnitInventory}, parse::SETTINGS, map::{event::execute_event_as_player, object::ObjectInfo}}, handle_action, Menu};
 use crate::lib::battle::battlefield::BattleInfo;
 use crate::lib::map::map::GameMap;
 use crate::lib::units::unit::Unit;
 use crate::lib::{
-	units::unit::UnitStats
+	units::unit::UnitStats,
+	map::event::{Event, Execute, execute_event}
 };
 use alkahest::*;
 use renet::{
@@ -20,157 +21,17 @@ use notan::log;
 
 #[derive(Clone, Debug)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct NetUnit {
-    pub stats: UnitStats,
-    pub modified: UnitStats,
-	pub icon_index: u64
-}
-
-#[derive(Clone, Debug)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct NetTroop {
-    pub was_payed: bool,
-    pub is_free: bool,
-    pub is_main: bool,
-    pub unit: NetUnit,
-}
-
-#[derive(Clone, Debug, Default)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct NetArmy {
-	pub troops: Vec<NetTroop>,
-	pub hitmap: Vec<Option<u64>>,
-}
-
-#[derive(Clone, Debug)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct NetBattleInfo {
-    pub army1: u64,
-    pub army2: u64,
-    pub active_unit: Option<(u64, u64)>,
-    pub can_interact: Option<Vec<(u64, u64)>>,
-}
-
-#[derive(Clone, Debug)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct NetGameMap {
-    pub armys: Vec<NetArmy>
-}
-
-#[derive(Clone, Debug)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct BattleState {
-	pub battle: NetBattleInfo,
-	pub gamemap: NetGameMap
-}
-
-impl From<BattleState> for (BattleInfo, GameMap) {
-	fn from(value: BattleState) -> Self {
-		let mut gamemap = GameMap::default();
-		gamemap.armys = value.gamemap.armys.iter().enumerate().map(|(army_n, army)| {
-			let mut res = Army::default();
-			res.hitmap = army.hitmap.iter().map(|hit| hit.and_then(|v| Some(v as usize) )).collect();
-			res.troops = army.troops.iter().map(|troop| {
-				TroopType::new({
-					let mut tr = Troop::empty();
-					tr.is_free = troop.is_free;
-					tr.is_main = troop.is_main;
-					tr.was_payed = troop.was_payed;
-					tr.unit = {
-						let unit = Unit {
-							stats: troop.unit.stats,
-							modified: troop.unit.modified,
-							modify: Default::default(),
-							info: {
-								let mut info = UnitInfo::empty();
-								info.icon_index = troop.unit.icon_index as usize;
-								info
-							},
-							lvl: UnitLvl::empty(),
-							inventory: UnitInventory::empty(),
-							army: army_n,
-							bonus: crate::lib::bonuses::Bonus::NoBonus,
-							effects: Vec::new()
-						};
-						unit
-					};
-					tr
-				})
-			}).collect();
-			res
-		}).collect();
-		let mut battle = BattleInfo::default();
-		battle.army1 = value.battle.army1 as usize;
-		battle.army2 = value.battle.army2 as usize;
-		battle.active_unit = value.battle.active_unit.and_then(|v| Some((v.0 as usize, v.1 as usize)));
-		battle.can_interact = value.battle.can_interact.and_then(|v| Some(v.iter().map(|el| (el.0 as usize, el.1 as usize)).collect()));
-		(battle, gamemap)
-	}
-}
-impl From<Unit> for NetUnit {
-	fn from(value: Unit) -> Self {
-		NetUnit {
-			stats: value.stats,
-			modified: value.modified,
-			icon_index: value.info.icon_index as u64
-		}
-	}
-}
-impl From<TroopType> for NetTroop {
-	fn from(value: TroopType) -> Self {
-		let troop = value.get();
-		NetTroop {
-			was_payed: troop.was_payed,
-			is_free: troop.is_free,
-			is_main: troop.is_main,
-			unit: troop.unit.clone().into()
-		}
-	}
-}
-impl From<Army> for NetArmy {
-	fn from(value: Army) -> Self {
-		NetArmy {
-			troops: value.troops.iter().map(|troop| troop.clone().into()).collect(),
-			hitmap: value.hitmap.iter().map(|hit| hit.and_then(|v| Some(v as u64))).collect()
-		}
-	}
-}
-impl From<BattleInfo> for NetBattleInfo {
-	fn from(value: BattleInfo) -> Self {
-		NetBattleInfo {
-			army1: value.army1 as u64,
-			army2: value.army2 as u64,
-			active_unit: value.active_unit.and_then(|v| Some((v.0 as u64, v.1 as u64))),
-			can_interact: value.can_interact.and_then(|v| Some(v.iter().map(|e| (e.0 as u64, e.1 as u64)).collect()))
-		}
-	}
-}
-impl From<GameMap> for NetGameMap {
-	fn from(value: GameMap) -> Self {
-		NetGameMap {
-			armys: value.armys.iter().map(|army| army.clone().into()).collect()
-		}
-	}
-}
-impl From<(BattleInfo, GameMap)> for BattleState {
-	fn from(value: (BattleInfo, GameMap)) -> Self {
-		BattleState {
-			battle: value.0.into(),
-			gamemap: value.1.into()
-		}
-	}
-}
-
-#[derive(Clone, Debug)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum ClientMessage {
-	Action((u64, u64))
+	Action((usize, usize)),
+	MapClick((usize, usize)),
 }
 
 #[derive(Clone, Debug)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum ServerMessage {
-	State(BattleState)
+	State((BattleInfo, GameMap)),
+	ChangeMenu(usize),
+	Message(String)
 }
 #[derive(Debug)]
 pub struct ClientConnection {
@@ -256,27 +117,91 @@ impl GameServer {
 
 		let mut transport = NetcodeServerTransport::new(server_config, socket).unwrap();
 	}
-	pub fn update(&mut self, duration: Duration, gamemap: &mut GameMap, battle: &mut BattleInfo) -> Result<(), io::Error> {
+	fn try_to_send_message(&mut self, gamemap: &mut GameMap, army: usize, message: ServerMessage) -> Option<()> {
+		if let Some(target_client_id) = self.auth.iter().find_map(|(key, &val)| if val == army { Some(key) } else { None }) {
+			let size = serialized_size::<ServerMessage, _>(&message);
+			let mut output = vec![0u8; size.0];
+			serialize::<ServerMessage, ServerMessage>(message, &mut output).ok();
+			self.server.send_message(*target_client_id, DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
+			Some(())
+		} else { None }
+	}
+	fn send_message(&mut self, gamemap: &mut GameMap, client_id: ClientId, message: ServerMessage) -> Option<()> {
+		let size = serialized_size::<ServerMessage, _>(&message);
+		let mut output = vec![0u8; size.0];
+		serialize::<ServerMessage, ServerMessage>(message, &mut output).ok();
+		self.server.send_message(client_id, DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
+		Some(())
+	}
+	pub fn handle_client_message(&mut self, client_id: Option<ClientId>, message: ClientMessage, gamemap: &mut GameMap, battle: &mut BattleInfo, gameevents: &mut Vec<Event>, units: &HashMap<usize, Unit>, objects: &Vec<ObjectInfo>) {
+		match message {
+            ClientMessage::Action(v) => {
+				if Some(client_id.and_then(|v| self.auth.get(&v)).unwrap_or(&0usize)) == battle.active_unit.and_then(|v| Some(v.0)).as_ref() {
+					handle_action(crate::Action::Cell(v.0 as usize, v.1 as usize), battle, gamemap);
+					let message = ServerMessage::State((battle.clone(), gamemap.clone()));
+					let size = serialized_size::<ServerMessage, _>(&message);
+					let mut output = vec![0u8; size.0];
+					serialize::<ServerMessage, ServerMessage>(message, &mut output).ok();
+
+					if let Some(client_id) = client_id {
+						self.server.send_message(client_id, DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
+					} else {
+						self.server.send_message(ClientId::from_raw(255), DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
+					}
+				}
+			}
+			ClientMessage::MapClick(goal) => {
+				let army_index = client_id.and_then(|v| self.auth.get(&v).cloned()).unwrap_or(0usize);
+				if let Some(target_army) = gamemap.hitmap[goal.0][goal.1].army  {
+					let Some(army) = gamemap.armys.get(army_index) else { return; };
+					let pos = army.pos;
+					let diff = (pos.0 as i64 - goal.0 as i64, pos.1 as i64 - goal.1 as i64);
+					if -1 <= diff.0 && diff.0 <= 1 && -1 <= diff.1 && diff.1 <= 1 {
+						if battle.army1 != target_army && battle.army2 != army_index {
+							let battle_new = BattleInfo::new(gamemap, target_army, army_index);
+							*battle = battle_new;
+						}
+						let message = ServerMessage::ChangeMenu(Menu::Connect as usize);
+						self.try_to_send_message(gamemap, target_army, message.clone());
+						self.try_to_send_message(gamemap, army_index, message);
+					}
+				} else {
+					let army_pos = { let Some(army) = gamemap.armys.get_mut(army_index) else { return; }; army.pos };
+					let path = find_path(&*gamemap, objects, army_pos, goal, false);
+					let Some(army) = gamemap.armys.get_mut(army_index) else { return; };
+					army.path = if let Some(path) = path {
+						path.0
+					} else {
+						Vec::new()
+					};
+				};
+			}
+		}
+	}
+	pub fn update(&mut self, duration: Duration, gamemap: &mut GameMap, battle: &mut BattleInfo, gameevents: &mut Vec<Event>, units: &HashMap<usize, Unit>, objects: &Vec<ObjectInfo> ) -> Result<(), io::Error> {
         self.server.update(duration);
         self.transport.update(duration, &mut self.server).unwrap();
-
+		
         while let Some(event) = self.server.get_event() {
             match event {
                 ServerEvent::ClientConnected { client_id } => {
                     let user_data = self.transport.user_data(client_id).unwrap();
-
+					log::info!("User is connecting");
 					if self.auth.values().any(|v| *v == 1) {
 						self.auth.insert(client_id, 0);
 					} else { self.auth.insert(client_id, 1); }
-					
-                    let message = ServerMessage::State(
-						BattleState::from((battle.clone(), gamemap.clone()))
-					);
+					log::info!("Constructing server-client cross state");
+					let message = ServerMessage::State((battle.clone(), gamemap.clone()));
+					log::info!("Calculate message size");
 					let size = serialized_size::<ServerMessage, _>(&message);
+					log::info!("Message serialized");
+					log::info!("Constructing bytes buffer");
 					let mut output = vec![0u8; size.0];
+					log::info!("Serizalie message into buffer");
 					serialize::<ServerMessage, ServerMessage>(message, &mut output).ok();
-					log::info!("Sent greeting message!");
+					log::info!("Sending greeting message!");
                     self.server.send_message(client_id, DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
+					log::info!("Sent greeting message!");
                 }
                 ServerEvent::ClientDisconnected { client_id, reason: _ } => {
                     self.auth.remove(&client_id);
@@ -286,9 +211,8 @@ impl GameServer {
 		if self.server.connected_clients() > 0 {
 			log::debug!("connected {} users", self.server.connected_clients());
 		}
-		//dbg!(self.server.is_connected(ClientId::from_raw(255)));
+		
         for client_id in self.server.clients_id() {
-			//dbg!(client_id);
             while let Some(message) = self.server.receive_message(client_id, DefaultChannel::ReliableOrdered) {
 				let buf = message;
 				let res: Result<ClientMessage, DeserializeError> = deserialize::<ClientMessage, ClientMessage>(&*buf);
@@ -299,9 +223,7 @@ impl GameServer {
                         ClientMessage::Action(v) => {
 							if self.auth.get(&client_id) == battle.active_unit.and_then(|v| Some(v.0)).as_ref() {
 								handle_action(crate::Action::Cell(v.0 as usize, v.1 as usize), battle, gamemap);
-								let message = ServerMessage::State(
-									BattleState::from((battle.clone(), gamemap.clone()))
-								);
+								let message = ServerMessage::State((battle.clone(), gamemap.clone()));
 								let size = serialized_size::<ServerMessage, _>(&message);
 								let mut output = vec![0u8; size.0];
 								serialize::<ServerMessage, ServerMessage>(message, &mut output).ok();
@@ -309,13 +231,94 @@ impl GameServer {
 								self.server.send_message(client_id, DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
 							}
 						}
-                    }
-                }
-            }
-        }
-
+						ClientMessage::MapClick(goal) => {
+							let Some(army_index) = self.auth.get(&client_id).and_then(|v| Some(*v)) else {continue;};
+							if let Some(target_army) = gamemap.hitmap[goal.0][goal.1].army  {
+								let Some(army) = gamemap.armys.get(army_index) else { continue; };
+								let pos = army.pos;
+								let diff = (pos.0 as i64 - goal.0 as i64, pos.1 as i64 - goal.1 as i64);
+								if -1 <= diff.0 && diff.0 <= 1 && -1 <= diff.1 && diff.1 <= 1 {
+									if battle.army1 != target_army && battle.army2 != army_index {
+										let battle_new = BattleInfo::new(gamemap, target_army, army_index);
+										*battle = battle_new;
+									}
+									let message = ServerMessage::ChangeMenu(Menu::Connect as usize);
+									self.try_to_send_message(gamemap, army_index, message.clone());
+									self.try_to_send_message(gamemap, target_army, message);
+								}
+							} else {
+								let army_pos = { let Some(army) = gamemap.armys.get_mut(army_index) else { continue; }; army.pos };
+								let path = find_path(&*gamemap, objects, army_pos, goal, false);
+								let Some(army) = gamemap.armys.get_mut(army_index) else { continue; };
+								army.path = if let Some(path) = path {
+									path.0
+								} else {
+									Vec::new()
+								};
+								self.try_to_send_message(gamemap, army_index, ServerMessage::State((battle.clone(), gamemap.clone())));
+							};
+						}
+					}
+				}
+			}
+		}
         self.transport.send_packets(&mut self.server);
+		let mut pause = false;
+		for i in 0..=1 {
+			let army = &mut gamemap.armys[i];
+			if army.path.len() < 1 {
+				if i == 0 {
+					pause = true;
+				}
+				continue;
+			}
+		}
+		let mut moved = false;
+		gamemap.pause = pause;
+		if !gamemap.pause {
+			for i in 0..gamemap.armys.len() {
+				let army = &mut gamemap.armys[i];
+				if army.path.len() < 1 {
+					continue;
+				}
+				moved = true;
+				army.pos = army.path.remove(0);
+				if let Some(building) = gamemap.hitmap[army.pos.0][army.pos.1].building {
+					army.building = Some(building);
+				} else { army.building = None; }
+				gamemap.recalc_armies_hitboxes();
+			}
+			gamemap.time.minutes += 10;
 
+			for i in 0..gameevents.len() {
+				if let Some(executions) = execute_event(i, gamemap, gameevents, units, false) {
+					for exec in executions {
+						match exec {
+							Execute::Wait(t, player) => {},
+							Execute::Execute(event, player) => {
+								execute_event
+									(event.event, gamemap, gameevents, units, true);
+							},
+							Execute::StartBattle(army, player) => {
+								if battle.army1 != army && battle.army2 != 0 {
+									let battle_new = BattleInfo::new(gamemap, army, 0);
+									*battle = battle_new;
+								}
+								self.try_to_send_message(gamemap, player, ServerMessage::ChangeMenu(Menu::ConnectBattle as usize));
+							},
+							Execute::Message(text, player) => {
+								self.try_to_send_message(gamemap, player, ServerMessage::Message(text));
+							}
+						}
+					}
+					break;
+				};
+			}
+		}
+		if moved {
+			self.try_to_send_message(gamemap, 1, ServerMessage::State((battle.clone(), gamemap.clone())));
+		}
+		
         Ok(())
     }
 	fn b() {
@@ -330,7 +333,7 @@ pub fn create_renet_client() -> (RenetClient, NetcodeClientTransport) {
 	let server_addr = *SERVER;
     let socket = UdpSocket::bind(ADDR).unwrap();
     let current_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap();
-    let client_id = 255;//current_time.as_millis() as u64;
+    let client_id = 255;//current_time.as_millis() ;
     let authentication = ClientAuthentication::Unsecure {
         server_addr,
         client_id,
@@ -372,10 +375,11 @@ pub struct ConnectionManager {
 	pub con: Connection,
 	pub gamemap: GameMap,
 	pub battle: BattleInfo,
+	pub events: Vec<Event>,
 	pub last_updated: Instant
 }
 impl ConnectionManager {
-	pub fn updates(&mut self) {
+	pub fn updates(&mut self, units: &HashMap<usize, Unit>, objects: &Vec<ObjectInfo>) -> (Option<usize>, Option<String>) {
 		let now = Instant::now();
         let duration = now - self.last_updated;
 		self.last_updated = now;
@@ -385,22 +389,25 @@ impl ConnectionManager {
 				client.update(duration);
                 if let Err(e) = transport.update(duration, client) {
 					dbg!(e);
-                    return;
                 }
 
 				if let Some(e) = client.disconnect_reason() {
 					dbg!(e);
-					return;
 				}
                 while let Some(message) = client.receive_message(DefaultChannel::ReliableOrdered) {
                     let message: ServerMessage = deserialize::<ServerMessage, ServerMessage>(&message).unwrap();
                     match message {
                         ServerMessage::State(state) => {
 							log::info!("Received state!");
-							dbg!(&state);
 							let (battle, gamemap) = state.into();
 							self.battle = battle;
 							self.gamemap = gamemap;
+						}
+						ServerMessage::ChangeMenu(menu) => {
+							return (Some(menu), None);
+						},
+						ServerMessage::Message(text) => {
+							return (None, Some(text))
 						}
                     }
                 }
@@ -410,10 +417,24 @@ impl ConnectionManager {
 				}
 			},
 			Connection::Host(server) => {
-				if let Err(e) = server.update(duration, &mut self.gamemap, &mut self.battle) {
+				if let Err(e) = server.update(duration, &mut self.gamemap, &mut self.battle, &mut self.events, units, objects) {
 					dbg!(e);
 				};
 			 }
+		}
+		return (None, None);
+	}
+	pub fn send_message_to_server(&mut self, message: ClientMessage, units: &HashMap<usize, Unit>, objects: &Vec<ObjectInfo>) {
+		match &mut self.con {
+			Connection::Client(ref mut conn) => {
+				let size = serialized_size::<ClientMessage, _>(&message);
+				let mut output = vec![0u8; size.0];
+				serialize::<ClientMessage, ClientMessage>(message, &mut output).ok();
+				conn.client.send_message(DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
+			},
+			Connection::Host(ref mut conn) => {
+				conn.handle_client_message(None, message, &mut self.gamemap, &mut self.battle, &mut self.events, units, objects);
+			},
 		}
 	}
 }
