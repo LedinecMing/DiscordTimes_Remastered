@@ -2,11 +2,11 @@
 #![feature(associated_type_defaults)]
 #![feature(trait_alias)]
 #![feature(div_duration)]
-pub mod rect;
+pub mod animation;
+pub mod containers;
 pub mod defs;
 pub mod form;
-pub mod text;
-pub mod containers;
-pub mod wrappers;
 pub mod forms;
-pub mod animation;
+pub mod rect;
+pub mod text;
+pub mod wrappers;

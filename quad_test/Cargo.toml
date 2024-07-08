@@ -1,0 +1,8 @@
+[package]
+name = "quad_test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dt_lib = { path = "../dt_lib" }
+macroquad = "0.4.8"

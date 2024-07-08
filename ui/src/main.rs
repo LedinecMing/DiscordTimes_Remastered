@@ -2,55 +2,45 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
-use crate::lib::{
-    battle::{
-        army::*,
-		battlefield::*,
-        troop::{Troop},
+use alkahest::{serialize, serialized_size};
+use dt_lib::{
+    battle::{army::*, battlefield::*, troop::Troop},
+    items::item::*,
+    map::{
+        event::{execute_event, Event as GameEvent, Execute},
+        map::*,
+        object::ObjectInfo,
+        tile::*,
     },
-    parse::{parse_items, parse_locale, parse_objects, parse_settings, parse_units, parse_story, Locale, load_asset},
+    network::net::*,
+    new_forms::{SubWindowSys, TextureRenderer},
+    parse::{
+        load_asset, parse_items, parse_objects, parse_settings, parse_story,
+        parse_units,
+    },
+	locale::{parse_locale, Locale},
+    time::time::Data as TimeData,
     units::{
-        unit::{Unit, UnitPos, ActionResult},
+        unit::{ActionResult, Unit, UnitPos},
         unitstats::ModifyUnitStats,
     },
-	new_forms::{TextureRenderer, SubWindowSys},
-    items::item::*,
-    map::{map::*, object::ObjectInfo, event::{Event as GameEvent, Execute, execute_event}, tile::*},
-    time::time::{Data as TimeData},
-	network::net::*
 };
-use notan::{
-    draw::*,
-    prelude::*,
-	log,
-    text::TextConfig,
-	fragment_shader, app::GfxRenderer
-};
+use notan::{app::GfxRenderer, draw::*, fragment_shader, log, prelude::*, text::TextConfig};
 use notan_ui::{
-    containers::*,
-    defs::*,
-    form::Form,
-    forms::*,
-    rect::*,
-    text::*,
-    wrappers::*,
-	animation::*
+    animation::*, containers::*, defs::*, form::Form, forms::*, rect::*, text::*, wrappers::*,
 };
 use num::clamp;
 use once_cell::sync::Lazy;
 use parking_lot::MappedRwLockReadGuard;
-use rand::{
-    prelude::ThreadRng,
-    thread_rng, Rng,
-};
-use renet::{DefaultChannel, ClientId};
+use rand::{prelude::ThreadRng, thread_rng, Rng};
+use renet::{ClientId, DefaultChannel};
 use std::{
     array::from_fn,
     collections::{HashMap, VecDeque},
     fmt::{Debug, Display},
-    mem::size_of, time::{Duration, Instant},
+    mem::size_of,
+    time::{Duration, Instant},
 };
-use alkahest::{serialize, serialized_size};
 use tracing_mutex::stdsync::TracingMutex as Mutex;
 use worldgen::{
     constraint,
@@ -74,13 +64,13 @@ pub struct State {
     pub frame: usize,
     pub draw: Draw,
     pub shaders: Vec<(Pipeline, Buffer)>,
-	pub animations: Vec<AnimationTime<HashMap<&'static str, HashMap<String, Asset<Texture>>>>>,
+    pub animations: Vec<AnimationTime<HashMap<&'static str, HashMap<String, Asset<Texture>>>>>,
     pub gamemap: GameMap,
-	pub connection: Option<ConnectionManager>,
-	pub gameevents: Vec<GameEvent>,
-	pub gameloop_time: Duration,
-	pub pause: bool,
-	pub execution_queue: VecDeque<Execute>,
+    pub connection: Option<ConnectionManager>,
+    pub gameevents: Vec<GameEvent>,
+    pub gameloop_time: Duration,
+    pub pause: bool,
+    pub execution_queue: VecDeque<Execute>,
     pub units: HashMap<usize, Unit>,
     pub objects: Vec<ObjectInfo>,
     pub assets: HashMap<&'static str, HashMap<String, Asset<Texture>>>,
@@ -116,18 +106,17 @@ impl State {
     }
 }
 trait GetTexture {
-	fn get_texture(&self, dir: &'static str, img: &str) -> MappedRwLockReadGuard<'_, Texture>;
+    fn get_texture(&self, dir: &'static str, img: &str) -> MappedRwLockReadGuard<'_, Texture>;
 }
 impl GetTexture for HashMap<&'static str, HashMap<String, Asset<Texture>>> {
-	fn get_texture(&self, dir: &'static str, img: &str) -> MappedRwLockReadGuard<'_, Texture> {
-		self
-            .get(dir)
+    fn get_texture(&self, dir: &'static str, img: &str) -> MappedRwLockReadGuard<'_, Texture> {
+        self.get(dir)
             .expect(&*format!("No such dir - {dir}"))
             .get(img)
             .expect(&*format!("No such img - {img}"))
             .lock()
             .unwrap()
-	}
+    }
 }
 
 fn get_menu_value_str(state: &State, id: &'static str) -> Option<String> {
@@ -185,140 +174,232 @@ fn menu_button<T: ToText<State>>(
         single(
             button(
                 text(justtext)
-                .align_v(AlignVertical::Center)
-                .align_h(AlignHorizontal::Left)
-                .color(Color::WHITE)
-				.size(30.)
-				.font(FontId(0))
-                .pos(Position(0., 25.))
-                .build().unwrap(),
+                    .align_v(AlignVertical::Center)
+                    .align_h(AlignHorizontal::Left)
+                    .color(Color::WHITE)
+                    .size(30.)
+                    .font(FontId(0))
+                    .pos(Position(0., 25.))
+                    .build()
+                    .unwrap(),
                 Rect {
                     pos: Position(0., 0.),
-                    size: Size(300., 50.)
-                }
+                    size: Size(300., 50.),
+                },
             )
             .if_clicked(if_clicked)
-            .build().unwrap()
+            .build()
+            .unwrap(),
         )
         .on_draw(on_draw)
         .pos(Position(0., -25.))
-        .build().unwrap()
+        .build()
+        .unwrap(),
     )
 }
 
 static FORMS: Lazy<Mutex<HashMap<usize, SingleContainer<State, DynContainer<State>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-static LOCALE: Lazy<Mutex<Locale>> = Lazy::new(|| Mutex::new(Locale::new("Rus".into(), "Eng".into())));
+static LOCALE: Lazy<Mutex<Locale>> =
+    Lazy::new(|| Mutex::new(Locale::new("Rus".into(), "Eng".into())));
 static MONITOR_SIZE: Lazy<Mutex<(f32, f32)>> = Lazy::new(|| Mutex::new((0., 0.)));
+
+#[repr(u32)]
+enum Menu {
+    Main,
+    Start,
+    Load,
+    Settings,
+    Authors,
+    UnitView,
+    Battle,
+    Items,
+    Connect,
+    ConnectBattle,
+}
+
+enum Action {
+    Cell(usize, usize),
+    Move(usize, usize, usize),
+}
 fn move_thing(battle: &mut BattleInfo, gamemap: &mut GameMap) {
-	check_win(battle, gamemap);
-	check_row_fall(battle, gamemap);
-	battle.remove_corpses(gamemap);
-	if battle.winner.is_none() {
-		if battle.active_unit == None {
-		 	next_move(battle, gamemap);
-			battle.active_unit = battle.search_next_active(gamemap);
-		}
-		battle.can_interact = search_interactions(battle, gamemap);
-	} else {
-		//state.menu_id = Menu::Start as usize;
-	}
+    check_win(battle, gamemap);
+    check_row_fall(battle, gamemap);
+    battle.remove_corpses(gamemap);
+    if battle.winner.is_none() {
+        if battle.active_unit == None {
+            next_move(battle, gamemap);
+            battle.active_unit = battle.search_next_active(gamemap);
+        }
+        battle.can_interact = search_interactions(battle, gamemap);
+    } else {
+        //state.menu_id = Menu::Start as usize;
+    }
 }
 
-fn unit_interaction(battle: &mut BattleInfo, gamemap: &mut GameMap, pos: usize, army: usize) -> (Option<ActionResult>, bool) {
-	if let Some(_) = battle.winner {
-		// state.menu_id = Menu::Start as usize;
-		return (None, false);
-	}
-	let mut action_result = None;
-	let army = if army == 0 { battle.army1 } else { battle.army2 };
-	// if let Some(icon_index) = gamemap.armys[army].hitmap[pos].and_then(|e| Some(gamemap.armys[army].troops[e].get().unit.info.icon_index)) {
-	// 	let unit_index = icon_index as u64 + 1;
-	// 	set_menu_value_num(state, "battle_unit_stat", unit_index as i64);
-	// 	set_menu_value_num(state, "battle_unit_stat_changed", 1);
-	//}
+fn unit_interaction(
+    battle: &mut BattleInfo,
+    gamemap: &mut GameMap,
+    pos: usize,
+    army: usize,
+) -> (Option<ActionResult>, bool) {
+    if let Some(_) = battle.winner {
+        // state.menu_id = Menu::Start as usize;
+        return (None, false);
+    }
+    let mut action_result = None;
+    let army = if army == 0 {
+        battle.army1
+    } else {
+        battle.army2
+    };
+    // if let Some(icon_index) = gamemap.armys[army].hitmap[pos].and_then(|e| Some(gamemap.armys[army].troops[e].get().unit.info.icon_index)) {
+    // 	let unit_index = icon_index as u64 + 1;
+    // 	set_menu_value_num(state, "battle_unit_stat", unit_index as i64);
+    // 	set_menu_value_num(state, "battle_unit_stat_changed", 1);
+    //}
 
-	let mut unit_inactive = false;
-	
-	let Some(active_unit) = battle.active_unit else {
-		battle.active_unit = battle.search_next_active(gamemap);
-		move_thing(battle, gamemap);
-		return (None, false);
-	};
-	let Some(target_index) = gamemap.armys[army].hitmap[pos] else {
-		return if army == active_unit.0 {
-			(handle_action(Action::Move(active_unit.0, active_unit.1, pos), battle, gamemap).and_then(|v| Some(v.0)), true)
-		} else { (None, false) };
-		
-	};
-	if active_unit.0 == army && target_index == active_unit.1 {
-		let troop = &mut gamemap.armys[army].troops[target_index].get();
-		if troop_inactive(&troop) {
-			return (None, false);
-		}
-		let unit = &mut troop.unit;
-		unit.stats.moves -= 1;
-		unit.recalc();
-		return (None, troop_inactive(&troop));
-	} else {
-		let target_troops = &gamemap.armys[army].troops;
-		let the_troops = {
-			let active_index = active_unit.1;
-			let active_army = active_unit.0;
-			(gamemap.armys[active_army].troops.get(active_index), target_troops.get(target_index))
-		};
-		let (Some(active_troop), Some(target_troop)) = the_troops else {
-			return (None, unit_inactive);
-		};
-		let (mut active_troop, mut target_troop) = (active_troop.get(), target_troop.get());
-		if troop_inactive(&active_troop) {
-			return (None, true);
-		}
-		let active_unit_index = active_troop.pos.into();
-		let unit1 = &mut active_troop.unit;
-		let unit2 = &mut target_troop.unit;
-		if !unit2.is_dead() {
-			let res = unit1.attack(
-				unit2,
-				UnitPos::from_index(pos),
-				UnitPos::from_index(active_unit_index),
-				&battle
-			);
-			if res.is_some() {
-				unit1.stats.moves -= 1;
-				unit1.recalc();
-				if unit1.is_dead() || unit1.modified.moves < 1 {
-					unit_inactive = true;
-				}
-			}
-			action_result = res;
-		}
-	};
-	(action_result, unit_inactive)
-}
-fn gen_forms(size: (f32,f32)) -> Result<(), String> {
-    let draw_back_centered: DrawFunction<State, SingleContainer<State, Button<State, Text<State, String>>>> =
-		|container, _app, _assets, _gfx, _plugins, _: &mut State, draw| {
-			draw.rect(
-                (container.pos - Position(container.get_size().0 / 2., 0.)).into(),
-                container.get_size().into(),
+    let mut unit_inactive = false;
+
+    let Some(active_unit) = battle.active_unit else {
+        battle.active_unit = battle.search_next_active(gamemap);
+        move_thing(battle, gamemap);
+        return (None, false);
+    };
+    let Some(target_index) = gamemap.armys[army].hitmap[pos] else {
+        return if army == active_unit.0 {
+            (
+                handle_action(
+                    Action::Move(active_unit.0, active_unit.1, pos),
+                    battle,
+                    gamemap,
+                )
+                .and_then(|v| Some(v.0)),
+                true,
             )
-            .color(Color::from_hex(0x033121ff));
-	};
-	let draw_back: DrawFunction<State, SingleContainer<State, Button<State, Text<State, String>>>> =
-		|container, _app, _assets, _gfx, _plugins, _: &mut State, draw| {
-			draw.rect(
+        } else {
+            (None, false)
+        };
+    };
+    if active_unit.0 == army && target_index == active_unit.1 {
+        let troop = &mut gamemap.armys[army].troops[target_index].get();
+        if troop_inactive(&troop) {
+            return (None, false);
+        }
+        let unit = &mut troop.unit;
+        unit.stats.moves -= 1;
+        unit.recalc();
+        return (None, troop_inactive(&troop));
+    } else {
+        let target_troops = &gamemap.armys[army].troops;
+        let the_troops = {
+            let active_index = active_unit.1;
+            let active_army = active_unit.0;
+            (
+                gamemap.armys[active_army].troops.get(active_index),
+                target_troops.get(target_index),
+            )
+        };
+        let (Some(active_troop), Some(target_troop)) = the_troops else {
+            return (None, unit_inactive);
+        };
+        let (mut active_troop, mut target_troop) = (active_troop.get(), target_troop.get());
+        if troop_inactive(&active_troop) {
+            return (None, true);
+        }
+        let active_unit_index = active_troop.pos.into();
+        let unit1 = &mut active_troop.unit;
+        let unit2 = &mut target_troop.unit;
+        if !unit2.is_dead() {
+            let res = unit1.attack(
+                unit2,
+                UnitPos::from_index(pos),
+                UnitPos::from_index(active_unit_index),
+                &battle,
+            );
+            if res.is_some() {
+                unit1.stats.moves -= 1;
+                unit1.recalc();
+                if unit1.is_dead() || unit1.modified.moves < 1 {
+                    unit_inactive = true;
+                }
+            }
+            action_result = res;
+        }
+    };
+    (action_result, unit_inactive)
+}
+
+fn handle_action(
+    action: Action,
+    battle: &mut BattleInfo,
+    gamemap: &mut GameMap,
+) -> Option<(ActionResult, (usize, usize))> {
+    match action {
+        Action::Cell(pos, army) => {
+            if let Some(_) = battle.winner {
+                // state.menu_id = Menu::Start as usize;
+                return None;
+            }
+            let active = battle.active_unit;
+            let res = unit_interaction(battle, gamemap, pos, army);
+            if res.1 {
+                battle.active_unit = battle.search_next_active(gamemap);
+            }
+            move_thing(battle, gamemap);
+            res.0.and_then(|v| Some((v, active.unwrap())))
+        }
+        Action::Move(army, troop, to) => {
+            let army = &mut gamemap.armys[army];
+            let unit_inactive = {
+                let troop = &mut army.troops[troop].get();
+                troop.pos = UnitPos::from_index(to);
+                let unit = &mut troop.unit;
+                unit.stats.moves -= 1;
+                unit.recalc();
+                unit.modified.moves < 1 || unit.is_dead()
+            };
+            army.recalc_army_hitmap();
+            let active = battle.active_unit;
+            if unit_inactive {
+                battle.active_unit = battle.search_next_active(gamemap);
+            }
+            move_thing(battle, gamemap);
+            Some((ActionResult::Move, active.unwrap()))
+        }
+    }
+}
+fn gen_forms(size: (f32, f32)) -> Result<(), String> {
+    let draw_back_centered: DrawFunction<
+        State,
+        SingleContainer<State, Button<State, Text<State, String>>>,
+    > = |container, _app, _assets, _gfx, _plugins, _: &mut State, draw| {
+        draw.rect(
+            (container.pos - Position(container.get_size().0 / 2., 0.)).into(),
+            container.get_size().into(),
+        )
+        .color(Color::from_hex(0x033121ff));
+    };
+    let draw_back: DrawFunction<State, SingleContainer<State, Button<State, Text<State, String>>>> =
+        |container, _app, _assets, _gfx, _plugins, _: &mut State, draw| {
+            draw.rect(
                 (container.pos.0, container.pos.1).into(),
                 container.get_size().into(),
             )
             .color(Color::from_hex(0x033121ff));
-    };
-	fn redirect_menu<T: PosForm<State>, const MENU: usize>(_: &mut T, _: &mut App, _: &mut Assets, _: &mut Plugins, state: &mut State) {
-		state.menu_id = MENU;
-	}
-	let half_size = (size.0 as f32 / 2., size.1 as f32 / 2.);
+        };
+    fn redirect_menu<T: PosForm<State>, const MENU: usize>(
+        _: &mut T,
+        _: &mut App,
+        _: &mut Assets,
+        _: &mut Plugins,
+        state: &mut State,
+    ) {
+        state.menu_id = MENU;
+    }
+    let half_size = (size.0 as f32 / 2., size.1 as f32 / 2.);
     let mut hashmap = FORMS.lock().unwrap();
-	hashmap.clear();
+    hashmap.clear();
     let locale = LOCALE.lock().unwrap();
     let max_troops = *MAX_TROOPS;
     let half_troops = max_troops / 2;
@@ -326,30 +407,28 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
         pos: Position(100., 0.),
         size: Size(70., 100.),
     };
-    let nav_button_text = |text: String| {
-        Text {
-            text,
-            font: FontId(2),
-            align_h: AlignHorizontal::Left,
-            align_v: AlignVertical::Bottom,
-            pos: Position(0., 0.),
-            size: 10.,
-            rect_size: None,
-            max_width: None,
-            color: Color::BLACK,
-            boo: std::marker::PhantomData,
-        }
+    let nav_button_text = |text: String| Text {
+        text,
+        font: FontId(2),
+        align_h: AlignHorizontal::Left,
+        align_v: AlignVertical::Bottom,
+        pos: Position(0., 0.),
+        size: 10.,
+        rect_size: None,
+        max_width: None,
+        color: Color::BLACK,
+        boo: std::marker::PhantomData,
     };
-	{
-		// SingleContainerBuilder::default()
-		// 	.inside(
+    {
+        // SingleContainerBuilder::default()
+        // 	.inside(
         //         DynContainerBuilder::default()
         //             .inside(vec![])
-		// 	)
-		// 	.on_draw(|_,_,_,_,_,_| {
-				
-		// 	});
-	};
+        // 	)
+        // 	.on_draw(|_,_,_,_,_,_| {
+
+        // 	});
+    };
     hashmap.insert(
         Menu::Main as usize,
         SingleContainerBuilder::default()
@@ -360,49 +439,49 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                             text(locale.get("menu_game_name"))
                                 .align_h(AlignHorizontal::Left)
                                 .size(100.0)
-								.font(FontId(2))
-								.pos(Position(0., 0.))
+                                .font(FontId(2))
+                                .pos(Position(0., 0.))
                                 .build()?,
                         ) as Box<dyn ObjPosForm<State>>,
                         menu_button(
                             locale.get("menu_start_title"),
                             draw_back,
-                            redirect_menu::<_, {Menu::Start as usize}>,
+                            redirect_menu::<_, { Menu::Start as usize }>,
                         ),
                         menu_button(
                             locale.get("menu_battle_title"),
                             draw_back,
-                            redirect_menu::<_, {Menu::Battle as usize}>
+                            redirect_menu::<_, { Menu::Battle as usize }>,
                         ),
-						menu_button(
+                        menu_button(
                             locale.get("menu_multiplayer_title"),
                             draw_back,
-                            redirect_menu::<_, {Menu::Connect as usize}>
+                            redirect_menu::<_, { Menu::Connect as usize }>,
                         ),
-						menu_button(
+                        menu_button(
                             locale.get("menu_pvp_title"),
                             draw_back,
-                            redirect_menu::<_, {Menu::ConnectBattle as usize}>
+                            redirect_menu::<_, { Menu::ConnectBattle as usize }>,
                         ),
                         menu_button(
                             locale.get("menu_load_title"),
                             draw_back,
-                            redirect_menu::<_, {Menu::Load as usize}>
+                            redirect_menu::<_, { Menu::Load as usize }>,
                         ),
                         menu_button(
                             locale.get("menu_settings_title"),
                             draw_back,
-                            redirect_menu::<_, {Menu::Settings as usize}>
+                            redirect_menu::<_, { Menu::Settings as usize }>,
                         ),
                         menu_button(
                             locale.get("menu_unitview_title"),
                             draw_back,
-                            redirect_menu::<_, {Menu::UnitView as usize}> 
+                            redirect_menu::<_, { Menu::UnitView as usize }>,
                         ),
                         menu_button(
                             locale.get("menu_items_title"),
                             draw_back,
-                            redirect_menu::<_, {Menu::Items as usize}>
+                            redirect_menu::<_, { Menu::Items as usize }>,
                         ),
                         menu_button(
                             locale.get("menu_exit_title"),
@@ -415,29 +494,30 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                     .interval(Position(0., 30.))
                     .build()?,
             )
-            .on_draw(|_container, _app, _assets, _gfx, _plugins, state: &mut State, draw| {
-				let size = *MONITOR_SIZE.lock().unwrap();
-				draw
-                    .rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
-                    .color(Color::ORANGE);
-				draw.image(&state.assets.get_texture("assets/Window", "Menu.png"))
-					.position(0., 0.)
-					.size(size.0, size.1);
-            })
-            .build()?
+            .on_draw(
+                |_container, _app, _assets, _gfx, _plugins, state: &mut State, draw| {
+                    let size = *MONITOR_SIZE.lock().unwrap();
+                    draw.rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
+                        .color(Color::ORANGE);
+                    draw.image(&state.assets.get_texture("assets/Window", "Menu.png"))
+                        .position(0., 0.)
+                        .size(size.0, size.1);
+                },
+            )
+            .build()?,
     );
     fn items_unit_card_draw(
         drawing: &mut Drawing<State>,
         gfx: &mut Graphics,
         state: &mut State,
-		draw: &mut Draw,
+        draw: &mut Draw,
         army: usize,
         index: usize,
     ) {
         let pos = drawing.pos;
         let index = (pos.0 / 102.) as usize + index;
-		if let Some(troop) = state.gamemap.armys[army].get_troop(index) {
-			let troop = troop.get();
+        if let Some(troop) = state.gamemap.armys[army].get_troop(index) {
+            let troop = troop.get();
             let unit = &troop.unit;
             let texture = &state.get_texture(
                 "assets/Icons",
@@ -458,27 +538,47 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                 .position(pos.0, pos.1);
         }
     }
-	fn items_unit_buttons<const ARMY: usize, const ADD: usize>(half_troops: usize) -> Container<State, Button<State, Drawing<State>>> {
-		container((0..half_troops).map(|_| {
-            button(Drawing {
-                pos: Position(0., 0.),
-                to_draw: |drawing, _, _, gfx, _, state, draw| {
-                    items_unit_card_draw(drawing, gfx, state, draw, ARMY, ADD * *MAX_TROOPS / 2);
-                }
-            },
-                   Rect { pos: Position(0., 0.), size: Size(92., 92.) }
-            ).if_clicked(|button, _app, _assets, _plugins, state| {
-                let pos = button.rect.pos;
-                let index = (pos.0 / 102.) as usize + ADD * *MAX_TROOPS / 2;             
-                set_menu_value_num(state, "items_unit_stat_changed", 1);
-                set_menu_value_num(state, "items_unit_stat_index", index as i64);
-                set_menu_value_num(state, "items_unit_stat_army", ARMY as i64);
-            })
-                .build().unwrap()
-        }).collect::<Vec<_>>())
-            .interval(Position(10., 0.))
-            .build().unwrap()
-	}
+    fn items_unit_buttons<const ARMY: usize, const ADD: usize>(
+        half_troops: usize,
+    ) -> Container<State, Button<State, Drawing<State>>> {
+        container(
+            (0..half_troops)
+                .map(|_| {
+                    button(
+                        Drawing {
+                            pos: Position(0., 0.),
+                            to_draw: |drawing, _, _, gfx, _, state, draw| {
+                                items_unit_card_draw(
+                                    drawing,
+                                    gfx,
+                                    state,
+                                    draw,
+                                    ARMY,
+                                    ADD * *MAX_TROOPS / 2,
+                                );
+                            },
+                        },
+                        Rect {
+                            pos: Position(0., 0.),
+                            size: Size(92., 92.),
+                        },
+                    )
+                    .if_clicked(|button, _app, _assets, _plugins, state| {
+                        let pos = button.rect.pos;
+                        let index = (pos.0 / 102.) as usize + ADD * *MAX_TROOPS / 2;
+                        set_menu_value_num(state, "items_unit_stat_changed", 1);
+                        set_menu_value_num(state, "items_unit_stat_index", index as i64);
+                        set_menu_value_num(state, "items_unit_stat_army", ARMY as i64);
+                    })
+                    .build()
+                    .unwrap()
+                })
+                .collect::<Vec<_>>(),
+        )
+        .interval(Position(10., 0.))
+        .build()
+        .unwrap()
+    }
     hashmap.insert(
         Menu::Items as usize,
         SingleContainerBuilder::default()
@@ -659,77 +759,85 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
     hashmap.insert(
         Menu::Settings as usize,
         single(
-            dyn_cont(
-                vec![
-                    Box::new(TupleContainerBuilder::default()
-                        .inside((
-                            checkbox(
-                                text("+")
-                                    .align_h(AlignHorizontal::Left)
-                                    .size(50.0)
-                                    .color(Color::ORANGE)
-                                    .build()?,
-                                Rect {
-                                    pos: Position(0., 0.),
-                                    size: Size(50., 50.),
-                                })
-                                .on_draw(
-                                    |container, _, _, _, _, state: &mut State, draw| {
-                                        draw.rect(
-                                            (container.pos
-                                             - Position(
-                                                 container.get_size().0 / 2.,
-                                                 container.get_pos().1,
-                                             ))
-                                                .into(),
-                                            container.get_size().into(),
-                                        )
-                                            .color(Color::from_hex(0x033121ff));
-                                        LOCALE.lock().unwrap().switch_lang();
-									})
+            dyn_cont(vec![Box::new(
+                TupleContainerBuilder::default()
+                    .inside((
+                        checkbox(
+                            text("+")
+                                .align_h(AlignHorizontal::Left)
+                                .size(50.0)
+                                .color(Color::ORANGE)
                                 .build()?,
-                            text("Language")
-                                .pos(Position(20., 0.))
-                                .size(20.0)
-                                .build()?,
-                            button(
-                                text(locale.get("settings_regenerate_map"))
-                                    .size(20.)
-                                    .build()?,
-                                Rect {
-                                    pos: Position(0., 100.),
-                                    size: Size(200., 50.)
-                                }
+                            Rect {
+                                pos: Position(0., 0.),
+                                size: Size(50., 50.),
+                            },
+                        )
+                        .on_draw(|container, _, _, _, _, state: &mut State, draw| {
+                            draw.rect(
+                                (container.pos
+                                    - Position(container.get_size().0 / 2., container.get_pos().1))
+                                .into(),
+                                container.get_size().into(),
                             )
-                                .if_clicked(|_button: &mut Button<State, Text<State, String>>, _, _, _, state: &mut State| {
-                                    let tilemap = gen_tilemap();
-                                    let decomap = gen_decomap(tilemap.1, state.objects.iter().position(|obj| obj.path == "Tree0.png").unwrap());
-                                    state.gamemap.tilemap = tilemap.0;
-                                    state.gamemap.decomap = decomap;
-									let (objects, gamemap) = (&state.objects, &mut state.gamemap);
-									state.gamemap.calc_hitboxes(&state.objects);
-                                })
-                                .build()?
-                        ))
-                        .build()?)
-                        
-                    ]
-                ).build()?
-            ).on_draw(|_container, _app, _assets, _gfx, _plugins, _state: &mut State, draw| {
+                            .color(Color::from_hex(0x033121ff));
+                            LOCALE.lock().unwrap().switch_lang();
+                        })
+                        .build()?,
+                        text("Language").pos(Position(20., 0.)).size(20.0).build()?,
+                        button(
+                            text(locale.get("settings_regenerate_map"))
+                                .size(20.)
+                                .build()?,
+                            Rect {
+                                pos: Position(0., 100.),
+                                size: Size(200., 50.),
+                            },
+                        )
+                        .if_clicked(
+                            |_button: &mut Button<State, Text<State, String>>,
+                             _,
+                             _,
+                             _,
+                             state: &mut State| {
+                                let tilemap = gen_tilemap();
+                                let decomap = gen_decomap(
+                                    tilemap.1,
+                                    state
+                                        .objects
+                                        .iter()
+                                        .position(|obj| obj.path == "Tree0.png")
+                                        .unwrap(),
+                                );
+                                state.gamemap.tilemap = tilemap.0;
+                                state.gamemap.decomap = decomap;
+                                let (objects, gamemap) = (&state.objects, &mut state.gamemap);
+                                state.gamemap.calc_hitboxes(&state.objects);
+                            },
+                        )
+                        .build()?,
+                    ))
+                    .build()?,
+            )])
+            .build()?,
+        )
+        .on_draw(
+            |_container, _app, _assets, _gfx, _plugins, _state: &mut State, draw| {
                 draw.rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
                     .color(Color::ORANGE);
-            })
-            .after_draw(|_container, app, _assets, _plugins, state: &mut State| {
-                if app.keyboard.is_down(KeyCode::Escape) {
-                    state.menu_id = Menu::Main as usize;
-                }
-            })
-            .pos(Position(0., 0.))
-            .build()?
+            },
+        )
+        .after_draw(|_container, app, _assets, _plugins, state: &mut State| {
+            if app.keyboard.is_down(KeyCode::Escape) {
+                state.menu_id = Menu::Main as usize;
+            }
+        })
+        .pos(Position(0., 0.))
+        .build()?,
     );
-	fn get_form_map() -> Result<DynContainer<State>, StructBuildError> {
-		let size = *MONITOR_SIZE.lock().unwrap();
-		dyn_cont(vec![
+    fn get_form_map() -> Result<DynContainer<State>, StructBuildError> {
+        let size = *MONITOR_SIZE.lock().unwrap();
+        dyn_cont(vec![
 			Box::new(button(
 				single(
 					center((true, true), SubWindowSys {
@@ -1001,189 +1109,295 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 		)
 			.align_direction(Direction::Bottom)
 			.build()
-	}
-	fn get_form_server_map() -> Result<DynContainer<State>, StructBuildError> {
-		let size = *MONITOR_SIZE.lock().unwrap();
-		dyn_cont(vec![
-			Box::new(button(
-				single(
-					center((true, true), SubWindowSys {
-							windows: vec![
-								Box::new(Drawing { // Map
-									pos: Position(0., 0.),
-									to_draw: |cont, app, assets, gfx, plugins, state: &mut State, draw| {}
-								}),
-								Box::new( // Building
-									single(
-										Drawing {
-											pos: Default::default(),
-											to_draw: |cont, app, assets, gfx, plugins, state: &mut State, draw| {}
-										}
-									)
-										.on_draw(|cont, app, assets, gfx, plugins, state: &mut State, draw| {
-											get_building_menu_form(state, state.gamemap.armys[0].building.unwrap_or(0))
-												.draw(app, assets, gfx, plugins, state, draw);
-										})
-										.after_draw(|cont,app,assets,plugins,state: &mut State| {
-											//handle_start_menu(cont, app, state, assets, plugins, StartSubMenu::Building);
-										})
-										.build()?
-								),
-								Box::new( // Army
-									single(
-										Drawing {
-											pos: Default::default(),
-											to_draw: |cont, app, assets, gfx, plugins, state: &mut State, draw| {}
-										}
-									)
-										.on_draw(|cont, app, assets, gfx, plugins, state: &mut State, draw| {
-											get_building_menu_form(state, state.gamemap.armys[0].building.unwrap_or(0))
-												.draw(app, assets, gfx, plugins, state, draw);
-										})
-										.after_draw(|cont,app,assets,plugins,state: &mut State| {
-											//handle_start_menu(cont, app, state, assets, plugins, StartSubMenu::Building);
-										})
-										.build()?
-								),
-								Box::new(
-									single(
-										dyn_cont(vec![
-											Box::new(
-												button(
-													text("Очень важное событие")
-														.size(50.)
-														.pos(Position(0., 0.))
-														.build()?,
-													Rect { size: Size(500., 60.), pos: Default::default() }
-												)
-													.build()?
-											),
-											Box::new(
-												text(|state: &State| get_menu_value_str(state, "current_message").unwrap_or("".to_string()))
-													.size(20.)
-													.pos(Position(0., 0.))
-													.build()?
-											),
-											Box::new(
-												button(
-													text(
-														"ну ок"
-													)
-														.pos(Position(0., 0.))
-														.size(50.)
-														.build()?,
-													Rect {
-														pos: (0., 100.).into(),
-														size: Size(500., 150.)
-													}
-												)
-													.if_clicked(|butt, _, _, _, state: &mut State| {
-														set_menu_value_num(state, "start_menu", 0);
-													})
-													.build()?
-											)
-										])
-											.align_direction(Direction::Bottom)
-											.build()?
-									)
-										.on_draw(|cont, _, _, _, _, _: &mut State, draw| {
-											draw.rect(cont.pos.into(), cont.get_size().into())
-												.color(Color::ORANGE);
-										})
-										.build()?
-								),
-							], 
-							select_window: |cont, state: &State| {
-								get_menu_value_num(state, "start_menu").unwrap_or(0) as usize
-							},
-							rect: Rect {
-								pos: Position(size.0/2., size.1/2.),
-								size: Size(1000., 1000.)
-							}
-						}
-					))
-					.on_draw(
-						|cont, app, assets, gfx, plugins, state: &mut State, draw| {
-							let Some(conn) = &state.connection else { return; };
-							draw_gamemap(cont, app, gfx, &state.assets, &conn.gamemap, &state.objects, draw);
-						}
-					)					
-					.after_draw(|cont,app,assets,plugins,state: &mut State| {
-						if get_menu_value_num(state, "start_menu").unwrap_or(0) == 0 {
-							let Some(conn) = &mut state.connection else { return; };
-							
-							if app.keyboard.was_pressed(KeyCode::Escape) {
-								state.menu_id = Menu::Main as usize;
-							}
-							if app.keyboard.was_pressed(KeyCode::D) {
-								if state.gamemap.armys[0].building.is_some() {
-									// set_menu_value_num(state, "start_menu", 2);
-								}
-							}
-							let rect = Rect {
-								pos: cont.pos,
-								size: (SIZE.0 * MAP_SIZE as f32, SIZE.1 * MAP_SIZE as f32).into()
-							};
-							if rect.collides((app.mouse.x, app.mouse.y).into())
-								&& app.mouse.left_was_released()
-							{
-								let clicked_at = app.mouse.position();
-								let start = state.gamemap.armys[0].pos;
-								let goal = (
-									(clicked_at.0 / SIZE.0) as usize,
-									(clicked_at.1 / SIZE.1) as usize,
-								);
-								conn.send_message_to_server(ClientMessage::MapClick(goal), &state.units, &state.objects);
-							}
-							// grand gameloopa
-							conn.updates(&state.units, &state.objects);
-						}
-					})
-					.build()?,
-				Rect { pos: (0., 0.).into(), size: (0., MONITOR_SIZE.lock().unwrap().1-100.).into() }).build()?),
-			Box::new(
-				single(
-					dyn_cont(vec![
-						Box::new(text(|state: &State| format!("Золото: {}", state.gamemap.armys[0].stats.gold))
-								 .size(70.)
-								 .pos(Position(0., 50.))
-								 .align_v(AlignVertical::Center)
-								 .build()?),
-						Box::new(text(|state: &State| format!("Мана: {}", state.gamemap.armys[0].stats.mana))
-								 .pos(Position(0., 50.))
-								 .align_v(AlignVertical::Center)
-								 .size(70.)
-								 .build()?),
-						Box::new(text(|state: &State| state.gamemap.time.to_data([TimeData::YEAR, TimeData::MONTH, TimeData::DAY, TimeData::HOUR, TimeData::MINUTES], "-"))
-								 .pos(Position(0., 50.))
-								 .size(70.)
-								 .align_v(AlignVertical::Center)
-								 .build()?),
-					])
-						.align_direction(Direction::Right)
-						.interval(Position(100.,0.))
-						.build()?)
-					.on_draw(|cont, _, _, _, _, state: &mut State, draw| {
-						draw.rect((cont.pos.0, cont.pos.1), *MONITOR_SIZE.lock().unwrap())
-							.color(Color::from_hex(0x033121ff));
-					})
-					.build()?
-			)]
-		)
-			.align_direction(Direction::Bottom)
-			.build()
-	}
-	
+    }
+    fn get_form_server_map() -> Result<DynContainer<State>, StructBuildError> {
+        let size = *MONITOR_SIZE.lock().unwrap();
+        dyn_cont(vec![
+            Box::new(
+                button(
+                    single(center(
+                        (true, true),
+                        SubWindowSys {
+                            windows: vec![
+                                Box::new(Drawing {
+                                    // Map
+                                    pos: Position(0., 0.),
+                                    to_draw: |cont,
+                                              app,
+                                              assets,
+                                              gfx,
+                                              plugins,
+                                              state: &mut State,
+                                              draw| {},
+                                }),
+                                Box::new(
+                                    // Building
+                                    single(Drawing {
+                                        pos: Default::default(),
+                                        to_draw:
+                                            |cont,
+                                             app,
+                                             assets,
+                                             gfx,
+                                             plugins,
+                                             state: &mut State,
+                                             draw| {},
+                                    })
+                                    .on_draw(
+                                        |cont,
+                                         app,
+                                         assets,
+                                         gfx,
+                                         plugins,
+                                         state: &mut State,
+                                         draw| {
+                                            get_building_menu_form(
+                                                state,
+                                                state.gamemap.armys[0].building.unwrap_or(0),
+                                            )
+                                            .draw(app, assets, gfx, plugins, state, draw);
+                                        },
+                                    )
+                                    .after_draw(|cont, app, assets, plugins, state: &mut State| {
+                                        //handle_start_menu(cont, app, state, assets, plugins, StartSubMenu::Building);
+                                    })
+                                    .build()?,
+                                ),
+                                Box::new(
+                                    // Army
+                                    single(Drawing {
+                                        pos: Default::default(),
+                                        to_draw:
+                                            |cont,
+                                             app,
+                                             assets,
+                                             gfx,
+                                             plugins,
+                                             state: &mut State,
+                                             draw| {},
+                                    })
+                                    .on_draw(
+                                        |cont,
+                                         app,
+                                         assets,
+                                         gfx,
+                                         plugins,
+                                         state: &mut State,
+                                         draw| {
+                                            get_building_menu_form(
+                                                state,
+                                                state.gamemap.armys[0].building.unwrap_or(0),
+                                            )
+                                            .draw(app, assets, gfx, plugins, state, draw);
+                                        },
+                                    )
+                                    .after_draw(|cont, app, assets, plugins, state: &mut State| {
+                                        //handle_start_menu(cont, app, state, assets, plugins, StartSubMenu::Building);
+                                    })
+                                    .build()?,
+                                ),
+                                Box::new(
+                                    single(
+                                        dyn_cont(vec![
+                                            Box::new(
+                                                button(
+                                                    text("Очень важное событие")
+                                                        .size(50.)
+                                                        .pos(Position(0., 0.))
+                                                        .build()?,
+                                                    Rect {
+                                                        size: Size(500., 60.),
+                                                        pos: Default::default(),
+                                                    },
+                                                )
+                                                .build()?,
+                                            ),
+                                            Box::new(
+                                                text(|state: &State| {
+                                                    get_menu_value_str(state, "current_message")
+                                                        .unwrap_or("".to_string())
+                                                })
+                                                .size(20.)
+                                                .pos(Position(0., 0.))
+                                                .build()?,
+                                            ),
+                                            Box::new(
+                                                button(
+                                                    text("ну ок")
+                                                        .pos(Position(0., 0.))
+                                                        .size(50.)
+                                                        .build()?,
+                                                    Rect {
+                                                        pos: (0., 100.).into(),
+                                                        size: Size(500., 150.),
+                                                    },
+                                                )
+                                                .if_clicked(|butt, _, _, _, state: &mut State| {
+                                                    set_menu_value_num(state, "start_menu", 0);
+                                                })
+                                                .build()?,
+                                            ),
+                                        ])
+                                        .align_direction(Direction::Bottom)
+                                        .build()?,
+                                    )
+                                    .on_draw(|cont, _, _, _, _, _: &mut State, draw| {
+                                        draw.rect(cont.pos.into(), cont.get_size().into())
+                                            .color(Color::ORANGE);
+                                    })
+                                    .build()?,
+                                ),
+                            ],
+                            select_window: |cont, state: &State| {
+                                get_menu_value_num(state, "start_menu").unwrap_or(0) as usize
+                            },
+                            rect: Rect {
+                                pos: Position(size.0 / 2., size.1 / 2.),
+                                size: Size(1000., 1000.),
+                            },
+                        },
+                    ))
+                    .on_draw(|cont, app, assets, gfx, plugins, state: &mut State, draw| {
+                        let Some(conn) = &state.connection else {
+                            return;
+                        };
+                        draw_gamemap(
+                            cont,
+                            app,
+                            gfx,
+                            &state.assets,
+                            &conn.gamemap,
+                            &state.objects,
+                            draw,
+                        );
+                    })
+                    .after_draw(|cont, app, assets, plugins, state: &mut State| {
+                        if get_menu_value_num(state, "start_menu").unwrap_or(0) == 0 {
+                            let Some(conn) = &mut state.connection else {
+                                return;
+                            };
+
+                            if app.keyboard.was_pressed(KeyCode::Escape) {
+                                state.menu_id = Menu::Main as usize;
+                            }
+                            if app.keyboard.was_pressed(KeyCode::D) {
+                                if state.gamemap.armys[0].building.is_some() {
+                                    // set_menu_value_num(state, "start_menu", 2);
+                                }
+                            }
+                            let rect = Rect {
+                                pos: cont.pos,
+                                size: (SIZE.0 * MAP_SIZE as f32, SIZE.1 * MAP_SIZE as f32).into(),
+                            };
+                            if rect.collides((app.mouse.x, app.mouse.y).into())
+                                && app.mouse.left_was_released()
+                            {
+                                let clicked_at = app.mouse.position();
+                                let start = state.gamemap.armys[0].pos;
+                                let goal = (
+                                    (clicked_at.0 / SIZE.0) as usize,
+                                    (clicked_at.1 / SIZE.1) as usize,
+                                );
+                                conn.send_message_to_server(
+                                    ClientMessage::MapClick(goal),
+                                    &state.units,
+                                    &state.objects,
+                                );
+                            }
+                            // grand gameloopa
+                            conn.updates(&state.units, &state.objects);
+                        }
+                    })
+                    .build()?,
+                    Rect {
+                        pos: (0., 0.).into(),
+                        size: (0., MONITOR_SIZE.lock().unwrap().1 - 100.).into(),
+                    },
+                )
+                .build()?,
+            ),
+            Box::new(
+                single(
+                    dyn_cont(vec![
+                        Box::new(
+                            text(|state: &State| {
+                                format!("Золото: {}", state.gamemap.armys[0].stats.gold)
+                            })
+                            .size(70.)
+                            .pos(Position(0., 50.))
+                            .align_v(AlignVertical::Center)
+                            .build()?,
+                        ),
+                        Box::new(
+                            text(|state: &State| {
+                                format!("Мана: {}", state.gamemap.armys[0].stats.mana)
+                            })
+                            .pos(Position(0., 50.))
+                            .align_v(AlignVertical::Center)
+                            .size(70.)
+                            .build()?,
+                        ),
+                        Box::new(
+                            text(|state: &State| {
+                                state.gamemap.time.to_data(
+                                    [
+                                        TimeData::YEAR,
+                                        TimeData::MONTH,
+                                        TimeData::DAY,
+                                        TimeData::HOUR,
+                                        TimeData::MINUTES,
+                                    ],
+                                    "-",
+                                )
+                            })
+                            .pos(Position(0., 50.))
+                            .size(70.)
+                            .align_v(AlignVertical::Center)
+                            .build()?,
+                        ),
+                    ])
+                    .align_direction(Direction::Right)
+                    .interval(Position(100., 0.))
+                    .build()?,
+                )
+                .on_draw(|cont, _, _, _, _, state: &mut State, draw| {
+                    draw.rect((cont.pos.0, cont.pos.1), *MONITOR_SIZE.lock().unwrap())
+                        .color(Color::from_hex(0x033121ff));
+                })
+                .build()?,
+            ),
+        ])
+        .align_direction(Direction::Bottom)
+        .build()
+    }
+
     const SIZE: (f32, f32) = (52., 40.);
-	const VIEW: usize = 20;
-	fn draw_gamemap<Form: PosForm<State>>(drawing: &mut Form, app: &mut App, gfx: &mut Graphics, assets: &AssetsMap, gamemap: &GameMap, objects: &Vec<ObjectInfo>, draw: &mut Draw) {
+    const VIEW: usize = 20;
+    fn draw_gamemap<Form: PosForm<State>>(
+        drawing: &mut Form,
+        app: &mut App,
+        gfx: &mut Graphics,
+        assets: &AssetsMap,
+        gamemap: &GameMap,
+        objects: &Vec<ObjectInfo>,
+        draw: &mut Draw,
+    ) {
         let terrain = assets.get("assets/Terrain").unwrap();
-		let army = assets.get("assets/Armys").unwrap();
-		draw.image(&assets.get("assets/Map").and_then(|map| map.get("Map")).unwrap().lock().unwrap())
-			.position(0., 0.);
-		let pos = gamemap.armys[0].pos;
-        for i in 0..MAP_SIZE {//((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
-            for j in 0..MAP_SIZE {//((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
+        let army = assets.get("assets/Armys").unwrap();
+        draw.image(
+            &assets
+                .get("assets/Map")
+                .and_then(|map| map.get("Map"))
+                .unwrap()
+                .lock()
+                .unwrap(),
+        )
+        .position(0., 0.);
+        let pos = gamemap.armys[0].pos;
+        for i in 0..MAP_SIZE {
+            //((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
+            for j in 0..MAP_SIZE {
+                //((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
                 // let asset = terrain
                 //     .get(TILES[state.gamemap.tilemap[i][j]].sprite())
                 //     .unwrap();
@@ -1196,22 +1410,22 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                 if gamemap.armys[0].path.contains(&(i, j)) {
                     draw.rect((pos).into(), (10., 10.)).color(Color::RED);
                 }
-				if gamemap.armys[1].path.contains(&(i, j)) {
+                if gamemap.armys[1].path.contains(&(i, j)) {
                     draw.rect((pos).into(), (10., 10.)).color(Color::BLUE);
                 }
                 if gamemap.hitmap[i][j].army.is_some() {
-					let pos : (f32, f32) = (pos - Position(0., SIZE.1)).into();
-					draw.image(&army.get("Army.png").unwrap().lock().unwrap())
-						.position(pos.0, pos.1)
-						.size(SIZE.0, SIZE.1 * 2.);
+                    let pos: (f32, f32) = (pos - Position(0., SIZE.1)).into();
+                    draw.image(&army.get("Army.png").unwrap().lock().unwrap())
+                        .position(pos.0, pos.1)
+                        .size(SIZE.0, SIZE.1 * 2.);
                 }
             }
         }
-        for i in 0..0 {//i in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
-            for j in 0..0 {//j in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
-                let asset = terrain
-                    .get(TILES[gamemap.tilemap[i][j]].sprite())
-                    .unwrap();
+        for i in 0..0 {
+            //i in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
+            for j in 0..0 {
+                //j in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
+                let asset = terrain.get(TILES[gamemap.tilemap[i][j]].sprite()).unwrap();
                 let texture = asset.lock().unwrap();
                 const ALPHA: f32 = 0.2;
                 const W_SIZE_QUARTER: f32 = SIZE.0 / 4.;
@@ -1220,34 +1434,33 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                 const THREE_QUARTERS: f32 = QUARTER_TILE * 3.;
                 let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
                 (0..4).for_each(|i| {
-                    let (quarter_size, crop_start, cropped_size, quarter_pos) =
-                        match i {
-                            0 => (
-                                (W_SIZE_QUARTER, SIZE.1),
-                                (THREE_QUARTERS, 0.),
-                                (QUARTER_TILE, 106.),
-                                (pos.0 - W_SIZE_QUARTER, pos.1),
-                            ),
-                            1 => (
-                                (W_SIZE_QUARTER, SIZE.1),
-                                (0., 0.),
-                                (QUARTER_TILE, 106.),
-                                (pos.0 + W_SIZE_QUARTER, pos.1),
-                            ),
-                            2 => (
-                                (SIZE.0, H_SIZE_QUARTER),
-                                (0., THREE_QUARTERS),
-                                (106., QUARTER_TILE),
-                                (pos.0, pos.1 - H_SIZE_QUARTER),
-                            ),
-                            3 => (
-                                (SIZE.0, H_SIZE_QUARTER),
-                                (0., 0.),
-                                (106., QUARTER_TILE),
-                                (pos.0, pos.1 + H_SIZE_QUARTER),
-                            ),
-                            _ => ((0., 0.), (0., 0.), (0., 0.), (0., 0.)),
-                        };
+                    let (quarter_size, crop_start, cropped_size, quarter_pos) = match i {
+                        0 => (
+                            (W_SIZE_QUARTER, SIZE.1),
+                            (THREE_QUARTERS, 0.),
+                            (QUARTER_TILE, 106.),
+                            (pos.0 - W_SIZE_QUARTER, pos.1),
+                        ),
+                        1 => (
+                            (W_SIZE_QUARTER, SIZE.1),
+                            (0., 0.),
+                            (QUARTER_TILE, 106.),
+                            (pos.0 + W_SIZE_QUARTER, pos.1),
+                        ),
+                        2 => (
+                            (SIZE.0, H_SIZE_QUARTER),
+                            (0., THREE_QUARTERS),
+                            (106., QUARTER_TILE),
+                            (pos.0, pos.1 - H_SIZE_QUARTER),
+                        ),
+                        3 => (
+                            (SIZE.0, H_SIZE_QUARTER),
+                            (0., 0.),
+                            (106., QUARTER_TILE),
+                            (pos.0, pos.1 + H_SIZE_QUARTER),
+                        ),
+                        _ => ((0., 0.), (0., 0.), (0., 0.), (0., 0.)),
+                    };
                     // gfx.set_buffer_data(&state.shaders[0].1, &[i % 2]);
                     // draw.image_pipeline()
                     //     .pipeline(&state.shaders[0].0)
@@ -1262,134 +1475,147 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
             }
         }
         let objects_textures = assets.get("assets/Objects").unwrap();
-		for i in 0..0 {//i in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
-            for j in 0..0 {//j in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
+        for i in 0..0 {
+            //i in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
+            for j in 0..0 {
+                //j in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
                 if let Some(index) = gamemap.decomap[i][j] {
                     let asset = objects_textures
                         .get(&objects[index].path)
                         .expect(&*format!("{}", &objects[index].path));
                     let texture = asset.lock().unwrap();
                     let size = objects[index].size;
-					let pos = Position((i) as f32 * SIZE.0, (j) as f32 * SIZE.1);
+                    let pos = Position((i) as f32 * SIZE.0, (j) as f32 * SIZE.1);
                     draw.image(&texture)
                         .position(pos.0, pos.1 - (size.1 as f32 - 1.) * SIZE.1)
                         .size(SIZE.0 * size.0 as f32, SIZE.1 * size.1 as f32);
                 }
             }
         }
-		for building in &gamemap.buildings {
-			let index = building.id;
-			let (i, j) = (building.pos.0, building.pos.1);
-			let asset = objects_textures
+        for building in &gamemap.buildings {
+            let index = building.id;
+            let (i, j) = (building.pos.0, building.pos.1);
+            let asset = objects_textures
                 .get(&objects[index].path)
                 .expect(&*format!("{}", &objects[index].path));
             let texture = asset.lock().unwrap();
             let size = objects[index].size;
-			let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
+            let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
             draw.image(&texture)
-                .position(pos.0, pos.1)// - (size.1 as f32 - 1.) * SIZE.1)
+                .position(pos.0, pos.1) // - (size.1 as f32 - 1.) * SIZE.1)
                 .size(SIZE.0 * size.0 as f32, SIZE.1 * size.1 as f32);
-		}
-	}
-	#[repr(u64)]
-	enum Fields {
-		Market = 0,
-		Recruit = 1,
-		Garrison = 2
-	}
-	impl From<i64> for Fields {
-		fn from(value: i64) -> Self {
-			match value {
-				0 => Self::Market,
-				1 => Self::Recruit,
-				2 => Self::Garrison,
-				_ => Self::Market
-			}
-		}
-	}
-	impl Display for Fields {
-		fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-			write!(f, "{}", match self {
-				Fields::Market => LOCALE.lock().unwrap().get("market"),
-				Fields::Recruit => LOCALE.lock().unwrap().get("recruit"),
-				Fields::Garrison => LOCALE.lock().unwrap().get("garrison"),
-			})
-		}
-	}
-	fn get_building_menu_form(state: &State, buildingn: usize) -> impl PosForm<State> {
-		let building = &state.gamemap.buildings[buildingn];
-		//let screen = *MONITOR_SIZE.lock().unwrap();
-		fn submenu_button<const NUM: i64>(locale: &str) -> SingleContainer<State, Button<State, Text<State, String>>> {
-			single(
-				button(
-					text(
-						LOCALE.lock().unwrap().get(locale)
-					)
-					.align_h(AlignHorizontal::Center)
-					.align_v(AlignVertical::Center)
-					.pos((150., 65.))
-					.size(34.)
-					.build().unwrap(),
-					Rect {
-						pos: (0.,0.).into(),
-						size: (300., 130.).into()
-					}
-				)
-				.if_clicked(|_ , _, _, _, state| {
-					set_menu_value_num(state, "building_menu", NUM);
-				})
-				.build().unwrap()
-			)
-			.on_draw(|cont,_,_,_,_,_, draw| {
-				draw.rect(cont.get_pos().into(), cont.get_size().into())
-					.color(Color::ORANGE)
-					.stroke(10.)
-					.stroke_color(Color::from_rgba(0.,0.,0.,0.2));
-			})
-			.build().unwrap()
-		}
-		single(
-			straight_dyn(vec![
-				Box::new(container({
-					let mut butts = Vec::new();
-					butts.push(
-						submenu_button::<0>("building_main")
-					);
-					if building.market.is_some() {
-						butts.push(
-							submenu_button::<1>("market")
-						);
-					}
-					butts
-				})
-				.align_direction(Direction::Bottom)
-				.pos((20., 20.))	
-				.build().unwrap()),
-				Box::new(submenu_frame(state, buildingn)
-				.pos((500., 20.))
-				.build().unwrap())
-			])
-			.pos((20., 20.))
-			.build().unwrap()
-		)
-			.pos((100., 50.).into())
-		.after_draw(|cont,app,_,_,state: &mut State,| {
-			if app.keyboard.was_released(KeyCode::Escape) {
-				set_menu_value_num(state, "start_menu", 0);
-			}
-			println!("debug");
-		})
-		.on_draw(|cont,_,_,_,_,_,draw| {
-			//let screen = *MONITOR_SIZE.lock().unwrap();
-			draw.rect(cont.get_pos().into(), (1000., 900.))//(screen.0 - 100., screen.1 - 50.))
-				.color(Color::ORANGE)
-				.stroke(10.)
-				.stroke_color(Color::from_rgba(0.,0.,0.,0.2));
-		})
-		.build().unwrap()
-	}
-	fn submenu_frame(state: &State, building: usize) -> DynContainerBuilder<State> {
-		match get_menu_value_num(state, "building_menu").unwrap_or(0) {
+        }
+    }
+    #[repr(u64)]
+    enum Fields {
+        Market = 0,
+        Recruit = 1,
+        Garrison = 2,
+    }
+    impl From<i64> for Fields {
+        fn from(value: i64) -> Self {
+            match value {
+                0 => Self::Market,
+                1 => Self::Recruit,
+                2 => Self::Garrison,
+                _ => Self::Market,
+            }
+        }
+    }
+    impl Display for Fields {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "{}",
+                match self {
+                    Fields::Market => LOCALE.lock().unwrap().get("market"),
+                    Fields::Recruit => LOCALE.lock().unwrap().get("recruit"),
+                    Fields::Garrison => LOCALE.lock().unwrap().get("garrison"),
+                }
+            )
+        }
+    }
+    fn get_building_menu_form(state: &State, buildingn: usize) -> impl PosForm<State> {
+        let building = &state.gamemap.buildings[buildingn];
+        //let screen = *MONITOR_SIZE.lock().unwrap();
+        fn submenu_button<const NUM: i64>(
+            locale: &str,
+        ) -> SingleContainer<State, Button<State, Text<State, String>>> {
+            single(
+                button(
+                    text(LOCALE.lock().unwrap().get(locale))
+                        .align_h(AlignHorizontal::Center)
+                        .align_v(AlignVertical::Center)
+                        .pos((150., 65.))
+                        .size(34.)
+                        .build()
+                        .unwrap(),
+                    Rect {
+                        pos: (0., 0.).into(),
+                        size: (300., 130.).into(),
+                    },
+                )
+                .if_clicked(|_, _, _, _, state| {
+                    set_menu_value_num(state, "building_menu", NUM);
+                })
+                .build()
+                .unwrap(),
+            )
+            .on_draw(|cont, _, _, _, _, _, draw| {
+                draw.rect(cont.get_pos().into(), cont.get_size().into())
+                    .color(Color::ORANGE)
+                    .stroke(10.)
+                    .stroke_color(Color::from_rgba(0., 0., 0., 0.2));
+            })
+            .build()
+            .unwrap()
+        }
+        single(
+            straight_dyn(vec![
+                Box::new(
+                    container({
+                        let mut butts = Vec::new();
+                        butts.push(submenu_button::<0>("building_main"));
+                        if building.market.is_some() {
+                            butts.push(submenu_button::<1>("market"));
+                        }
+                        butts
+                    })
+                    .align_direction(Direction::Bottom)
+                    .pos((20., 20.))
+                    .build()
+                    .unwrap(),
+                ),
+                Box::new(
+                    submenu_frame(state, buildingn)
+                        .pos((500., 20.))
+                        .build()
+                        .unwrap(),
+                ),
+            ])
+            .pos((20., 20.))
+            .build()
+            .unwrap(),
+        )
+        .pos((100., 50.).into())
+        .after_draw(|cont, app, _, _, state: &mut State| {
+            if app.keyboard.was_released(KeyCode::Escape) {
+                set_menu_value_num(state, "start_menu", 0);
+            }
+            println!("debug");
+        })
+        .on_draw(|cont, _, _, _, _, _, draw| {
+            //let screen = *MONITOR_SIZE.lock().unwrap();
+            draw.rect(cont.get_pos().into(), (1000., 900.)) //(screen.0 - 100., screen.1 - 50.))
+                .color(Color::ORANGE)
+                .stroke(10.)
+                .stroke_color(Color::from_rgba(0., 0., 0., 0.2));
+        })
+        .build()
+        .unwrap()
+    }
+    fn submenu_frame(state: &State, building: usize) -> DynContainerBuilder<State> {
+        match get_menu_value_num(state, "building_menu").unwrap_or(0) {
 			1 => {
 				dyn_cont({
 					let building = &state.gamemap.buildings[building];
@@ -1482,189 +1708,191 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
 
 			},
 		}
-	}
-	fn draw_battle<Form: PosForm<State>>(drawing: &mut Form, app: &mut App, gfx: &mut Graphics, state: &mut State, draw: &mut Draw) {
-		let drawing_pos = drawing.get_pos();
-		draw.rect(drawing_pos.into(), (1000., 1000.))
-			.color(Color::ORANGE);
-		let half_troops = *MAX_TROOPS / 2;
-		for army in 0..=1 {
-			for row in 0..=1 {
-				for i in 0..(*MAX_TROOPS / 2) {
-					let mut pos = Position(0., 0.);
-					pos.0 = drawing_pos.0 + i as f32 * 102.;
-					pos.1 = drawing_pos.1 + army as f32 * 250. + row as f32 * 112.;
-					// f(x) = { 0, 6, 6, 0 } where x = { {0, 0}, {0, 1}, {1, 0}, {1, 1} }
-					// abs(0 * 6 - 0 * 6) = 0
-					// abs(0 * 6 - 1 * 6) = 6
-					// abs(1 * 6 - 0 * 6) = 6
-					// abs(1 * 6 - 1 * 6) = 0
-					draw.rect(pos.into(), (92., 102.))
-						.color(Color::BLACK);
-					
-					unit_card_draw(pos, app, gfx, &state.assets, &state.fonts[0], &mut state.battle, &mut state.gamemap, draw, army, i + (army as i64 - row as i64).abs() as usize * half_troops);
-				}
-			}
-		}
-	}
-	#[repr(u64)]
-	enum StartSubMenu {
-		Map = 0,
-		Battle = 1,
-		Building = 2,
-		Army = 3,
-		Message = 4
-	}
-	impl From<i64> for StartSubMenu {
-		fn from(value: i64) -> Self {
-			match value {
-				1 => Self::Battle,
-				2 => Self::Building,
-				3 => Self::Army,
-				4 => Self::Message,
-				_ => Self::Map
-			}
-		}
-	}
+    }
+    fn draw_battle<Form: PosForm<State>>(
+        drawing: &mut Form,
+        app: &mut App,
+        gfx: &mut Graphics,
+        state: &mut State,
+        draw: &mut Draw,
+    ) {
+        let drawing_pos = drawing.get_pos();
+        draw.rect(drawing_pos.into(), (1000., 1000.))
+            .color(Color::ORANGE);
+        let half_troops = *MAX_TROOPS / 2;
+        for army in 0..=1 {
+            for row in 0..=1 {
+                for i in 0..(*MAX_TROOPS / 2) {
+                    let mut pos = Position(0., 0.);
+                    pos.0 = drawing_pos.0 + i as f32 * 102.;
+                    pos.1 = drawing_pos.1 + army as f32 * 250. + row as f32 * 112.;
+                    // f(x) = { 0, 6, 6, 0 } where x = { {0, 0}, {0, 1}, {1, 0}, {1, 1} }
+                    // abs(0 * 6 - 0 * 6) = 0
+                    // abs(0 * 6 - 1 * 6) = 6
+                    // abs(1 * 6 - 0 * 6) = 6
+                    // abs(1 * 6 - 1 * 6) = 0
+                    draw.rect(pos.into(), (92., 102.)).color(Color::BLACK);
+
+                    unit_card_draw(
+                        pos,
+                        app,
+                        gfx,
+                        &state.assets,
+                        &state.fonts[0],
+                        &mut state.battle,
+                        &mut state.gamemap,
+                        draw,
+                        army,
+                        i + (army as i64 - row as i64).abs() as usize * half_troops,
+                    );
+                }
+            }
+        }
+    }
+    #[repr(u64)]
+    enum StartSubMenu {
+        Map = 0,
+        Battle = 1,
+        Building = 2,
+        Army = 3,
+        Message = 4,
+    }
+    impl From<i64> for StartSubMenu {
+        fn from(value: i64) -> Self {
+            match value {
+                1 => Self::Battle,
+                2 => Self::Building,
+                3 => Self::Army,
+                4 => Self::Message,
+                _ => Self::Map,
+            }
+        }
+    }
     hashmap.insert(
         Menu::Start as usize,
-        single(
-			get_form_map()?)
+        single(get_form_map()?)
             .on_draw(|_, _, _, _, _, _: &mut State, draw| {
                 draw.rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
                     .color(Color::ORANGE);
             })
-			
-			.build()?,
+            .build()?,
     );
-	hashmap.insert(
+    hashmap.insert(
         Menu::Connect as usize,
-        single(
-			get_form_server_map()?)
+        single(get_form_server_map()?)
             .on_draw(|_, _, _, _, _, _: &mut State, draw| {
                 draw.rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
                     .color(Color::ORANGE);
             })
-			
-			.build()?,
+            .build()?,
     );
     hashmap.insert(
         Menu::UnitView as usize,
         SingleContainer {
             inside: Some(DynContainer {
                 inside: vec![Box::new(
-                    TupleContainerBuilder::default().inside((
-                        Drawing {
-                            pos: Position(100., 0.),
-                            to_draw: |drawing, _, _, _, _, state: &mut State, draw| {
-                                let num = get_menu_value_num(state, "char_view_selected")
-                                    .unwrap_or(1)
-                                    - 1;
-                                let asset = state
-                                    .assets
-                                    .get("assets/Icons")
-                                    .unwrap()
-                                    .get(&format!("img_{}.png", num.to_string()))
-                                    .unwrap();
-                                let texture = asset.lock().unwrap();
-                                draw.image(&texture).position(drawing.pos.0, drawing.pos.1);                            
-                            },
-                        },
-                        container(vec![
-                            button(nav_button_text("Пред.".into()), nav_button_rect)
-                            .if_clicked(
-                                |_, _, _, _, state: &mut State| {
-                                    match state.menu_data.get_mut("char_view_selected") {
-                                        Some(value) => match value {
-                                            Value::Num(num) => {
-                                                if *num > 1 {
-                                                    *num -= 1;
-                                                }
-                                            }
-                                            _ => {}
-                                        },
-                                        None => {
-                                            state.menu_data.insert(
-                                                "char_view_selected",
-                                                Value::Num(1),
-                                            );
-                                        }
-                                    }
-                                    set_menu_value_num(state, "char_view_changed", 1);
-                                },
-                            )
-                            .build()?,
-                            button(nav_button_text("След.".into()), nav_button_rect)
-                            .if_clicked(
-                                |_, _, _, _, state: &mut State| {
-                                    let _nav_button_rect = Rect {
-                                        pos: Position(0., 0.),
-                                        size: Size(70., 100.),
-                                    };
-                                    let _nav_button_text = |text: String| {
-                                        Some(Text {
-                                            text,
-                                            font: FontId(0),
-                                            align_h: AlignHorizontal::Left,
-                                            align_v: AlignVertical::Bottom,
-                                            pos: Position(0., 100.),
-                                            size: 10.,
-                                            rect_size: None,
-                                            max_width: None,
-                                            color: Color::BLACK,
-                                            boo: std::marker::PhantomData::<State>,
-                                        })
-                                    };
-                                    set_menu_value_num(state, "char_view_changed", 1);
-                                },
-                            )
-                            .build()?
-                        ])
-                        .interval(Position(150., 0.))
-                        .build()?,
-                        single(text("АБОБА".into())
-                            .size(20.0)
-                            .build()?
-                        )
-                        .after_draw(
-                            |container, app, _, _, state: &mut State| {
-                                if app.keyboard.is_down(KeyCode::Escape) {
-                                    state.menu_id = Menu::Main as usize;
-                                }
-                                if get_menu_value_num(state, "char_view_changed").unwrap_or(1)
-                                    == 1
-                                {
+                    TupleContainerBuilder::default()
+                        .inside((
+                            Drawing {
+                                pos: Position(100., 0.),
+                                to_draw: |drawing, _, _, _, _, state: &mut State, draw| {
                                     let num = get_menu_value_num(state, "char_view_selected")
-                                        .unwrap_or(1);
-                                    match &mut container.inside {
-                                        Some::<Text<State, String>>(text) => {
-                                            text.text = state
-                                                .units
-                                                .get(&(num as usize))
-                                                .unwrap()
-                                                .to_string();
-                                            set_menu_value_num(state, "char_view_changed", 0);
-                                        }
-                                        None => {}
-                                    }
-                                }
+                                        .unwrap_or(1)
+                                        - 1;
+                                    let asset = state
+                                        .assets
+                                        .get("assets/Icons")
+                                        .unwrap()
+                                        .get(&format!("img_{}.png", num.to_string()))
+                                        .unwrap();
+                                    let texture = asset.lock().unwrap();
+                                    draw.image(&texture).position(drawing.pos.0, drawing.pos.1);
+                                },
                             },
-                        )
-                        .pos(Position(0., 200.))
-                        .build()?
-                    ))
-                    .build()?
+                            container(vec![
+                                button(nav_button_text("Пред.".into()), nav_button_rect)
+                                    .if_clicked(|_, _, _, _, state: &mut State| {
+                                        match state.menu_data.get_mut("char_view_selected") {
+                                            Some(value) => match value {
+                                                Value::Num(num) => {
+                                                    if *num > 1 {
+                                                        *num -= 1;
+                                                    }
+                                                }
+                                                _ => {}
+                                            },
+                                            None => {
+                                                state
+                                                    .menu_data
+                                                    .insert("char_view_selected", Value::Num(1));
+                                            }
+                                        }
+                                        set_menu_value_num(state, "char_view_changed", 1);
+                                    })
+                                    .build()?,
+                                button(nav_button_text("След.".into()), nav_button_rect)
+                                    .if_clicked(|_, _, _, _, state: &mut State| {
+                                        let _nav_button_rect = Rect {
+                                            pos: Position(0., 0.),
+                                            size: Size(70., 100.),
+                                        };
+                                        let _nav_button_text = |text: String| {
+                                            Some(Text {
+                                                text,
+                                                font: FontId(0),
+                                                align_h: AlignHorizontal::Left,
+                                                align_v: AlignVertical::Bottom,
+                                                pos: Position(0., 100.),
+                                                size: 10.,
+                                                rect_size: None,
+                                                max_width: None,
+                                                color: Color::BLACK,
+                                                boo: std::marker::PhantomData::<State>,
+                                            })
+                                        };
+                                        set_menu_value_num(state, "char_view_changed", 1);
+                                    })
+                                    .build()?,
+                            ])
+                            .interval(Position(150., 0.))
+                            .build()?,
+                            single(text("АБОБА".into()).size(20.0).build()?)
+                                .after_draw(|container, app, _, _, state: &mut State| {
+                                    if app.keyboard.is_down(KeyCode::Escape) {
+                                        state.menu_id = Menu::Main as usize;
+                                    }
+                                    if get_menu_value_num(state, "char_view_changed").unwrap_or(1)
+                                        == 1
+                                    {
+                                        let num = get_menu_value_num(state, "char_view_selected")
+                                            .unwrap_or(1);
+                                        match &mut container.inside {
+                                            Some::<Text<State, String>>(text) => {
+                                                text.text = state
+                                                    .units
+                                                    .get(&(num as usize))
+                                                    .unwrap()
+                                                    .to_string();
+                                                set_menu_value_num(state, "char_view_changed", 0);
+                                            }
+                                            None => {}
+                                        }
+                                    }
+                                })
+                                .pos(Position(0., 200.))
+                                .build()?,
+                        ))
+                        .build()?,
                 )],
                 ..Default::default()
             }),
             on_draw: Some(|_, _, _, _, _, _: &mut State, draw| {
-                draw
-                    .rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
+                draw.rect((0., 0.), *MONITOR_SIZE.lock().unwrap())
                     .color(Color::ORANGE);
             }),
             after_draw: None,
             pos: Position(0., 0.),
-        }
+        },
     );
     fn draw_unit_info(unit: &Unit, pos: Position, font: &Font, draw: &mut Draw) {
         let stats = &unit.modified;
@@ -1707,38 +1935,44 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
         pos: Position,
         _: &mut App,
         _: &mut Graphics,
-		assets: &HashMap<&'static str, HashMap<String, Asset<Texture>>>,
+        assets: &HashMap<&'static str, HashMap<String, Asset<Texture>>>,
         font: &Font,
-		battle: &mut BattleInfo,
-		gamemap: &mut GameMap,
-		draw: &mut Draw,
+        battle: &mut BattleInfo,
+        gamemap: &mut GameMap,
+        draw: &mut Draw,
         army: usize,
         index: usize,
     ) {
-		let bas_army = army;
-		let army = if army == 0 { battle.army1 } else { battle.army2 };
+        let bas_army = army;
+        let army = if army == 0 {
+            battle.army1
+        } else {
+            battle.army2
+        };
 
-		let field = field_type(index, *MAX_TROOPS);
-		let cell_texture = assets
-			.get("assets/Window")
-			.unwrap()
-			.get(match field {
-				Field::Back => "backyard.png",
-				Field::Front => "front.png",
-				Field::Reserve => "tent.png" 
-			}).unwrap()
-			.lock().unwrap();
-		draw.image(&cell_texture)
-			.position(pos.0, pos.1);
-		let under_cell_texture = assets
-			.get("assets/Window")
-			.unwrap()
-			.get("undercell.png").unwrap()
-			.lock().unwrap();
-		draw.image(&under_cell_texture)
-			.position(pos.0, pos.1 + 92.);
-		if let Some(troop) = gamemap.armys[army as usize].get_troop(index) {
-			let troop = troop.get();
+        let field = field_type(index, *MAX_TROOPS);
+        let cell_texture = assets
+            .get("assets/Window")
+            .unwrap()
+            .get(match field {
+                Field::Back => "backyard.png",
+                Field::Front => "front.png",
+                Field::Reserve => "tent.png",
+            })
+            .unwrap()
+            .lock()
+            .unwrap();
+        draw.image(&cell_texture).position(pos.0, pos.1);
+        let under_cell_texture = assets
+            .get("assets/Window")
+            .unwrap()
+            .get("undercell.png")
+            .unwrap()
+            .lock()
+            .unwrap();
+        draw.image(&under_cell_texture).position(pos.0, pos.1 + 92.);
+        if let Some(troop) = gamemap.armys[army as usize].get_troop(index) {
+            let troop = troop.get();
             let unit = &troop.unit;
             let texture = assets
                 .get("assets/Icons")
@@ -1748,26 +1982,27 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                 .lock()
                 .unwrap();
             let stats = unit.modified;
-			// if <UnitPos as Into<usize>>::into(troop.pos) != index {
-			// 	return;
-			//}
-			let size = unit.info.size;
-            draw.image(&texture).position(pos.0, pos.1)
+            // if <UnitPos as Into<usize>>::into(troop.pos) != index {
+            // 	return;
+            //}
+            let size = unit.info.size;
+            draw.image(&texture)
+                .position(pos.0, pos.1)
                 .size(size.0 as f32 * 92., size.1 as f32 * 92.);
-			let size = (1, 1);
-			{
-				let pos = pos + Position( (size.0 - 1) as f32 * 46., (size.1 - 1) as f32 * 92.);
-				draw.rect((pos.0, pos.1 + 92.), (92., 50.))
-					.color(if troop.is_main {
-						Color::RED
-					} else if troop.is_free {
-						Color::BLUE
-					} else {
-						Color::BROWN
-					});
-				draw_unit_info(unit, pos, font, draw);
-			}
-			draw.text(font, &*format!("{};{};{};{}", army, index, pos.0, bas_army))
+            let size = (1, 1);
+            {
+                let pos = pos + Position((size.0 - 1) as f32 * 46., (size.1 - 1) as f32 * 92.);
+                draw.rect((pos.0, pos.1 + 92.), (92., 50.))
+                    .color(if troop.is_main {
+                        Color::RED
+                    } else if troop.is_free {
+                        Color::BLUE
+                    } else {
+                        Color::BROWN
+                    });
+                draw_unit_info(unit, pos, font, draw);
+            }
+            draw.text(font, &*format!("{};{};{};{}", army, index, pos.0, bas_army))
                 .color(Color::BLACK)
                 .position(pos.0, pos.1);
             let health_rect = (
@@ -1778,16 +2013,23 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
                 ),
             );
             draw.rect(health_rect.0, health_rect.1)
-                 .color(Color::from_rgba(1., 0., 0.,  1. - stats.hp as f32 / stats.max_hp as f32));
-			if let Some(active_unit) = battle.active_unit {
-				if active_unit.0 == army && let Some(index) = gamemap.armys[army].hitmap[index] {
-					if active_unit.1 == index {
-						draw.rect((pos.0, pos.1), (92., 92.))
-							.color(Color::TRANSPARENT)
-							.stroke_color(Color::from_rgba(0., 255., 0., 0.3))
-							.stroke(10.);
-					}	
-				} else if let Some(can_interact) = &battle.can_interact {
+                .color(Color::from_rgba(
+                    1.,
+                    0.,
+                    0.,
+                    1. - stats.hp as f32 / stats.max_hp as f32,
+                ));
+            if let Some(active_unit) = battle.active_unit {
+                if active_unit.0 == army
+                    && let Some(index) = gamemap.armys[army].hitmap[index]
+                {
+                    if active_unit.1 == index {
+                        draw.rect((pos.0, pos.1), (92., 92.))
+                            .color(Color::TRANSPARENT)
+                            .stroke_color(Color::from_rgba(0., 255., 0., 0.3))
+                            .stroke(10.);
+                    }
+                } else if let Some(can_interact) = &battle.can_interact {
                     if can_interact.contains(&(army, index)) {
                         draw.rect((pos.0, pos.1), (92., 92.))
                             .color(Color::TRANSPARENT)
@@ -1802,53 +2044,77 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
             }
         }
     }
-	type AssetsMap = HashMap<&'static str, HashMap<String, Asset<Texture>>>;
-	fn handle_action_result(res: ActionResult, active_unit: (usize, usize), to: (usize, usize)) -> AnimationTime<AssetsMap> {
-		let texture = match res {
-			ActionResult::Move => {
-				|assets: &AssetsMap| assets.get_texture("assets/Window", "buff.png").clone()
-			},
-			ActionResult::Buff => {
-				|assets: &AssetsMap| assets.get_texture("assets/Window", "buff.png").clone()
-			},
-			ActionResult::Debuff => {
-				|assets: &AssetsMap| assets.get_texture("assets/Window", "debuff.png").clone()
-			},
-			ActionResult::Melee => {
-				|assets: &AssetsMap| assets.get_texture("assets/Window", "melee.png").clone()
-			},
-			ActionResult::Ranged => {
-				|assets: &AssetsMap| assets.get_texture("assets/Window", "ranged.png").clone()
-			}
-		};
-		dbg!(&active_unit, &to);
-		let line = *MAX_TROOPS / MAX_LINES;
-		AnimationTime::new(
-			Animation::new(
-				MovementChange::new(
-					((active_unit.0 % line) as f32 * BETWEEN_CELLS + BETWEEN_CELLS / 2. - 25.,
-					 ((active_unit.1 as i64).abs() * 500) as f32 + (((to.0 as i64 / line as i64).max(MAX_LINES as i64 - 1)).abs() as f32 * BETWEEN_CELLS) as f32 - 25.),
-					((to.0 % line) as f32 * BETWEEN_CELLS + BETWEEN_CELLS / 2. - 25.,
-					 ((to.1 as i64).abs() * 500) as f32 + (((to.0 as i64 / line as i64).max(MAX_LINES as i64 - 1)).abs() as f32 * BETWEEN_CELLS) as f32 - 25.),
-				),
-				SizeChange::new((50.,50.),(60.,60.)),
-				(Instant::now(), Duration::from_secs(1)),
-				(false, false)
-			),
-			texture, Duration::from_secs(1))
-	}
-	fn handle_animations(state: &mut State, to: (usize, usize), res: Option<(ActionResult, (usize, usize))>) {
-		let Some((res, mut active_unit)) = res else {return;};
-		//let Some(mut active_unit) = state.battle.active_unit.clone() else {return;};
-		let battle = &state.battle;
-		let gamemap = &state.gamemap;
-		let index = active_unit.1;
-		dbg!(&active_unit.0, battle.army1, battle.army2);
-		active_unit.1 = if active_unit.0 == battle.army1 { 0 } else { 1 };
-		let active_index: usize = dbg!(gamemap.armys[active_unit.0].troops[index].get().pos).into();
-		active_unit.0 = active_index;
-		state.animations.push(handle_action_result(res, active_unit, to));
-	}
+    type AssetsMap = HashMap<&'static str, HashMap<String, Asset<Texture>>>;
+    fn handle_action_result(
+        res: ActionResult,
+        active_unit: (usize, usize),
+        to: (usize, usize),
+    ) -> AnimationTime<AssetsMap> {
+        let texture = match res {
+            ActionResult::Move => {
+                |assets: &AssetsMap| assets.get_texture("assets/Window", "buff.png").clone()
+            }
+            ActionResult::Buff => {
+                |assets: &AssetsMap| assets.get_texture("assets/Window", "buff.png").clone()
+            }
+            ActionResult::Debuff => {
+                |assets: &AssetsMap| assets.get_texture("assets/Window", "debuff.png").clone()
+            }
+            ActionResult::Melee => {
+                |assets: &AssetsMap| assets.get_texture("assets/Window", "melee.png").clone()
+            }
+            ActionResult::Ranged => {
+                |assets: &AssetsMap| assets.get_texture("assets/Window", "ranged.png").clone()
+            }
+        };
+        dbg!(&active_unit, &to);
+        let line = *MAX_TROOPS / MAX_LINES;
+        AnimationTime::new(
+            Animation::new(
+                MovementChange::new(
+                    (
+                        (active_unit.0 % line) as f32 * BETWEEN_CELLS + BETWEEN_CELLS / 2. - 25.,
+                        ((active_unit.1 as i64).abs() * 500) as f32
+                            + (((to.0 as i64 / line as i64).max(MAX_LINES as i64 - 1)).abs() as f32
+                                * BETWEEN_CELLS) as f32
+                            - 25.,
+                    ),
+                    (
+                        (to.0 % line) as f32 * BETWEEN_CELLS + BETWEEN_CELLS / 2. - 25.,
+                        ((to.1 as i64).abs() * 500) as f32
+                            + (((to.0 as i64 / line as i64).max(MAX_LINES as i64 - 1)).abs() as f32
+                                * BETWEEN_CELLS) as f32
+                            - 25.,
+                    ),
+                ),
+                SizeChange::new((50., 50.), (60., 60.)),
+                (Instant::now(), Duration::from_secs(1)),
+                (false, false),
+            ),
+            texture,
+            Duration::from_secs(1),
+        )
+    }
+    fn handle_animations(
+        state: &mut State,
+        to: (usize, usize),
+        res: Option<(ActionResult, (usize, usize))>,
+    ) {
+        let Some((res, mut active_unit)) = res else {
+            return;
+        };
+        //let Some(mut active_unit) = state.battle.active_unit.clone() else {return;};
+        let battle = &state.battle;
+        let gamemap = &state.gamemap;
+        let index = active_unit.1;
+        dbg!(&active_unit.0, battle.army1, battle.army2);
+        active_unit.1 = if active_unit.0 == battle.army1 { 0 } else { 1 };
+        let active_index: usize = dbg!(gamemap.armys[active_unit.0].troops[index].get().pos).into();
+        active_unit.0 = active_index;
+        state
+            .animations
+            .push(handle_action_result(res, active_unit, to));
+    }
     const BETWEEN_CELLS: f32 = 102.;
     hashmap.insert(Menu::Battle as usize, SingleContainer {
         inside: Some(DynContainer {
@@ -2014,36 +2280,52 @@ fn gen_forms(size: (f32,f32)) -> Result<(), String> {
         }),
         pos: Position(0., 0.)
     });
-	fn handle_server_action(connection: &mut Option<ConnectionManager>, action: (usize, usize)) {
-		let Some(connection) = connection else {
-			return;
-		};
-		match &mut connection.con {
-			Connection::Client(con) => {
-				let message = ClientMessage::Action(action);
-				let size = serialized_size::<ClientMessage, _>(&message);
-				let mut output = vec![0u8; size.0];
-				serialize::<ClientMessage, ClientMessage>(message, &mut output);
-				con.client.send_message(renet::DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
-			},
-			Connection::Host(server) => {
-				if server.auth.get(&HOST_CLIENT_ID) != connection.battle.active_unit.and_then(|v| Some(v.0)).as_ref() {
-					return;
-				}
-				handle_action(Action::Cell(action.0, action.1), &mut connection.battle, &mut connection.gamemap);
-				let message = ServerMessage::State(
-					(connection.battle.clone(), connection.gamemap.clone())
-				);
-				let size = serialized_size::<ServerMessage, _>(&message);
-				let mut output = vec![0u8; size.0];
-				serialize::<ServerMessage, ServerMessage>(message, &mut output).ok();
-				
-				server.server.send_message(ClientId::from_raw(255), DefaultChannel::ReliableOrdered, renet::Bytes::copy_from_slice(&output));
-			}
-		};
-	}
-	
-	hashmap.insert(Menu::ConnectBattle as usize, SingleContainer {
+    fn handle_server_action(connection: &mut Option<ConnectionManager>, action: (usize, usize)) {
+        let Some(connection) = connection else {
+            return;
+        };
+        match &mut connection.con {
+            Connection::Client(con) => {
+                let message = ClientMessage::Action(action);
+                let size = serialized_size::<ClientMessage, _>(&message);
+                let mut output = vec![0u8; size.0];
+                serialize::<ClientMessage, ClientMessage>(message, &mut output);
+                con.client.send_message(
+                    renet::DefaultChannel::ReliableOrdered,
+                    renet::Bytes::copy_from_slice(&output),
+                );
+            }
+            Connection::Host(server) => {
+                if server.auth.get(&HOST_CLIENT_ID)
+                    != connection
+                        .battle
+                        .active_unit
+                        .and_then(|v| Some(v.0))
+                        .as_ref()
+                {
+                    return;
+                }
+                handle_action(
+                    Action::Cell(action.0, action.1),
+                    &mut connection.battle,
+                    &mut connection.gamemap,
+                );
+                let message =
+                    ServerMessage::State((connection.battle.clone(), connection.gamemap.clone()));
+                let size = serialized_size::<ServerMessage, _>(&message);
+                let mut output = vec![0u8; size.0];
+                serialize::<ServerMessage, ServerMessage>(message, &mut output).ok();
+
+                server.server.send_message(
+                    ClientId::from_raw(255),
+                    DefaultChannel::ReliableOrdered,
+                    renet::Bytes::copy_from_slice(&output),
+                );
+            }
+        };
+    }
+
+    hashmap.insert(Menu::ConnectBattle as usize, SingleContainer {
         inside: Some(DynContainer {
             inside: vec![
                 Box::new(StraightDynContainer {
@@ -2258,7 +2540,7 @@ fn gen_army_troops(
                 was_payed: true,
                 is_free: false,
                 is_main: false,
-				pos: UnitPos::from_index(i),
+                pos: UnitPos::from_index(i),
                 custom_name: None,
                 unit: {
                     let mut unit = loop {
@@ -2281,7 +2563,7 @@ fn gen_army_troops(
                     was_payed: true,
                     is_free: false,
                     is_main: false,
-					pos: UnitPos::from_index(i),
+                    pos: UnitPos::from_index(i),
                     custom_name: None,
                     unit: {
                         let mut unit = loop {
@@ -2337,10 +2619,7 @@ fn gen_tilemap() -> (Tilemap<usize>, (u32, u32)) {
         seeds,
     )
 }
-fn gen_decomap(
-    seeds: (u32, u32),
-    first_tree_index: usize,
-) -> Tilemap<Option<usize>> {
+fn gen_decomap(seeds: (u32, u32), first_tree_index: usize) -> Tilemap<Option<usize>> {
     let noise = PerlinNoise::new();
     let mut rng = thread_rng();
     let nm1 = NoiseMap::new(noise)
@@ -2461,107 +2740,130 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
     //     }
     //     assets.insert(dir, dir_assets);
     // }
-	assets.insert("assets/Terrain", HashMap::new());
-	for tile in TILES {
-		let path = tile.sprite();
-		let asset = assets
-			.get_mut("assets/Terrain").unwrap()
-			.insert(path.to_string(),
-					load_asset(app_assets, gfx, &format!("assets/Terrain/{path}")).unwrap());
-	}
-	assets.insert("assets/Armys", {
-		let mut mapa = HashMap::new();
-		mapa.insert("Army.png".into(),
-					load_asset(app_assets, gfx, &format!("assets/Army.png")).unwrap());
-		mapa
-	});
-	assets.insert("assets/Window", {
-		let mut mapa = HashMap::new();
-		for asset in ["front.png", "backyard.png", "tent.png", "undercell.png",
-					  "melee.png", "ranged.png", "buff.png", "debuff.png",
-					  "button.png", "buttonblue.png", "cursor.png",
-					  "Menu.png", "gold.png", "red.png"
-		] {
-			mapa.insert(asset.to_string(),
-						load_asset(app_assets, gfx, &format!("assets/Window/{asset}")).unwrap());
-		}
-		mapa
-	});
-	
-    let settings = parse_settings(app_assets);
-	
-	app.window().set_fullscreen(settings.fullscreen);
-	app.window().set_size(settings.init_size.0, settings.init_size.1);
-    parse_items(&settings.locale, app_assets, gfx, &mut assets);
-	dbg!(&settings);
-	{
-		let locale = &mut LOCALE.lock().unwrap();
-		parse_locale(app_assets, &[&settings.locale, &settings.additional_locale], locale);
-		locale.set_lang((&settings.locale, &settings.additional_locale));
-	}
-    let units = parse_units(app_assets, &mut assets, gfx);
-    let objects = parse_objects(app_assets, gfx, &mut assets);
+    assets.insert("assets/Terrain", HashMap::new());
+    for tile in TILES {
+        let path = tile.sprite();
+        let asset = assets.get_mut("assets/Terrain").unwrap().insert(
+            path.to_string(),
+            load_asset(gfx, &format!("assets/Terrain/{path}")).unwrap(),
+        );
+    }
+    assets.insert("assets/Armys", {
+        let mut mapa = HashMap::new();
+        mapa.insert(
+            "Army.png".into(),
+            load_asset(gfx, &format!("assets/Army.png")).unwrap(),
+        );
+        mapa
+    });
+    assets.insert("assets/Window", {
+        let mut mapa = HashMap::new();
+        for asset in [
+            "front.png",
+            "backyard.png",
+            "tent.png",
+            "undercell.png",
+            "melee.png",
+            "ranged.png",
+            "buff.png",
+            "debuff.png",
+            "button.png",
+            "buttonblue.png",
+            "cursor.png",
+            "Menu.png",
+            "gold.png",
+            "red.png",
+        ] {
+            mapa.insert(
+                asset.to_string(),
+                load_asset(gfx, &format!("assets/Window/{asset}")).unwrap(),
+            );
+        }
+        mapa
+    });
 
-	let (mut gamemap, gameevents) = parse_story(app_assets, &units, &objects, &settings.locale, &settings.additional_locale);
-	gamemap.calc_hitboxes(&objects);
-	
-	let terrain = assets.get("assets/Terrain").unwrap();
-	let mut draw: Draw = gfx.create_draw();
-	for i in 0..MAP_SIZE {
-		for j in 0..MAP_SIZE {
-			let asset = terrain
-                    .get(TILES[gamemap.tilemap[i][j]].sprite())
-                    .unwrap();
-			draw.image(
-				&*asset.lock().unwrap()
-			)
-				.position(i as f32 * 52., j as f32 * 40.)
-				.size(52., 40.);
-		}
-	}
-	let texture = gfx.create_render_texture(MAP_SIZE as u32 * 52, MAP_SIZE as u32 * 40)
-		.build().unwrap();
-	gfx.render_to(&texture, &draw);
-	assets.insert("assets/Map", {
-		let mut mapa = HashMap::new();
-		mapa.insert("Map".to_string(), Asset::from_data("map", texture.take_inner()));
-		mapa
-	});
+    let settings = parse_settings();
+
+    app.window().set_fullscreen(settings.fullscreen);
+    app.window()
+        .set_size(settings.init_size.0, settings.init_size.1);
+    parse_items(&settings.locale, gfx, &mut assets);
+    dbg!(&settings);
+    {
+        let locale = &mut LOCALE.lock().unwrap();
+        parse_locale(      
+            &[&settings.locale, &settings.additional_locale],
+            locale,
+        );
+        locale.set_lang((&settings.locale, &settings.additional_locale));
+    }
+    let units = parse_units(&mut assets, gfx);
+    let objects = parse_objects(gfx, &mut assets);
+
+    let (mut gamemap, gameevents) = parse_story(
+        &units,
+        &objects,
+        &settings.locale,
+        &settings.additional_locale,
+    );
+    gamemap.calc_hitboxes(&objects);
+
+    let terrain = assets.get("assets/Terrain").unwrap();
+    let mut draw: Draw = gfx.create_draw();
+    for i in 0..MAP_SIZE {
+        for j in 0..MAP_SIZE {
+            let asset = terrain.get(TILES[gamemap.tilemap[i][j]].sprite()).unwrap();
+            draw.image(&*asset.lock().unwrap())
+                .position(i as f32 * 52., j as f32 * 40.)
+                .size(52., 40.);
+        }
+    }
+    let texture = gfx
+        .create_render_texture(MAP_SIZE as u32 * 52, MAP_SIZE as u32 * 40)
+        .build()
+        .unwrap();
+    gfx.render_to(&texture, &draw);
+    assets.insert("assets/Map", {
+        let mut mapa = HashMap::new();
+        mapa.insert(
+            "Map".to_string(),
+            Asset::from_data("map", texture.take_inner()),
+        );
+        mapa
+    });
     // let tilemap = gen_tilemap();
-	// gamemap.tilemap = tilemap.0;
+    // gamemap.tilemap = tilemap.0;
     // gamemap.decomap = gen_decomap(
-	// 	tilemap.1,
+    // 	tilemap.1,
     //     objects
     //         .iter()
     //         .position(|obj| obj.path == "Tree0.png")
     //         .unwrap(),
     // );
     let mut state = State {
-		execution_queue: VecDeque::new(),
+        execution_queue: VecDeque::new(),
         fonts: vec![
-			gfx
-				.create_font(include_bytes!("Benguiat Rus Regular.ttf"))
-				.expect("shit happens"),
-			gfx
-				.create_font(include_bytes!("Z003-MediumItalic.ttf"))
-				.expect("shit happens"),
-			gfx
-				.create_font(include_bytes!("Ru_Gothic.ttf"))
-				.expect("shit happens")],
-		animations: Vec::new(),
+            gfx.create_font(include_bytes!("Benguiat Rus Regular.ttf"))
+                .expect("shit happens"),
+            gfx.create_font(include_bytes!("Z003-MediumItalic.ttf"))
+                .expect("shit happens"),
+            gfx.create_font(include_bytes!("Ru_Gothic.ttf"))
+                .expect("shit happens"),
+        ],
+        animations: Vec::new(),
         draw: gfx.create_draw(),
         frame: 0,
-		pause: true,
-		connection: None,
+        pause: true,
+        connection: None,
         gamemap,
-		gameevents,
-		gameloop_time: Duration::new(0, 0),
+        gameevents,
+        gameloop_time: Duration::new(0, 0),
         units,
         menu_id: 0,
         menu_data: HashMap::new(),
         assets,
         battle: BattleInfo {
-			winner: None,
+            winner: None,
             army1: 1,
             army2: 0,
             battle_ter: 0,
@@ -2577,11 +2879,11 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
     let mut battle = state.battle.clone();
     battle.start(&mut state.gamemap);
     state.battle = battle;
-	dbg!(&state.battle);
-	let size = gfx.size();
-	let size = (size.0 as f32, size.1 as f32);
-	*MONITOR_SIZE.lock().unwrap() = size;
-	gen_forms(size).expect("gen_forms failed:()");
+    dbg!(&state.battle);
+    let size = gfx.size();
+    let size = (size.0 as f32, size.1 as f32);
+    *MONITOR_SIZE.lock().unwrap() = size;
+    gen_forms(size).expect("gen_forms failed:()");
     dbg!(size_of::<ModifyUnitStats>());
     state
 }
@@ -2592,20 +2894,20 @@ fn draw(
     plugins: &mut Plugins,
     state: &mut State,
 ) {
-	if !state.animations.is_empty() {
-		let mut i = 0;
-		loop {
-			if state.animations[i].is_over(Instant::now()) {
-				state.animations.remove(i);
-				i -= 1;
-			}
-			if i + 1 >= state.animations.len() {
-				break
-			}
-			i += 1;
-		}
-	}
-	let mut draw = gfx.create_draw();
+    if !state.animations.is_empty() {
+        let mut i = 0;
+        loop {
+            if state.animations[i].is_over(Instant::now()) {
+                state.animations.remove(i);
+                i -= 1;
+            }
+            if i + 1 >= state.animations.len() {
+                break;
+            }
+            i += 1;
+        }
+    }
+    let mut draw = gfx.create_draw();
     FORMS
         .lock()
         .unwrap()
@@ -2623,13 +2925,13 @@ fn update(app: &mut App, assets: &mut Assets, plugins: &mut Plugins, state: &mut
         .after(app, assets, plugins, state);
 }
 fn event(state: &mut State, event: notan::Event) {
-	match event {
-		notan::Event::WindowResize { width, height } => {
-			*MONITOR_SIZE.lock().unwrap() = (width as f32, height as f32);
-			gen_forms((width as f32, height as f32)).ok();
-		}
-		_ => {}
-	}
+    match event {
+        notan::Event::WindowResize { width, height } => {
+            *MONITOR_SIZE.lock().unwrap() = (width as f32, height as f32);
+            gen_forms((width as f32, height as f32)).ok();
+        }
+        _ => {}
+    }
 }
 #[notan_main]
 fn main() -> Result<(), String> {

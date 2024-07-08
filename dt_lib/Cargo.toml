@@ -1,0 +1,29 @@
+[package] 
+name = "dt_lib" 
+version = "0.1.0" 
+edition = "2021" 
+description = "A library of discord times components."
+ 
+[dependencies] 
+dyn-clone = "1.0.6" 
+derive_more = {version="0.99.16"} 
+rand = "^0.8.0" 
+notan = {git = "https://github.com/Nazariglez/notan.git", features=["text", "log"], rev="dbe1a0d"} 
+notan_ui = {path = "../notan_ui"} 
+math_thingies = {path = "../math_thingies"} 
+num = "0.4.0" 
+anyhow = "1.0.65" 
+derive_builder = "0.12.0" 
+once_cell = "1.15.0" 
+tracing-mutex = "0.2.1" 
+ini_core = { path = "../ini_core" } 
+worldgen = "0.5.3" 
+pathfinding = "4.3.1" 
+parking_lot = "0.12.1" 
+advini = { path = "../advini" } 
+renet = "0.0.14" 
+alkahest = { git = "https://github.com/zakarumych/alkahest.git", rev = "99a5b68", features=["derive"] } 
+enum_dispatch = "0.3.12" 
+bytemuck = "1.14.1"
+serde = { version = "1.0", features = ["derive"] }
+struct-field-names-as-array = "0.3.0"

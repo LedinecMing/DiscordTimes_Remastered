@@ -8,6 +8,7 @@ DT_THINGS/*
 Water/**
 notan/**
 notan
+dt_launcher
 Cargo.lock
 
 !*/assets/*
