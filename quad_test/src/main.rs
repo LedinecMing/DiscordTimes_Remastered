@@ -1,2 +1,0 @@
-use macroquad;
-fn main() {}

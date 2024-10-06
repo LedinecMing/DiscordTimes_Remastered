@@ -1,4 +1,3 @@
-#![feature(associated_type_bounds)]
 #![feature(associated_type_defaults)]
 #![feature(trait_alias)]
 #![feature(div_duration)]

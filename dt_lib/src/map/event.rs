@@ -342,7 +342,7 @@ pub fn execute_event(
     event: usize,
     gamemap: &mut GameMap,
     events: &mut Vec<Event>,
-    units: &HashMap<usize, Unit>,
+    units: &Vec<Unit>,
     executed_as_sub: bool,
 ) -> Option<Vec<Execute>> {
     {
@@ -418,7 +418,7 @@ pub fn execute_event_as_player(
     location: &Location,
     gamemap: &mut GameMap,
     player: usize,
-    units: &HashMap<usize, Unit>,
+    units: &Vec<Unit>,
 ) -> Option<Vec<Execute>> {
     match location {
         Location::Local(building) => {
@@ -502,7 +502,7 @@ pub fn execute_event_as_player(
             if let Some(add_units) = &mut result.add_units {
                 add_units.iter().for_each(|unit| {
                     army.add_troop(SendMut::new(Troop {
-                        unit: units[unit].clone(),
+                        unit: units[*unit].clone(),
                         custom_name: None,
                         is_free: true,
                         was_payed: true,
@@ -559,7 +559,7 @@ impl DelayedEvent {
         gamemap: &mut GameMap,
         events: &mut Vec<Event>,
         player: usize,
-        units: &HashMap<usize, Unit>,
+        units: &Vec<Unit>,
     ) -> Option<()> {
         if self.time <= gamemap.time {
             execute_event(self.event, gamemap, events, units, false);

@@ -19,7 +19,7 @@ use derive_more::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign
 use math_thingies::Percent;
 use std::fmt::{Debug, Display, Formatter};
 
-#[derive(Copy, Clone, Debug, Add, Sub)]
+#[derive(Copy, Clone, Debug, Add, Sub, Default)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Defence {
     pub death_magic: Percent,
@@ -46,7 +46,7 @@ impl Defence {
     }
 }
 
-#[derive(Copy, Clone, Debug, Add, Sub)]
+#[derive(Copy, Clone, Debug, Add, Sub, Default)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Power {
     pub magic: u64,
@@ -63,7 +63,7 @@ impl Power {
     }
 }
 
-#[derive(Copy, Clone, Debug, Add, Sub)]
+#[derive(Copy, Clone, Debug, Add, Sub, Default)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct UnitStats {
     pub hp: i64,

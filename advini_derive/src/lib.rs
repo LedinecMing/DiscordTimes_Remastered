@@ -222,7 +222,6 @@ fn trait_body(data: &Data, ident: &Ident) -> (TokenStream, TokenStream, TokenStr
         let ident = &f.aliases.0;
         let ty = &f.ty;
         quote!(
-            dbg!("inline");
             let res = <#ty as Sections>::from_section(remaining).unwrap();
             (#ident, remaining) = (res.0.into(), res.1);
         )

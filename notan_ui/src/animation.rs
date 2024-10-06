@@ -1,6 +1,5 @@
 use notan::{
-    draw::{Draw, DrawBuilder, DrawImages, DrawTransform, Image},
-    graphics::Texture,
+    app::{assets::Asset, Graphics}, draw::{Draw, DrawBuilder, DrawImages, DrawTransform, Image}, graphics::Texture
 };
 use parking_lot::MappedRwLockReadGuard;
 use std::time::{Duration, Instant, SystemTime};
@@ -104,4 +103,17 @@ impl Animate for DrawBuilder<'_, Image<'_>> {
         anim.draw_process(&mut self);
         self
     }
+}
+
+pub fn load_asset(
+    gfx: &mut Graphics,
+    path: &str,
+) -> Result<Asset<Texture>, String> {
+    Ok(Asset::from_data(
+        &*path,
+        gfx.create_texture()
+            .from_image(&std::fs::read(path).unwrap())
+            .build()
+            .unwrap(),
+    ))
 }
