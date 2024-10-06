@@ -3,3 +3,4 @@ pub mod event;
 pub mod map;
 pub mod object;
 pub mod tile;
+pub mod convert;
