@@ -1,2 +1,2 @@
 pub mod effect;
-pub mod effects;
+pub use effect::*;

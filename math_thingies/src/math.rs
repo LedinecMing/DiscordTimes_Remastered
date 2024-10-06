@@ -95,7 +95,7 @@ impl<V: CopyPartOrdNum + NumCast> IsInRange<V> for InUnsignedRange<V> {
         Ok(())
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Percent(i16);
 impl Percent {

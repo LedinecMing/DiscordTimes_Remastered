@@ -24,6 +24,16 @@ impl Debug for Troop {
     }
 }
 impl Troop {
+	pub fn new(unit: Unit) -> Self {
+		Troop {
+			was_payed: true,
+			is_free: false,
+			is_main: false,
+			pos: UnitPos::from_index(0),
+			custom_name: None,
+			unit
+		}
+	}
     pub fn on_pay(&self, army: &mut Army) -> u64 {
         if self.is_free {
             return 0;

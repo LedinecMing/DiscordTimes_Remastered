@@ -13,19 +13,17 @@ use dt_lib::{
         tile::*,
     },
     network::net::*,
-    new_forms::{SubWindowSys, TextureRenderer},
     parse::{
-        load_asset, parse_items, parse_objects, parse_settings, parse_story,
+        parse_items, parse_objects, parse_settings, parse_story,
         parse_units,
     },
 	locale::{parse_locale, Locale},
     time::time::Data as TimeData,
     units::{
         unit::{ActionResult, Unit, UnitPos},
-        unitstats::ModifyUnitStats,
     },
 };
-use notan::{app::GfxRenderer, draw::*, fragment_shader, log, prelude::*, text::TextConfig};
+use notan::{draw::*, fragment_shader, log, prelude::*, text::TextConfig};
 use notan_ui::{
     animation::*, containers::*, defs::*, form::Form, forms::*, rect::*, text::*, wrappers::*,
 };
@@ -33,7 +31,6 @@ use num::clamp;
 use once_cell::sync::Lazy;
 use parking_lot::MappedRwLockReadGuard;
 use rand::{prelude::ThreadRng, thread_rng, Rng};
-use renet::{ClientId, DefaultChannel};
 use std::{
     array::from_fn,
     collections::{HashMap, VecDeque},
@@ -71,12 +68,12 @@ pub struct State {
     pub gameloop_time: Duration,
     pub pause: bool,
     pub execution_queue: VecDeque<Execute>,
-    pub units: HashMap<usize, Unit>,
+    pub units: Vec<Unit>,
     pub objects: Vec<ObjectInfo>,
     pub assets: HashMap<&'static str, HashMap<String, Asset<Texture>>>,
     pub menu_data: HashMap<&'static str, Value>,
     pub menu_id: usize,
-    pub battle: BattleInfo,
+    pub battle: Option<BattleInfo>,
 }
 impl Access<Vec<Font>> for State {
     fn get_mut(&mut self) -> &mut Vec<Font> {
@@ -217,158 +214,21 @@ enum Menu {
     Connect,
     ConnectBattle,
 }
-
-enum Action {
-    Cell(usize, usize),
-    Move(usize, usize, usize),
-}
-fn move_thing(battle: &mut BattleInfo, gamemap: &mut GameMap) {
-    check_win(battle, gamemap);
-    check_row_fall(battle, gamemap);
-    battle.remove_corpses(gamemap);
+fn move_thing(battle: &mut BattleInfo, armys: &mut Vec<Army>) {
+    check_win(battle, armys);
+    check_row_fall(battle, armys);
+    battle.remove_corpses(armys);
     if battle.winner.is_none() {
         if battle.active_unit == None {
-            next_move(battle, gamemap);
-            battle.active_unit = battle.search_next_active(gamemap);
+            next_move(battle, armys);
+            battle.active_unit = battle.search_next_active(armys);
         }
-        battle.can_interact = search_interactions(battle, gamemap);
+        battle.can_interact = search_interactions(battle, armys);
     } else {
         //state.menu_id = Menu::Start as usize;
     }
 }
 
-fn unit_interaction(
-    battle: &mut BattleInfo,
-    gamemap: &mut GameMap,
-    pos: usize,
-    army: usize,
-) -> (Option<ActionResult>, bool) {
-    if let Some(_) = battle.winner {
-        // state.menu_id = Menu::Start as usize;
-        return (None, false);
-    }
-    let mut action_result = None;
-    let army = if army == 0 {
-        battle.army1
-    } else {
-        battle.army2
-    };
-    // if let Some(icon_index) = gamemap.armys[army].hitmap[pos].and_then(|e| Some(gamemap.armys[army].troops[e].get().unit.info.icon_index)) {
-    // 	let unit_index = icon_index as u64 + 1;
-    // 	set_menu_value_num(state, "battle_unit_stat", unit_index as i64);
-    // 	set_menu_value_num(state, "battle_unit_stat_changed", 1);
-    //}
-
-    let mut unit_inactive = false;
-
-    let Some(active_unit) = battle.active_unit else {
-        battle.active_unit = battle.search_next_active(gamemap);
-        move_thing(battle, gamemap);
-        return (None, false);
-    };
-    let Some(target_index) = gamemap.armys[army].hitmap[pos] else {
-        return if army == active_unit.0 {
-            (
-                handle_action(
-                    Action::Move(active_unit.0, active_unit.1, pos),
-                    battle,
-                    gamemap,
-                )
-                .and_then(|v| Some(v.0)),
-                true,
-            )
-        } else {
-            (None, false)
-        };
-    };
-    if active_unit.0 == army && target_index == active_unit.1 {
-        let troop = &mut gamemap.armys[army].troops[target_index].get();
-        if troop_inactive(&troop) {
-            return (None, false);
-        }
-        let unit = &mut troop.unit;
-        unit.stats.moves -= 1;
-        unit.recalc();
-        return (None, troop_inactive(&troop));
-    } else {
-        let target_troops = &gamemap.armys[army].troops;
-        let the_troops = {
-            let active_index = active_unit.1;
-            let active_army = active_unit.0;
-            (
-                gamemap.armys[active_army].troops.get(active_index),
-                target_troops.get(target_index),
-            )
-        };
-        let (Some(active_troop), Some(target_troop)) = the_troops else {
-            return (None, unit_inactive);
-        };
-        let (mut active_troop, mut target_troop) = (active_troop.get(), target_troop.get());
-        if troop_inactive(&active_troop) {
-            return (None, true);
-        }
-        let active_unit_index = active_troop.pos.into();
-        let unit1 = &mut active_troop.unit;
-        let unit2 = &mut target_troop.unit;
-        if !unit2.is_dead() {
-            let res = unit1.attack(
-                unit2,
-                UnitPos::from_index(pos),
-                UnitPos::from_index(active_unit_index),
-                &battle,
-            );
-            if res.is_some() {
-                unit1.stats.moves -= 1;
-                unit1.recalc();
-                if unit1.is_dead() || unit1.modified.moves < 1 {
-                    unit_inactive = true;
-                }
-            }
-            action_result = res;
-        }
-    };
-    (action_result, unit_inactive)
-}
-
-fn handle_action(
-    action: Action,
-    battle: &mut BattleInfo,
-    gamemap: &mut GameMap,
-) -> Option<(ActionResult, (usize, usize))> {
-    match action {
-        Action::Cell(pos, army) => {
-            if let Some(_) = battle.winner {
-                // state.menu_id = Menu::Start as usize;
-                return None;
-            }
-            let active = battle.active_unit;
-            let res = unit_interaction(battle, gamemap, pos, army);
-            if res.1 {
-                battle.active_unit = battle.search_next_active(gamemap);
-            }
-            move_thing(battle, gamemap);
-            res.0.and_then(|v| Some((v, active.unwrap())))
-        }
-        Action::Move(army, troop, to) => {
-            let army = &mut gamemap.armys[army];
-            let unit_inactive = {
-                let troop = &mut army.troops[troop].get();
-                troop.pos = UnitPos::from_index(to);
-                let unit = &mut troop.unit;
-                unit.stats.moves -= 1;
-                unit.recalc();
-                unit.modified.moves < 1 || unit.is_dead()
-            };
-            army.recalc_army_hitmap();
-            let active = battle.active_unit;
-            if unit_inactive {
-                battle.active_unit = battle.search_next_active(gamemap);
-            }
-            move_thing(battle, gamemap);
-            Some((ActionResult::Move, active.unwrap()))
-        }
-    }
-}
 fn gen_forms(size: (f32, f32)) -> Result<(), String> {
     let draw_back_centered: DrawFunction<
         State,
@@ -418,16 +278,6 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
         max_width: None,
         color: Color::BLACK,
         boo: std::marker::PhantomData,
-    };
-    {
-        // SingleContainerBuilder::default()
-        // 	.inside(
-        //         DynContainerBuilder::default()
-        //             .inside(vec![])
-        // 	)
-        // 	.on_draw(|_,_,_,_,_,_| {
-
-        // 	});
     };
     hashmap.insert(
         Menu::Main as usize,
@@ -521,7 +371,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
             let unit = &troop.unit;
             let texture = &state.get_texture(
                 "assets/Icons",
-                &*format!("img_{}.png", unit.info.icon_index),
+                &*format!("unit_{}.png", unit.info.icon_index),
             );
             draw.image(&texture).position(pos.0, pos.1);
             draw.rect((pos.0, pos.1 + 92.), (92., 50.))
@@ -654,7 +504,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                 .inside(DrawingBuilder::<State>::default()
                                         .to_draw(|drawing, _app, _assets, _gfx, _plugins, state, draw| {
                                             let pos = drawing.pos;
-                                            draw.image(&state.get_texture("assets/Icons", &*format!("img_{}.png", get_menu_value_num(state, "items_unit_stat_icon").unwrap_or(1))))
+                                            draw.image(&state.get_texture("assets/Icons", &*format!("unit_{}.png", get_menu_value_num(state, "items_unit_stat_icon").unwrap_or(1))))
                                                 .position(pos.0, pos.1);
                                         })
                                         .pos(Position(900., 100.))
@@ -861,6 +711,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 											draw_battle(cont, app, gfx, state, draw);
 										})
 										.after_draw(|cont,app,assets,plugins,state: &mut State| {
+											let Some(battle) = &mut state.battle else { return; };
 											let half_troops = *MAX_TROOPS / 2;
 											for army in 0..=1 {
 												for row in 0..=1 {
@@ -869,7 +720,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 														pos.0 = cont.pos.0 + i as f32 * 102.;
 														pos.1 = cont.pos.1 + army as f32 * 250. + row as f32 * 112.;
 														if app.mouse.left_was_released() && (Rect { pos: pos, size: Size(92., 102.) }).collides((app.mouse.x, app.mouse.y).into()) {
-															handle_action(Action::Cell(i + (army as i64 - row as i64).abs() as usize * half_troops, army), &mut state.battle, &mut state.gamemap);
+															handle_action(Action::Cell(i + (army as i64 - row as i64).abs() as usize * half_troops, army), battle, &mut state.gamemap.armys);
 														}
 													}
 												}
@@ -1006,9 +857,9 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 										let pos = state.gamemap.armys[0].pos;
 										let diff = (pos.0 as i64 - goal.0 as i64, pos.1 as i64 - goal.1 as i64);
 										if -1 <= diff.0 && diff.0 <= 1 && -1 <= diff.1 && diff.1 <= 1 {
-											if state.battle.army1 != army {
-												let battle = BattleInfo::new(&mut state.gamemap, army, 0);
-												state.battle = battle;
+											if state.battle.is_none() {
+												let battle = BattleInfo::new(&mut state.gamemap.armys, army, 0);
+												state.battle = Some(battle);
 											}
 											state.menu_id = Menu::Battle as usize;
 											//set_menu_value_num(state, "start_menu", 1);
@@ -1058,9 +909,9 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 													execute_event(event.event, &mut state.gamemap, &mut state.gameevents, &state.units, true);
 												},
 												Execute::StartBattle(army, _) => {
-													if state.battle.army1 != army && state.battle.army2 != 0 {
-														let battle = BattleInfo::new(&mut state.gamemap, army, 0);
-														state.battle = battle;		
+													if state.battle.is_none() {
+														let battle = BattleInfo::new(&mut state.gamemap.armys, army, 0);
+														state.battle = Some(battle);	
 													}
 													set_menu_value_num(state, "start_menu", 1);
 												},
@@ -1461,37 +1312,10 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                         ),
                         _ => ((0., 0.), (0., 0.), (0., 0.), (0., 0.)),
                     };
-                    // gfx.set_buffer_data(&state.shaders[0].1, &[i % 2]);
-                    // draw.image_pipeline()
-                    //     .pipeline(&state.shaders[0].0)
-                    //     .uniform_buffer(&state.shaders[0].1);
-                    // draw.image(&texture)
-                    //     .position(quarter_pos.0, quarter_pos.1)
-                    //     .crop(crop_start, cropped_size)
-                    //     .size(quarter_size.0, quarter_size.1)
-                    //     .alpha(ALPHA);
                 });
-                //draw.image_pipeline().remove();
             }
         }
         let objects_textures = assets.get("assets/Objects").unwrap();
-        for i in 0..0 {
-            //i in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
-            for j in 0..0 {
-                //j in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
-                if let Some(index) = gamemap.decomap[i][j] {
-                    let asset = objects_textures
-                        .get(&objects[index].path)
-                        .expect(&*format!("{}", &objects[index].path));
-                    let texture = asset.lock().unwrap();
-                    let size = objects[index].size;
-                    let pos = Position((i) as f32 * SIZE.0, (j) as f32 * SIZE.1);
-                    draw.image(&texture)
-                        .position(pos.0, pos.1 - (size.1 as f32 - 1.) * SIZE.1)
-                        .size(SIZE.0 * size.0 as f32, SIZE.1 * size.1 as f32);
-                }
-            }
-        }
         for building in &gamemap.buildings {
             let index = building.id;
             let (i, j) = (building.pos.0, building.pos.1);
@@ -1661,12 +1485,12 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 					
 					if let Some(recruitment) = &building.recruitment {
 						vec![Box::new(container(recruitment.units.iter().enumerate().map(|(n, unit)| {
-							let unit = &state.units[&unit.unit];
+							let unit = &state.units[unit.unit];
 							button(single(TupleContainerBuilder::default()
 								.inside((
 									TextureRenderer {
 										rect: Rect { pos: Position(0., 0.), size: Size(92., 102.) },
-										texture_id: ("assets/Icons".into(), format!("img_{}.png", unit.info.icon_index)),
+										texture_id: ("assets/Icons".into(), format!("unit_{}.png", unit.info.icon_index)),
 										to_draw: |cont,_,_,_,_, state: &mut State, draw| {
 											draw.image(&state.get_texture(&cont.texture_id.0, &cont.texture_id.1))
 												.position(cont.rect.pos.0, cont.rect.pos.1);
@@ -1716,6 +1540,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
         state: &mut State,
         draw: &mut Draw,
     ) {
+		let Some(battle) = &mut state.battle else { return; };
         let drawing_pos = drawing.get_pos();
         draw.rect(drawing_pos.into(), (1000., 1000.))
             .color(Color::ORANGE);
@@ -1739,7 +1564,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                         gfx,
                         &state.assets,
                         &state.fonts[0],
-                        &mut state.battle,
+                        battle,
                         &mut state.gamemap,
                         draw,
                         army,
@@ -1803,7 +1628,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                         .assets
                                         .get("assets/Icons")
                                         .unwrap()
-                                        .get(&format!("img_{}.png", num.to_string()))
+                                        .get(&format!("unit_{}.png", num.to_string()))
                                         .unwrap();
                                     let texture = asset.lock().unwrap();
                                     draw.image(&texture).position(drawing.pos.0, drawing.pos.1);
@@ -1870,7 +1695,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                             Some::<Text<State, String>>(text) => {
                                                 text.text = state
                                                     .units
-                                                    .get(&(num as usize))
+                                                    .get(num as usize)
                                                     .unwrap()
                                                     .to_string();
                                                 set_menu_value_num(state, "char_view_changed", 0);
@@ -1977,7 +1802,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
             let texture = assets
                 .get("assets/Icons")
                 .unwrap()
-                .get(&*format!("img_{}.png", unit.info.icon_index))
+                .get(&*format!("unit_{}.png", unit.info.icon_index))
                 .unwrap()
                 .lock()
                 .unwrap();
@@ -2067,7 +1892,6 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                 |assets: &AssetsMap| assets.get_texture("assets/Window", "ranged.png").clone()
             }
         };
-        dbg!(&active_unit, &to);
         let line = *MAX_TROOPS / MAX_LINES;
         AnimationTime::new(
             Animation::new(
@@ -2104,12 +1928,12 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
             return;
         };
         //let Some(mut active_unit) = state.battle.active_unit.clone() else {return;};
-        let battle = &state.battle;
+        let Some(battle) = &state.battle else { return; };
         let gamemap = &state.gamemap;
         let index = active_unit.1;
-        dbg!(&active_unit.0, battle.army1, battle.army2);
+        
         active_unit.1 = if active_unit.0 == battle.army1 { 0 } else { 1 };
-        let active_index: usize = dbg!(gamemap.armys[active_unit.0].troops[index].get().pos).into();
+        let active_index: usize = gamemap.armys[active_unit.0].troops[index].get().pos.into();
         active_unit.0 = active_index;
         state
             .animations
@@ -2127,15 +1951,17 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                             Drawing {
                                                 pos: Position(0., 0.),
                                                 to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
-                                                    unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], &mut state.battle, &mut state.gamemap, draw, 0, 0 * *MAX_TROOPS / 2 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
+													let Some(battle) = &mut state.battle else { return; };
+                                                    unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, &mut state.gamemap, draw, 0, 0 * *MAX_TROOPS / 2 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
                                                 }
                                             },
                                             Rect { pos: Position(0., 0.), size: Size(92., 92.) }
                                         ).if_clicked(|button, _app, _assets, _plugins, state| {
                                             let index = (button.rect.pos.0 / BETWEEN_CELLS) as usize;
 											if !state.animations.is_empty() {return;}
-											if let Some(_) = state.battle.winner { state.menu_id = Menu::Start as usize; return; }
-                                            let res = handle_action(Action::Cell(index, 0), &mut state.battle, &mut state.gamemap);
+											let Some(battle) = &mut state.battle else { return; };
+											if let Some(_) = battle.winner { state.menu_id = Menu::Start as usize; return; }
+                                            let res = handle_action(Action::Cell(index, 0), battle, &mut state.gamemap.armys);
 											handle_animations(state, (index, 0), res);
                                         }).build().unwrap()
                                     }).collect::<Vec<_>>())
@@ -2146,15 +1972,17 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                     Drawing {
                                         pos: Position(0., 0.),
                                         to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
-                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], &mut state.battle, &mut state.gamemap, draw, 0, *MAX_TROOPS / 2 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
+											let Some(battle) = &mut state.battle else { return; };
+                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, &mut state.gamemap, draw, 0, *MAX_TROOPS / 2 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
                                         }
                                     },
                                     Rect { pos: Position(0., 0.), size: Size(92., 92.) }
                                 ).if_clicked(|button, _app, _assets, _plugins, state| {
                                     let index = (button.rect.pos.0 / BETWEEN_CELLS) as usize + *MAX_TROOPS / 2;
 									if !state.animations.is_empty() {return;}
-									if let Some(_) = state.battle.winner { state.menu_id = Menu::Start as usize; return; }
-                                    let res = handle_action(Action::Cell(index, 0), &mut state.battle, &mut state.gamemap);
+									let Some(battle) = &mut state.battle else { return; };
+									if let Some(_) = battle.winner { state.menu_id = Menu::Start as usize; return; }
+                                    let res = handle_action(Action::Cell(index, 0), battle, &mut state.gamemap.armys);
 									handle_animations(state, (index, 0), res);
                                 })
                                     .build().unwrap()
@@ -2175,15 +2003,17 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                     Drawing {
                                         pos: Position(0., 0.),
                                         to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
-                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], &mut state.battle, &mut state.gamemap, draw, 1, *MAX_TROOPS / 2 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
+											let Some(battle) = &mut state.battle else { return; };
+                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, &mut state.gamemap, draw, 1, *MAX_TROOPS / 2 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
                                         }
                                     },
                                     Rect { pos: Position(0., 0.), size: Size(92., 92.) }
                                 ).if_clicked(|button, _app, _assets, _plugins, state| {
                                     let index = (button.rect.pos.0 / BETWEEN_CELLS) as usize + *MAX_TROOPS / 2;
 									if !state.animations.is_empty() {return;}
-									if let Some(_) = state.battle.winner { state.menu_id = Menu::Start as usize; return; }
-                                    let res = handle_action(Action::Cell(index, 1), &mut state.battle, &mut state.gamemap);
+									let Some(battle) = &mut state.battle else { return; };
+									if let Some(_) = battle.winner { state.menu_id = Menu::Start as usize; return; }
+                                    let res = handle_action(Action::Cell(index, 1), battle, &mut state.gamemap.armys);
 									handle_animations(state, (index, 1), res);
                                 }).build().unwrap()
                             }).collect::<Vec<_>>())
@@ -2194,15 +2024,17 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                     Drawing {
                                         pos: Position(0., 0.),
                                         to_draw: |drawing, app, assets, gfx, plugins, state: &mut State, draw| {
-                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], &mut state.battle, &mut state.gamemap, draw, 1, 0 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
+											let Some(battle) = &mut state.battle else { return; };
+                                            unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, &mut state.gamemap, draw, 1, 0 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
                                         }
                                     },
                                     Rect { pos: Position(0., 0.), size: Size(92., 92.) }
                                 ).if_clicked(|button, _app, _assets, _plugins, state| {
                                     let index = (button.rect.pos.0 / BETWEEN_CELLS) as usize;
 									if !state.animations.is_empty() {return;}
-									if let Some(_) = state.battle.winner { state.menu_id = Menu::Start as usize; return; }
-                                    let res = handle_action(Action::Cell(index, 1), &mut state.battle, &mut state.gamemap);
+									let Some(battle) = &mut state.battle else { return; };
+									if let Some(_) = battle.winner { state.menu_id = Menu::Start as usize; return; }
+                                    let res = handle_action(Action::Cell(index, 1), battle, &mut state.gamemap.armys);
 									handle_animations(state, (index, 1), res);
                                 })
                                     .build().unwrap()
@@ -2221,7 +2053,8 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                             single(DrawingBuilder::<State>::default()
                                 .to_draw(|drawing, _app, _assets, _gfx, _plugins, state, draw| {
                                     let pos = drawing.pos;
-                                    draw.image(&state.assets.get("assets/Icons").unwrap().get(&*format!("img_{}.png", get_menu_value_num(state, "battle_unit_stat").unwrap_or(1)-1)).unwrap().lock().unwrap())
+									
+                                    draw.image(&state.assets.get("assets/Icons").unwrap().get(&*format!("unit_{}.png", get_menu_value_num(state, "battle_unit_stat").unwrap_or(1)-1)).unwrap().lock().unwrap())
                                         .position(pos.0, pos.1);
 									for animation in &state.animations {
 										animation.draw(&state.assets, draw, Instant::now());
@@ -2243,7 +2076,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                     let num = get_menu_value_num(state, "battle_unit_stat").unwrap_or(1);
                                     match &mut container.inside {
                                         Some::<Text<State, String>>(text) => {
-                                            text.text = state.units.get(&(num as usize)).unwrap().to_string();
+                                            text.text = state.units.get(num as usize).unwrap().to_string();
                                             set_menu_value_num(state, "battle_unit_stat_changed", 0);
                                         }
                                         None => {}
@@ -2273,57 +2106,14 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
         after_draw: Some(|_container, app, _assets, _plugins, state: &mut State| {
             if app.keyboard.is_down(KeyCode::Escape) { state.menu_id = Menu::Main as usize; }
             if app.keyboard.was_pressed(KeyCode::Space) {
-				if let Some(active_unit) = state.battle.active_unit {
-					handle_action(Action::Cell(active_unit.1, active_unit.0), &mut state.battle, &mut state.gamemap);
+				let Some(battle) = &mut state.battle else { return; };
+				if let Some(active_unit) = battle.active_unit {
+					handle_action(Action::Cell(active_unit.1, active_unit.0), battle, &mut state.gamemap.armys);
 				}
             }
         }),
         pos: Position(0., 0.)
     });
-    fn handle_server_action(connection: &mut Option<ConnectionManager>, action: (usize, usize)) {
-        let Some(connection) = connection else {
-            return;
-        };
-        match &mut connection.con {
-            Connection::Client(con) => {
-                let message = ClientMessage::Action(action);
-                let size = serialized_size::<ClientMessage, _>(&message);
-                let mut output = vec![0u8; size.0];
-                serialize::<ClientMessage, ClientMessage>(message, &mut output);
-                con.client.send_message(
-                    renet::DefaultChannel::ReliableOrdered,
-                    renet::Bytes::copy_from_slice(&output),
-                );
-            }
-            Connection::Host(server) => {
-                if server.auth.get(&HOST_CLIENT_ID)
-                    != connection
-                        .battle
-                        .active_unit
-                        .and_then(|v| Some(v.0))
-                        .as_ref()
-                {
-                    return;
-                }
-                handle_action(
-                    Action::Cell(action.0, action.1),
-                    &mut connection.battle,
-                    &mut connection.gamemap,
-                );
-                let message =
-                    ServerMessage::State((connection.battle.clone(), connection.gamemap.clone()));
-                let size = serialized_size::<ServerMessage, _>(&message);
-                let mut output = vec![0u8; size.0];
-                serialize::<ServerMessage, ServerMessage>(message, &mut output).ok();
-
-                server.server.send_message(
-                    ClientId::from_raw(255),
-                    DefaultChannel::ReliableOrdered,
-                    renet::Bytes::copy_from_slice(&output),
-                );
-            }
-        };
-    }
 
     hashmap.insert(Menu::ConnectBattle as usize, SingleContainer {
         inside: Some(DynContainer {
@@ -2337,7 +2127,9 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                                 pos: Position(0., 0.),
                                                 to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
 													let Some(conn) = &mut state.connection else { return; };
-													let (gamemap, battle) = (&mut conn.gamemap, &mut conn.battle);
+													let gamemap = &mut conn.gamemap;
+													let Some(battle) = &mut conn.battle else { return; };
+													
                                                     unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, gamemap, draw, 0, 0 * *MAX_TROOPS / 2 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
                                                 }
                                             },
@@ -2355,7 +2147,8 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                         pos: Position(0., 0.),
                                         to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
 											let Some(conn) = &mut state.connection else { return; };
-											let (gamemap, battle) = (&mut conn.gamemap, &mut conn.battle);
+											let gamemap = &mut conn.gamemap;
+											let Some(battle) = &mut conn.battle else { return; };
                                             unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, gamemap, draw, 0, *MAX_TROOPS / 2 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
                                         }
                                     },
@@ -2383,7 +2176,8 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                         pos: Position(0., 0.),
                                         to_draw: |drawing, app, _, gfx, _, state: &mut State, draw| {
 											let Some(conn) = &mut state.connection else { return; };
-											let (gamemap, battle) = (&mut conn.gamemap, &mut conn.battle);
+											let gamemap = &mut conn.gamemap;
+											let Some(battle) = &mut conn.battle else { return; };
                                             unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, gamemap, draw, 1, *MAX_TROOPS / 2 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
                                         }
                                     },
@@ -2401,7 +2195,8 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                         pos: Position(0., 0.),
                                         to_draw: |drawing, app, assets, gfx, plugins, state: &mut State, draw| {
 											let Some(conn) = &mut state.connection else { return; };
-											let (gamemap, battle) = (&mut conn.gamemap, &mut conn.battle);
+											let gamemap = &mut conn.gamemap;
+											let Some(battle) = &mut conn.battle else { return; };
                                             unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, gamemap, draw, 1, 0 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
                                         }
                                     },
@@ -2456,7 +2251,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 									state.connection = Some(
 										ConnectionManager {
 											con: Connection::Host(
-												GameServer::new()
+												GameServer::new(true)
 											),
 											gamemap: state.gamemap.clone(),
 											battle: state.battle.clone(),
@@ -2517,8 +2312,9 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
         after_draw: Some(|_container, app, _assets, _plugins, state: &mut State| {
             if app.keyboard.is_down(KeyCode::Escape) { state.menu_id = Menu::Main as usize; }
             if app.keyboard.was_pressed(KeyCode::Space) {
-				if let Some(active_unit) = state.battle.active_unit {
-					handle_action(Action::Cell(active_unit.1, active_unit.0), &mut state.battle, &mut state.gamemap);
+				let Some(battle) = &mut state.battle else { return; };
+				if let Some(active_unit) = battle.active_unit {
+					handle_action(Action::Cell(active_unit.1, active_unit.0), battle, &mut state.gamemap.armys);
 				}
             }
         }),
@@ -2531,7 +2327,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 type Tilemap<T> = [[T; MAP_SIZE]; MAP_SIZE];
 fn gen_army_troops(
     rng: &mut ThreadRng,
-    units: &HashMap<usize, Unit>,
+    units: &Vec<Unit>,
     army: usize,
 ) -> Vec<TroopType> {
     let mut troops = (0..*MAX_TROOPS / 2)
@@ -2544,7 +2340,7 @@ fn gen_army_troops(
                 custom_name: None,
                 unit: {
                     let mut unit = loop {
-                        let unit = units[&rng.gen_range(1..100)].clone();
+                        let unit = units[rng.gen_range(1..100)].clone();
                         if unit.stats.damage.ranged > 0 || unit.stats.damage.magic > 0 {
                             break unit;
                         }
@@ -2567,7 +2363,7 @@ fn gen_army_troops(
                     custom_name: None,
                     unit: {
                         let mut unit = loop {
-                            let unit = units[&rng.gen_range(1..100)].clone();
+                            let unit = units[rng.gen_range(1..100)].clone();
                             if unit.stats.damage.hand > 0 {
                                 break unit;
                             }
@@ -2713,33 +2509,17 @@ fn gen_shaders(gfx: &mut Graphics) -> Vec<(Pipeline, Buffer)> {
         .unwrap();
     vec![(pipeline, uniforms)]
 }
+fn load_assets(gfx: &mut Graphics, assets: &mut HashMap<&'static str, HashMap<String, Asset<Texture>>>, req_assets: Vec<String>, path: &'static str) -> Result<(), String> {
+	let mut asset_map = HashMap::new();
+	for req in req_assets {
+		asset_map.insert(req.clone(),
+						 load_asset(gfx, &format!("{path}/{req}"))?);
+	}
+	assets.insert(path, asset_map);
+	Ok(())
+}
 fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
     let mut assets = HashMap::new();
-    // let asset_dirs = [
-    //     "assets/Icons",
-    //     "assets/Terrain",
-    //     "assets/Objects",
-    //     "assets/Items",
-    // ];
-    // for dir in asset_dirs {
-    //     let mut dir_assets: HashMap<String, Asset<Texture>> = HashMap::new();
-    //     for entry in read_dir(dir).expect("Cant find directory") {
-    //         let entry = entry.expect("erorrere");
-    //         let path = entry.path();
-    //         let asset = app_assets
-    //             .load_asset(path.to_str().clone().unwrap())
-    //             .unwrap();
-    //         dir_assets.insert(
-    //             path.strip_prefix(dir)
-    //                 .unwrap()
-    //                 .to_str()
-    //                 .unwrap()
-    //                 .to_string(),
-    //             asset,
-    //         );
-    //     }
-    //     assets.insert(dir, dir_assets);
-    // }
     assets.insert("assets/Terrain", HashMap::new());
     for tile in TILES {
         let path = tile.sprite();
@@ -2787,19 +2567,29 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
     app.window().set_fullscreen(settings.fullscreen);
     app.window()
         .set_size(settings.init_size.0, settings.init_size.1);
-    parse_items(&settings.locale, gfx, &mut assets);
-    dbg!(&settings);
+    let req_assets = parse_items(None, &settings.locale);
+	load_assets(gfx, &mut assets, req_assets.1, req_assets.0).expect("Loading items assets failed");
     {
         let locale = &mut LOCALE.lock().unwrap();
-        parse_locale(      
+		dbg!(&settings);
+		locale.set_lang((&settings.locale, &settings.additional_locale));
+        parse_locale(
             &[&settings.locale, &settings.additional_locale],
             locale,
         );
-        locale.set_lang((&settings.locale, &settings.additional_locale));
     }
-    let units = parse_units(&mut assets, gfx);
-    let objects = parse_objects(gfx, &mut assets);
-
+	let res = parse_units(None);
+	if let Err(err) = res {
+		log::error!("{}", err);
+		panic!("{}", err);
+	}
+    let Ok((units, req_assets)) = res else {
+		panic!("Unit parsing error")
+	};
+	load_assets(gfx, &mut assets, req_assets.1, req_assets.0).expect("Loading units assets failed");
+    let (objects, req_assets) = parse_objects();
+	load_assets(gfx, &mut assets, req_assets.1, req_assets.0).expect("Loading objects assets failed");
+	
     let (mut gamemap, gameevents) = parse_story(
         &units,
         &objects,
@@ -2862,29 +2652,17 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
         menu_id: 0,
         menu_data: HashMap::new(),
         assets,
-        battle: BattleInfo {
-            winner: None,
-            army1: 1,
-            army2: 0,
-            battle_ter: 0,
-            active_unit: None,
-            can_interact: None,
-            move_count: 0,
-            dead: vec![],
-        },
+        battle: None,
         objects,
         shaders: gen_shaders(gfx),
     };
     state.gamemap.calc_hitboxes(&state.objects);
     let mut battle = state.battle.clone();
-    battle.start(&mut state.gamemap);
     state.battle = battle;
-    dbg!(&state.battle);
     let size = gfx.size();
     let size = (size.0 as f32, size.1 as f32);
     *MONITOR_SIZE.lock().unwrap() = size;
     gen_forms(size).expect("gen_forms failed:()");
-    dbg!(size_of::<ModifyUnitStats>());
     state
 }
 fn draw(

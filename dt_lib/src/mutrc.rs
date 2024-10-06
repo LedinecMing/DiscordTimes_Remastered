@@ -23,16 +23,14 @@ where
         Self: Sized,
     {
         let formula = with_formula(|s: &T| match s {
-            T => s,
-            _ => unreachable!(),
+            _ => s,
         });
         let inner_t = formula.read_field(&mut de, true)?;
         Ok(SendMut::new(inner_t))
     }
     fn deserialize_in_place(&mut self, mut de: Deserializer<'de>) -> Result<(), DeserializeError> {
         let formula = with_formula(|s: &T| match s {
-            T => s,
-            _ => unreachable!(),
+            _ => s,
         });
         let inner_t = formula.read_field(&mut de, true)?;
         *self.inner.lock().unwrap() = inner_t;
@@ -47,8 +45,7 @@ impl<T: Formula + Serialize<T> + Clone> Serialize<Self> for SendMut<T> {
     {
         let inner_t = self.inner.lock().unwrap().clone();
         let formula = with_formula(|s: &T| match s {
-            T => s,
-            _ => unreachable!(),
+            _ => s,
         });
         formula.write_field(inner_t, sizes, buffer, true)
     }
@@ -57,8 +54,7 @@ impl<T: Formula + Serialize<T> + Clone> Serialize<Self> for SendMut<T> {
             return Some(sizes);
         }
         let formula = with_formula(|s: &T| match s {
-            T => s,
-            _ => unreachable!(),
+            _ => s,
         });
         let inner_t = formula.size_hint(&*self.inner.lock().unwrap(), true)?;
         Some(inner_t)
@@ -71,8 +67,7 @@ impl<T: Formula + Serialize<T> + Clone> SerializeRef<Self> for SendMut<T> {
     {
         let inner_t = self.inner.lock().unwrap().clone();
         let formula = with_formula(|s: &T| match s {
-            T => s,
-            _ => unreachable!(),
+            _ => s,
         });
         formula.write_field(inner_t, sizes, buffer, true)
     }
@@ -81,8 +76,7 @@ impl<T: Formula + Serialize<T> + Clone> SerializeRef<Self> for SendMut<T> {
             return Some(sizes);
         }
         let formula = with_formula(|s: &T| match s {
-            T => s,
-            _ => unreachable!(),
+            _ => s,
         });
         let inner_t = formula.size_hint(&*self.inner.lock().unwrap(), true)?;
         Some(inner_t)

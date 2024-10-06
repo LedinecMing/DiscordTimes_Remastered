@@ -117,27 +117,27 @@ impl Recruitment {
         &mut self,
         buyer: &mut Army,
         unit_num: usize,
-        units: &HashMap<usize, Unit>,
+        units: &Vec<Unit>,
     ) -> Result<(), ()> {
         if self.can_buy(buyer, unit_num, units) {
             buyer.add_troop(
                 Troop {
-                    unit: units[&self.units[unit_num].unit].clone(),
+                    unit: units[self.units[unit_num].unit].clone(),
                     ..Troop::empty()
                 }
                 .into(),
             )?;
             self.units[unit_num].count -= 1;
-            buyer.stats.gold -= units[&self.units[unit_num].unit].info.cost_hire;
+            buyer.stats.gold -= units[self.units[unit_num].unit].info.cost_hire;
         }
         Err(())
     }
-    pub fn can_buy(&self, buyer: &Army, unit_num: usize, units: &HashMap<usize, Unit>) -> bool {
+    pub fn can_buy(&self, buyer: &Army, unit_num: usize, units: &Vec<Unit>) -> bool {
         let info = &self
             .units
             .get(unit_num)
             .expect("Trying to get unit at unknown index");
-        buyer.stats.gold >= units[&info.unit].info.cost_hire && info.count > 0
+        buyer.stats.gold >= units[info.unit].info.cost_hire && info.count > 0
         //* (RECRUIT_COST * self.cost_modify)) as u64;
     }
 }
