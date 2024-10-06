@@ -95,7 +95,7 @@ impl<V: CopyPartOrdNum + NumCast> IsInRange<V> for InUnsignedRange<V> {
         Ok(())
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Percent(i16);
 impl Percent {
@@ -115,6 +115,11 @@ impl Percent {
     }
     pub fn calc<V: Num + NumCast>(self, all: V) -> V {
         all * NumCast::from(self.0).unwrap() / NumCast::from(100).unwrap()
+    }
+}
+impl Default for Percent {
+    fn default() -> Self {
+        Percent::zero()
     }
 }
 impl InConstRange<i16> for Percent {

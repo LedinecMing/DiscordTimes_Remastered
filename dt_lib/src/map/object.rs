@@ -113,12 +113,7 @@ pub struct Recruitment {
     pub cost_modify: f64,
 }
 impl Recruitment {
-    pub fn buy(
-        &mut self,
-        buyer: &mut Army,
-        unit_num: usize,
-        units: &Vec<Unit>,
-    ) -> Result<(), ()> {
+    pub fn buy(&mut self, buyer: &mut Army, unit_num: usize, units: &Vec<Unit>) -> Result<(), ()> {
         if self.can_buy(buyer, unit_num, units) {
             buyer.add_troop(
                 Troop {

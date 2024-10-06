@@ -165,20 +165,20 @@ pub fn read_file_as_string(path: String) -> String {
     String::new()
 }
 trait CollectInplace {
-	type Output;
-	fn collect(self) -> Self::Output;
+    type Output;
+    fn collect(self) -> Self::Output;
 }
 impl<T, E> CollectInplace for Vec<Result<T, E>> {
-	type Output = Result<Vec<T>, E>;
-	fn collect(self) -> Result<Vec<T>, E> {
-		self.into_iter().collect()
-	}
+    type Output = Result<Vec<T>, E>;
+    fn collect(self) -> Result<Vec<T>, E> {
+        self.into_iter().collect()
+    }
 }
 impl<T> CollectInplace for Vec<Option<T>> {
-	type Output = Option<Vec<T>>;
-	fn collect(self) -> Option<Vec<T>> {
-		self.into_iter().collect()
-	}
+    type Output = Option<Vec<T>>;
+    fn collect(self) -> Option<Vec<T>> {
+        self.into_iter().collect()
+    }
 }
 
 pub fn collect_errors<T, K: Display>(
@@ -213,10 +213,15 @@ where
     )
 }
 fn parse_duo_tuple<T: FromStr>(v: &str) -> Result<(T, T), &'static str> {
-	let mut points = v
-        .split(|ch: char| !ch.is_ascii_digit())
-        .map(|string| string.parse().or_else(|_| Err("Couldn't parse given string")));
-	(|(r1, r2)| Ok((r1?, r2?)))((points.next().ok_or("").and_then(|v| v), points.next().ok_or("").and_then(|v| v)))
+    let mut points = v.split(|ch: char| !ch.is_ascii_digit()).map(|string| {
+        string
+            .parse()
+            .or_else(|_| Err("Couldn't parse given string"))
+    });
+    (|(r1, r2)| Ok((r1?, r2?)))((
+        points.next().ok_or("").and_then(|v| v),
+        points.next().ok_or("").and_then(|v| v),
+    ))
 }
 const MATCH_ERR: Result<(), &str> = Err("parse.rs: cant match field;");
 pub fn match_magictype(
@@ -243,18 +248,18 @@ pub fn match_magictype(
 pub fn parse_units(path: Option<&str>) -> Result<(Vec<Unit>, (&'static str, Vec<String>)), String> {
     let mut units = vec![];
     let sections = parse_for_sections(path.unwrap_or("Units.ini"));
-	let mut error_collector: Vec<String> = Vec::new();
-	let mut req_assets = Vec::new();
+    let mut error_collector: Vec<String> = Vec::new();
+    let mut req_assets = Vec::new();
     let mut upgrades: HashMap<usize, Vec<String>> = HashMap::new();
 
     for (_, prop) in sections.iter() {
-		let mut counter = None;
-		let mut bonus_name = "";
-		let mut magic_type = "";
-		let mut magic_direction = "";
-		let mut nature = "";
-		let mut name = "";
-		let mut description = "";
+        let mut counter = None;
+        let mut bonus_name = "";
+        let mut magic_type = "";
+        let mut magic_direction = "";
+        let mut nature = "";
+        let mut name = "";
+        let mut description = "";
 
         let mut cost_hire = None;
         let mut size = None;
@@ -289,7 +294,7 @@ pub fn parse_units(path: Option<&str>) -> Result<(Vec<Unit>, (&'static str, Vec<
         for (k, value) in prop.iter() {
             let v = &**value;
             match &**k {
-				"name" => name = v,
+                "name" => name = v,
                 "descript" => description = v,
                 "nature" => nature = v,
                 "iconindex" => {
@@ -366,7 +371,11 @@ pub fn parse_units(path: Option<&str>) -> Result<(Vec<Unit>, (&'static str, Vec<
                     next_unit.push(v.into());
                 }
                 "size" => {
-					size = collect_errors(parse_duo_tuple(v), &mut error_collector, "Field size is incorrect");
+                    size = collect_errors(
+                        parse_duo_tuple(v),
+                        &mut error_collector,
+                        "Field size is incorrect",
+                    );
                 }
                 "bonus" => {
                     bonus_name = v;
@@ -374,11 +383,11 @@ pub fn parse_units(path: Option<&str>) -> Result<(Vec<Unit>, (&'static str, Vec<
                 "globalindex" => {
                     counter = handle_parse::<usize>(v, &mut error_collector, "globalindex");
                 }
-                _ => ()
+                _ => (),
             }
         }
 
-		let magic_direction = match magic_direction {
+        let magic_direction = match magic_direction {
             "ToAll" => ToAll,
             "ToAlly" => ToAlly,
             "ToEnemy" => ToEnemy,
@@ -413,98 +422,103 @@ pub fn parse_units(path: Option<&str>) -> Result<(Vec<Unit>, (&'static str, Vec<
                 UnitType::People
             }
         };
-		let hp = hp.unwrap_or(1);
-		let xp_up = xp_up.unwrap_or(1);
-		let max_xp = max_xp.unwrap_or(1);
+        let hp = hp.unwrap_or(1);
+        let xp_up = xp_up.unwrap_or(1);
+        let max_xp = max_xp.unwrap_or(1);
 
-		let cost_hire = cost_hire.unwrap_or(1);
-		let cost = if cost_hire <= 50 {
-			cost_hire / 8
-		} else if cost_hire > 50 && cost_hire <= 100 {
-			cost_hire / 4
-		} else if cost_hire > 100 && cost_hire <= 150 {
-			(cost_hire as f64 / 2.65) as u64
-		} else {
-			cost_hire / 2
-		};
-		let stats = UnitStats {
-			hp,
-			max_hp: hp,
-			damage: Power {
-				magic: damage_magic.unwrap_or(0),
-				ranged: damage_ranged.unwrap_or(0),
-				hand: damage_hand.unwrap_or(1),
-			},
-			defence: Defence {
-				death_magic: Percent::new(defence_death_magic.unwrap_or(0)),
-				elemental_magic: Percent::new(defence_elemental_magic.unwrap_or(0)),
-				life_magic: Percent::new(defence_life_magic.unwrap_or(0)),
-				hand_percent: Percent::new(defence_hand_percent.unwrap_or(0)),
-				ranged_percent: Percent::new(defence_ranged_percent.unwrap_or(0)),
-				magic_units: defence_magic.unwrap_or(0),
-				hand_units: defence_hand.unwrap_or(0),
-				ranged_units: defence_ranged.unwrap_or(0),
-			},
-			moves: moves.unwrap_or(1),
-			max_moves: moves.unwrap_or(1),
-			speed: speed.unwrap_or(1),
-			vamp: Percent::new(vamp.unwrap_or(0)),
-			regen: Percent::new(regen.unwrap_or(0)),
-		};
-		let unit = Unit {
-			stats,
-			modified: stats,
-			modify: ModifyUnitStats::default(),
-			info: UnitInfo {
-				name: name.into(),
-				descript: description.into(),
-				cost,
-				cost_hire,
-				icon_index: counter.unwrap() - 1,
-				unit_type,
-				next_unit: Vec::new(),
-				magic_type,
-				size: size.unwrap_or((1, 1)),
-				surrender,
-				lvl: LevelUpInfo {
-					stats: ModifyUnitStats::default(),
-					xp_up,
-					max_xp,
-				},
-			},
-			lvl: UnitLvl {
-				lvl: 0,
-				max_xp,
-				xp: 0,
-			},
-			inventory: UnitInventory {
-				items: vec![None; 4],
-			},
-			army: 0,
-			bonus,
-			effects: vec![],
-		};
-		req_assets.push(format!("unit_{}.png", counter.unwrap() - 1));
-		units.push((counter.unwrap(), unit));
-		for (index, up) in upgrades.iter() {
-			let upgrade = up
-				.iter()
-				.map(|name| {
-					units
-						.iter()
-						.filter(|unit| unit.1.info.name == *name)
-						.map(|unit| unit.0)
-						.next()
-						.unwrap()
-				})
-				.collect();
-			units[*index].1.info.next_unit = upgrade;
-		}
-	}
-	if error_collector.is_empty() {
-		units.sort_by_key(|v| v.0);
-		Ok((units.into_iter().map(|v| v.1).collect(), ("assets/Icons", req_assets)))
-	} else { Err(error_collector.join("\n")) }
+        let cost_hire = cost_hire.unwrap_or(1);
+        let cost = if cost_hire <= 50 {
+            cost_hire / 8
+        } else if cost_hire > 50 && cost_hire <= 100 {
+            cost_hire / 4
+        } else if cost_hire > 100 && cost_hire <= 150 {
+            (cost_hire as f64 / 2.65) as u64
+        } else {
+            cost_hire / 2
+        };
+        let stats = UnitStats {
+            hp,
+            max_hp: hp,
+            damage: Power {
+                magic: damage_magic.unwrap_or(0),
+                ranged: damage_ranged.unwrap_or(0),
+                hand: damage_hand.unwrap_or(1),
+            },
+            defence: Defence {
+                death_magic: Percent::new(defence_death_magic.unwrap_or(0)),
+                elemental_magic: Percent::new(defence_elemental_magic.unwrap_or(0)),
+                life_magic: Percent::new(defence_life_magic.unwrap_or(0)),
+                hand_percent: Percent::new(defence_hand_percent.unwrap_or(0)),
+                ranged_percent: Percent::new(defence_ranged_percent.unwrap_or(0)),
+                magic_units: defence_magic.unwrap_or(0),
+                hand_units: defence_hand.unwrap_or(0),
+                ranged_units: defence_ranged.unwrap_or(0),
+            },
+            moves: moves.unwrap_or(1),
+            max_moves: moves.unwrap_or(1),
+            speed: speed.unwrap_or(1),
+            vamp: Percent::new(vamp.unwrap_or(0)),
+            regen: Percent::new(regen.unwrap_or(0)),
+        };
+        let unit = Unit {
+            stats,
+            modified: stats,
+            modify: ModifyUnitStats::default(),
+            info: UnitInfo {
+                name: name.into(),
+                descript: description.into(),
+                cost,
+                cost_hire,
+                icon_index: counter.unwrap() - 1,
+                unit_type,
+                next_unit: Vec::new(),
+                magic_type,
+                size: size.unwrap_or((1, 1)),
+                surrender,
+                lvl: LevelUpInfo {
+                    stats: ModifyUnitStats::default(),
+                    xp_up,
+                    max_xp,
+                },
+            },
+            lvl: UnitLvl {
+                lvl: 0,
+                max_xp,
+                xp: 0,
+            },
+            inventory: UnitInventory {
+                items: vec![None; 4],
+            },
+            army: 0,
+            bonus,
+            effects: vec![],
+        };
+        req_assets.push(format!("unit_{}.png", counter.unwrap() - 1));
+        units.push((counter.unwrap(), unit));
+        for (index, up) in upgrades.iter() {
+            let upgrade = up
+                .iter()
+                .map(|name| {
+                    units
+                        .iter()
+                        .filter(|unit| unit.1.info.name == *name)
+                        .map(|unit| unit.0)
+                        .next()
+                        .unwrap()
+                })
+                .collect();
+            units[*index].1.info.next_unit = upgrade;
+        }
+    }
+    if error_collector.is_empty() {
+        units.sort_by_key(|v| v.0);
+        Ok((
+            units.into_iter().map(|v| v.1).collect(),
+            ("assets/Icons", req_assets),
+        ))
+    } else {
+        Err(error_collector.join("\n"))
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -596,10 +610,9 @@ fn parse_for_sections(path: &str) -> Vec<(String, HashMap<String, String>)> {
     advini::parse_for_sections(&ini_doc)
 }
 type Objects = Vec<ObjectInfo>;
-pub fn parse_objects(
-) -> (Objects, (&'static str, Vec<String>)) {
+pub fn parse_objects() -> (Objects, (&'static str, Vec<String>)) {
     let mut objects = Vec::new();
-	let mut req_assets = Vec::new();
+    let mut req_assets = Vec::new();
     let sections = parse_for_sections("Objects.ini");
     for (sec, prop) in sections.iter() {
         let mut category = "".into();
@@ -617,7 +630,7 @@ pub fn parse_objects(
                         "Value of field Index ommited as non-usize",
                     );
                     let path = format!("{sec}.png");
-					req_assets.push(path.clone());
+                    req_assets.push(path.clone());
                 }
                 "size" => {
                     let mut sizes = v
@@ -662,8 +675,10 @@ pub fn parse_objects(
         ));
     }
     objects.sort_by(|(id, _), (oth_id, _)| id.cmp(oth_id));
-    (objects.into_iter().map(|(_, object)| object).collect(),
-	 ("assets/Objects", req_assets))
+    (
+        objects.into_iter().map(|(_, object)| object).collect(),
+        ("assets/Objects", req_assets),
+    )
 }
 fn match_magic_variants(
     error_collector: &mut Vec<String>,
@@ -689,14 +704,11 @@ fn match_magic_variants(
  * p-{stat} - добавление процента
  * f-{stat} - установить
  */
-pub fn parse_items(
-	path: Option<&str>,
-    lang: &String,
-) -> (&'static str, Vec<String>) {
+pub fn parse_items(path: Option<&str>, lang: &String) -> (&'static str, Vec<String>) {
     let mut error_collector: Vec<String> = Vec::new();
     let mut items = ITEMS.lock().unwrap();
-	let mut req_assets = Vec::new();
-				  
+    let mut req_assets = Vec::new();
+
     let secs = parse_for_sections(path.unwrap_or("Rus_Artefacts.ini"));
     for (sec, props) in secs {
         let mut cost: Option<i64> = None;
@@ -717,8 +729,8 @@ pub fn parse_items(
                 "name" => name = Some(value),
                 "descript" => description = Some(value),
                 "icon" => {
-					icon = Some(value);
-					req_assets.push(value.to_string());
+                    icon = Some(value);
+                    req_assets.push(value.to_string());
                 }
                 "cost" => cost = handle_parse(value, &mut error_collector, "cost"),
                 "magic" => {
@@ -915,7 +927,7 @@ pub fn parse_items(
             },
         );
     }
-	("assets/Items", req_assets)
+    ("assets/Items", req_assets)
 }
 
 trait IsRus {
@@ -1083,7 +1095,8 @@ fn parse_mapdata(
                                 prop.1.split_once(|ch: char| !ch.is_ascii_digit()).unwrap();
                             let troop = Troop {
                                 unit: {
-                                    let mut unit = units[things.0.parse::<usize>().unwrap()].clone();
+                                    let mut unit =
+                                        units[things.0.parse::<usize>().unwrap()].clone();
                                     unit.army = armys.len();
                                     unit
                                 },

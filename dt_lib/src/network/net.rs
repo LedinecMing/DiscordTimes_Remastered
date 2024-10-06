@@ -14,6 +14,7 @@ use crate::{
     Menu,
 };
 use alkahest::*;
+use log;
 use renet::{
     transport::{
         ClientAuthentication, ConnectToken, NetcodeClientTransport, NetcodeServerTransport,
@@ -21,7 +22,6 @@ use renet::{
     },
     ClientId, ConnectionConfig, DefaultChannel, RenetClient, RenetServer, ServerEvent,
 };
-use log;
 use std::{
     collections::HashMap,
     io,
@@ -96,7 +96,7 @@ pub static SERVER: once_cell::sync::Lazy<SocketAddr> = once_cell::sync::Lazy::ne
         .unwrap()
 });
 impl GameServer {
-	/// Consutrct a new GameServer, pass a boolean indicating if server itself is a player or not.
+    /// Consutrct a new GameServer, pass a boolean indicating if server itself is a player or not.
     pub fn new(host_is_player: bool) -> Self {
         let socket = UdpSocket::bind(*SERVER).unwrap();
         let current_time = SystemTime::now()
@@ -113,9 +113,9 @@ impl GameServer {
         let transport = Box::new(NetcodeServerTransport::new(server_config, socket).unwrap());
 
         let mut auth = HashMap::new();
-		if host_is_player {
-			auth.insert(HOST_CLIENT_ID, 0);
-		}
+        if host_is_player {
+            auth.insert(HOST_CLIENT_ID, 0);
+        }
 
         Self {
             server,
@@ -163,7 +163,7 @@ impl GameServer {
         );
         Some(())
     }
-	/// Used by server to process client's input
+    /// Used by server to process client's input
     pub fn handle_client_message(
         &mut self,
         client_id: Option<ClientId>,
@@ -176,11 +176,17 @@ impl GameServer {
     ) {
         match message {
             ClientMessage::Action(v) => {
-				let Some(battle) = battle.as_mut() else { return; };
+                let Some(battle) = battle.as_mut() else {
+                    return;
+                };
                 if Some(client_id.and_then(|v| self.auth.get(&v)).unwrap_or(&0usize))
                     == battle.active_unit.and_then(|v| Some(v.0)).as_ref()
                 {
-                    handle_action(Action::Cell(v.0 as usize, v.1 as usize), battle, &mut gamemap.armys);
+                    handle_action(
+                        Action::Cell(v.0 as usize, v.1 as usize),
+                        battle,
+                        &mut gamemap.armys,
+                    );
                     let message = ServerMessage::State((Some(battle.clone()), gamemap.clone()));
                     let size = serialized_size::<ServerMessage, _>(&message);
                     let mut output = vec![0u8; size.0];
@@ -213,7 +219,8 @@ impl GameServer {
                     let diff = (pos.0 as i64 - goal.0 as i64, pos.1 as i64 - goal.1 as i64);
                     if -1 <= diff.0 && diff.0 <= 1 && -1 <= diff.1 && diff.1 <= 1 {
                         if battle.is_none() {
-                            let battle_new = BattleInfo::new(&mut gamemap.armys, target_army, army_index);
+                            let battle_new =
+                                BattleInfo::new(&mut gamemap.armys, target_army, army_index);
                             *battle = Some(battle_new);
                         }
                         let message = ServerMessage::ChangeMenu(Menu::Connect as usize);
@@ -303,7 +310,9 @@ impl GameServer {
                     log::info!("Received message from client {}: {:?}", client_id, message);
                     match message {
                         ClientMessage::Action(v) => {
-							let Some(battle) = battle.as_mut() else { continue; };
+                            let Some(battle) = battle.as_mut() else {
+                                continue;
+                            };
                             if self.auth.get(&client_id)
                                 == battle.active_unit.and_then(|v| Some(v.0)).as_ref()
                             {
@@ -340,8 +349,11 @@ impl GameServer {
                                     (pos.0 as i64 - goal.0 as i64, pos.1 as i64 - goal.1 as i64);
                                 if -1 <= diff.0 && diff.0 <= 1 && -1 <= diff.1 && diff.1 <= 1 {
                                     if battle.is_none() {
-                                        let battle_new =
-                                            BattleInfo::new(&mut gamemap.armys, target_army, army_index);
+                                        let battle_new = BattleInfo::new(
+                                            &mut gamemap.armys,
+                                            target_army,
+                                            army_index,
+                                        );
                                         *battle = Some(battle_new);
                                     }
                                     let message = ServerMessage::ChangeMenu(Menu::Connect as usize);
@@ -417,12 +429,12 @@ impl GameServer {
                                 if battle.is_none() {
                                     let battle_new = BattleInfo::new(&mut gamemap.armys, army, 0);
                                     *battle = Some(battle_new);
-									self.try_to_send_message(
-										gamemap,
-										player,
-										ServerMessage::ChangeMenu(Menu::ConnectBattle as usize),
-									);
-								}
+                                    self.try_to_send_message(
+                                        gamemap,
+                                        player,
+                                        ServerMessage::ChangeMenu(Menu::ConnectBattle as usize),
+                                    );
+                                }
                             }
                             Execute::Message(text, player) => {
                                 self.try_to_send_message(
@@ -430,7 +442,7 @@ impl GameServer {
                                     player,
                                     ServerMessage::Message(text),
                                 );
-                            },
+                            }
                         }
                     }
                     break;

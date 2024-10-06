@@ -2,10 +2,14 @@ use crate::{
     battle::{
         army::{Army, TroopType, MAX_TROOPS},
         troop::Troop,
-    }, items::item::Item, map::map::GameMap, network::net::*, units::unit::*
+    },
+    items::item::Item,
+    map::map::GameMap,
+    network::net::*,
+    units::unit::*,
 };
-use renet::DefaultChannel;
 use alkahest::{alkahest, serialize, serialized_size};
+use renet::DefaultChannel;
 use std::cmp::Ordering::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
@@ -374,7 +378,7 @@ pub fn check_row_fall(battle: &mut BattleInfo, armys: &mut Vec<Army>) {
     }
 }
 
-/// Action represents possibilities in a battle, Cell 
+/// Action represents possibilities in a battle, Cell
 pub enum Action {
     Cell(usize, usize),
     Move(usize, usize, usize),
@@ -539,14 +543,13 @@ pub fn handle_server_action(connection: &mut Option<ConnectionManager>, action: 
             );
         }
         Connection::Host(server) => {
-            let Some(army) = server.auth.get(&HOST_CLIENT_ID) else { return; };
-			let Some(battle) = &mut connection.battle else { return; };
-			if Some(army)
-				!= battle
-                .active_unit
-                .and_then(|v| Some(v.0))
-                .as_ref()
-            {
+            let Some(army) = server.auth.get(&HOST_CLIENT_ID) else {
+                return;
+            };
+            let Some(battle) = &mut connection.battle else {
+                return;
+            };
+            if Some(army) != battle.active_unit.and_then(|v| Some(v.0)).as_ref() {
                 return;
             }
             handle_action(
@@ -554,114 +557,156 @@ pub fn handle_server_action(connection: &mut Option<ConnectionManager>, action: 
                 battle,
                 &mut connection.gamemap.armys,
             );
-            let message =
-                ServerMessage::State((Some(battle.clone()), connection.gamemap.clone()));
+            let message = ServerMessage::State((Some(battle.clone()), connection.gamemap.clone()));
             let size = serialized_size::<ServerMessage, _>(&message);
             let mut output = vec![0u8; size.0];
             serialize::<ServerMessage, ServerMessage>(message, &mut output).ok();
-			server.server.broadcast_message_except(HOST_CLIENT_ID,
-												   DefaultChannel::ReliableOrdered,
-												   renet::Bytes::copy_from_slice(&output));
+            server.server.broadcast_message_except(
+                HOST_CLIENT_ID,
+                DefaultChannel::ReliableOrdered,
+                renet::Bytes::copy_from_slice(&output),
+            );
         }
     };
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        battle::ArmyStats,
+        parse::{parse_items, parse_units},
+        units::unitstats::ModifyUnitStats,
+    };
     use rand::{seq::IteratorRandom, thread_rng, Rng};
-    use crate::{battle::ArmyStats, parse::{parse_items, parse_units}, units::unitstats::ModifyUnitStats};
 
     use super::*;
-	fn get_unit(moves: i64, speed: i64, army: usize) -> Unit {
-		let mut unit = Unit {
-			bonus: crate::bonuses::Bonus::NoBonus,
-			stats: UnitStats {
-				speed, hp: 1, max_hp: 1, moves, max_moves: moves, ..Default::default()
-			},
-			modified: UnitStats {
-				speed, ..Default::default()
-			},
-			modify: ModifyUnitStats::default(),
-			info: UnitInfo {
-				name: "".into(),
-				descript: "".into(),
-				cost: 0,
-				cost_hire: 0,
-				icon_index: 0,
-				size: (1, 1),
-				unit_type: UnitType::People,
-				next_unit: Vec::new(),
-				magic_type: None,
-				surrender: None,
-				lvl: LevelUpInfo::empty()
-			},
-			effects: Vec::new(),
-			lvl: UnitLvl::empty(),
-			inventory: UnitInventory::empty(),
-			army
-		};
-		unit.recalc();
-		unit
-	}
-	fn gen_army(army_num: usize) -> Army {
-		let mut army = Army::new(vec![], ArmyStats { gold: 0, mana: 0, army_name: String::new() }, vec![], (0, 0), true, crate::battle::Control::PC);
-		for _ in 0..10 { army.add_troop(Troop::new(get_unit(1, thread_rng().gen_range(1..10), army_num)).into()).ok(); }
-		army
-	}
-	fn gen_army_from_units(army_num: usize, units: &Vec<Unit>) -> Army {
-		let mut army = Army::new(vec![], ArmyStats { gold: 0, mana: 0, army_name: String::new() }, vec![], (0, 0), true, crate::battle::Control::PC);
-		for _ in 0..10 { army.add_troop(Troop::new({
-			let mut unit = units.iter().choose(&mut thread_rng()).unwrap().clone();
-			unit.army = army_num;
-			unit
-		}).into()).ok(); }
-		army
-	}
+    fn get_unit(moves: i64, speed: i64, army: usize) -> Unit {
+        let mut unit = Unit {
+            bonus: crate::bonuses::Bonus::NoBonus,
+            stats: UnitStats {
+                speed,
+                hp: 1,
+                max_hp: 1,
+                moves,
+                max_moves: moves,
+                ..Default::default()
+            },
+            modified: UnitStats {
+                speed,
+                ..Default::default()
+            },
+            modify: ModifyUnitStats::default(),
+            info: UnitInfo {
+                name: "".into(),
+                descript: "".into(),
+                cost: 0,
+                cost_hire: 0,
+                icon_index: 0,
+                size: (1, 1),
+                unit_type: UnitType::People,
+                next_unit: Vec::new(),
+                magic_type: None,
+                surrender: None,
+                lvl: LevelUpInfo::empty(),
+            },
+            effects: Vec::new(),
+            lvl: UnitLvl::empty(),
+            inventory: UnitInventory::empty(),
+            army,
+        };
+        unit.recalc();
+        unit
+    }
+    fn gen_army(army_num: usize) -> Army {
+        let mut army = Army::new(
+            vec![],
+            ArmyStats {
+                gold: 0,
+                mana: 0,
+                army_name: String::new(),
+            },
+            vec![],
+            (0, 0),
+            true,
+            crate::battle::Control::PC,
+        );
+        for _ in 0..10 {
+            army.add_troop(Troop::new(get_unit(1, thread_rng().gen_range(1..10), army_num)).into())
+                .ok();
+        }
+        army
+    }
+    fn gen_army_from_units(army_num: usize, units: &Vec<Unit>) -> Army {
+        let mut army = Army::new(
+            vec![],
+            ArmyStats {
+                gold: 0,
+                mana: 0,
+                army_name: String::new(),
+            },
+            vec![],
+            (0, 0),
+            true,
+            crate::battle::Control::PC,
+        );
+        for _ in 0..10 {
+            army.add_troop(
+                Troop::new({
+                    let mut unit = units.iter().choose(&mut thread_rng()).unwrap().clone();
+                    unit.army = army_num;
+                    unit
+                })
+                .into(),
+            )
+            .ok();
+        }
+        army
+    }
     #[test]
     fn selecting_active() {
-		for _ in 0..100 {
-       		let army1 = gen_army(0);
-			let army2 = gen_army(1);
-			let mut armys = vec![army1, army2];
-			let battle = BattleInfo::new(&mut armys, 0, 1);
+        for _ in 0..100 {
+            let army1 = gen_army(0);
+            let army2 = gen_army(1);
+            let mut armys = vec![army1, army2];
+            let battle = BattleInfo::new(&mut armys, 0, 1);
 
-			let mut been = vec![];
-			while let Some(active_unit) = battle.search_next_active(&armys) {
-				if !been.contains(&active_unit) {
-					been.push(active_unit);
-				}
-				let troop = &mut armys[active_unit.0].troops[active_unit.1].get();
-				assert!(!troop_inactive(troop));
-				troop.unit.stats.moves -= 1;
-				troop.unit.recalc();
-			}
-			let gen_expectations = |a| (0..10).map(move |v| (a, v));
-			let mut expected = gen_expectations(0).chain(gen_expectations(1));
-			let left_out = expected.filter(|v| !been.contains(&v)).collect::<Vec<_>>();
-			assert!(left_out.is_empty(), "{left_out:?}");
-		}
+            let mut been = vec![];
+            while let Some(active_unit) = battle.search_next_active(&armys) {
+                if !been.contains(&active_unit) {
+                    been.push(active_unit);
+                }
+                let troop = &mut armys[active_unit.0].troops[active_unit.1].get();
+                assert!(!troop_inactive(troop));
+                troop.unit.stats.moves -= 1;
+                troop.unit.recalc();
+            }
+            let gen_expectations = |a| (0..10).map(move |v| (a, v));
+            let mut expected = gen_expectations(0).chain(gen_expectations(1));
+            let left_out = expected.filter(|v| !been.contains(&v)).collect::<Vec<_>>();
+            assert!(left_out.is_empty(), "{left_out:?}");
+        }
     }
-	#[test]
-	fn process_battles() {
-		let res = parse_units(Some("dt/Units.ini"));
-		let Ok((units, _)) = res else {
-			panic!("Unit parsing error")
-		};
-		let _ = parse_items(Some("dt/Rus_Artefacts.ini"), &"Rus".into());
-		for _ in 0..1000 {
-			let army1 = gen_army_from_units(0, &units);
-			let army2 = gen_army_from_units(1, &units);
-			let mut armys = vec![army1, army2];
-			let mut battle = BattleInfo::new(&mut armys, 0, 1);
-			while battle.winner.is_none() {
-				if let Some(interactions) = &battle.can_interact.clone() {
-					if let Some(interaction) = interactions.iter().choose(&mut thread_rng()) {
-						unit_interaction(&mut battle, &mut armys, interaction.0, interaction.1);
-					}
-				}
-				move_thing(&mut battle, &mut armys);
-			}
-			battle.end(&mut armys);
-		}
-	}
+    #[test]
+    fn process_battles() {
+        let res = parse_units(Some("dt/Units.ini"));
+        let Ok((units, _)) = res else {
+            panic!("Unit parsing error")
+        };
+        let _ = parse_items(Some("dt/Rus_Artefacts.ini"), &"Rus".into());
+        for _ in 0..1000 {
+            let army1 = gen_army_from_units(0, &units);
+            let army2 = gen_army_from_units(1, &units);
+            let mut armys = vec![army1, army2];
+            let mut battle = BattleInfo::new(&mut armys, 0, 1);
+            while battle.winner.is_none() {
+                if let Some(interactions) = &battle.can_interact.clone() {
+                    if let Some(interaction) = interactions.iter().choose(&mut thread_rng()) {
+                        unit_interaction(&mut battle, &mut armys, interaction.0, interaction.1);
+                    }
+                }
+                move_thing(&mut battle, &mut armys);
+            }
+            battle.end(&mut armys);
+        }
+    }
 }

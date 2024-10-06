@@ -9,7 +9,7 @@ Water/**
 notan/**
 notan
 #*
-/dt_launcher/launcher/mods/
+/dt_launcher/launcher/
 Cargo.lock
 
 !*/assets/*

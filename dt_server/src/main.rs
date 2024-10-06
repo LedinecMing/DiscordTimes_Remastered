@@ -1,11 +1,12 @@
 use std::{
-	time::{Duration, Instant},
-	collections::HashMap
-};	  
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use dt_lib::{
     battle::{army::*, battlefield::*, troop::Troop},
     items::item::*,
+    locale::{parse_locale, Locale},
     map::{
         event::{execute_event, Event, Execute},
         map::*,
@@ -13,11 +14,7 @@ use dt_lib::{
         tile::*,
     },
     network::net::*,
-    parse::{
-        parse_items, parse_objects, parse_settings, parse_story,
-        parse_units,
-    },
-	locale::{parse_locale, Locale},
+    parse::{parse_items, parse_objects, parse_settings, parse_story, parse_units},
     time::time::Data as TimeData,
     units::{
         unit::{ActionResult, Unit, UnitPos},
@@ -26,42 +23,38 @@ use dt_lib::{
 };
 
 enum ServerService {
-	Matchmaking,
+    Matchmaking,
 }
 #[derive(Clone, Debug)]
 pub struct State {
-	pub gamemap: GameMap,
-	pub battle: Option<BattleInfo>,
+    pub gamemap: GameMap,
+    pub battle: Option<BattleInfo>,
     pub connection: Option<ConnectionManager>,
     pub gameevents: Vec<Event>,
     pub gameloop_time: Duration,
-	pub units: HashMap<usize, Unit>,
+    pub units: HashMap<usize, Unit>,
     pub objects: Vec<ObjectInfo>,
     pub pause: bool,
 }
 fn setup_connection(state: &mut State) {
-	state.connection = Some(
-		ConnectionManager {
-			con: Connection::Host(
-				GameServer::new(false)
-			),
-			gamemap: state.gamemap.clone(),
-			battle: state.battle.clone(),
-			events: state.gameevents.clone(),
-			last_updated: Instant::now()
-		}
-	);
+    state.connection = Some(ConnectionManager {
+        con: Connection::Host(GameServer::new(false)),
+        gamemap: state.gamemap.clone(),
+        battle: state.battle.clone(),
+        events: state.gameevents.clone(),
+        last_updated: Instant::now(),
+    });
 }
 fn setup() {
-	let settings = parse_settings();
+    let settings = parse_settings();
     parse_items(None, &settings.locale);
-	let res = parse_units(None);
-	if let Err(err) = res {
-		panic!("{}", err);
-	}
+    let res = parse_units(None);
+    if let Err(err) = res {
+        panic!("{}", err);
+    }
     let Ok((units, req_assets)) = res else {
-		panic!("Unit parsing error")
-	};
+        panic!("Unit parsing error")
+    };
     let objects = parse_objects().0;
 
     let (mut gamemap, gameevents) = parse_story(

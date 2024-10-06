@@ -14,15 +14,9 @@ use dt_lib::{
         tile::*,
     },
     network::net::*,
-    parse::{
-        parse_items, parse_objects, parse_settings, parse_story,
-        parse_units,
-    },
-	locale::{parse_locale, Locale},
+    parse::{parse_items, parse_objects, parse_settings, parse_story, parse_units},
     time::time::Data as TimeData,
-    units::{
-        unit::{ActionResult, Unit, UnitPos},
-    },
+    units::unit::{ActionResult, Unit, UnitPos},
 };
 use notan::{draw::*, fragment_shader, log, prelude::*, text::TextConfig};
 use notan_ui::{
@@ -910,7 +904,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 												Execute::StartBattle(army, _) => {
 													if state.battle.is_none() {
 														let battle = BattleInfo::new(&mut state.gamemap.armys, army, 0);
-														state.battle = Some(battle);	
+														state.battle = Some(battle);
 													}
 													set_menu_value_num(state, "start_menu", 1);
 												},
@@ -1536,7 +1530,9 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
         state: &mut State,
         draw: &mut Draw,
     ) {
-		let Some(battle) = &mut state.battle else { return; };
+        let Some(battle) = &mut state.battle else {
+            return;
+        };
         let drawing_pos = drawing.get_pos();
         draw.rect(drawing_pos.into(), (1000., 1000.))
             .color(Color::ORANGE);
@@ -1924,10 +1920,12 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
             return;
         };
         //let Some(mut active_unit) = state.battle.active_unit.clone() else {return;};
-        let Some(battle) = &state.battle else { return; };
+        let Some(battle) = &state.battle else {
+            return;
+        };
         let gamemap = &state.gamemap;
         let index = active_unit.1;
-        
+
         active_unit.1 = if active_unit.0 == battle.army1 { 0 } else { 1 };
         let active_index: usize = gamemap.armys[active_unit.0].troops[index].get().pos.into();
         active_unit.0 = active_index;
@@ -2006,7 +2004,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                     Rect { pos: Position(0., 0.), size: Size(92., 92.) }
                                 ).if_clicked(|button, _app, _assets, _plugins, state| {
                                     let index = (button.rect.pos.0 / BETWEEN_CELLS) as usize + *MAX_TROOPS / 2;
-									if !state.animations.is_empty() {return;}
+8									if !state.animations.is_empty() {return;}
 									let Some(battle) = &mut state.battle else { return; };
 									if let Some(_) = battle.winner { state.menu_id = Menu::Start as usize; return; }
                                     let res = handle_action(Action::Cell(index, 1), battle, &mut state.gamemap.armys);
@@ -2049,7 +2047,6 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                             single(DrawingBuilder::<State>::default()
                                 .to_draw(|drawing, _app, _assets, _gfx, _plugins, state, draw| {
                                     let pos = drawing.pos;
-									
                                     draw.image(&state.assets.get("assets/Icons").unwrap().get(&*format!("unit_{}.png", get_menu_value_num(state, "battle_unit_stat").unwrap_or(1)-1)).unwrap().lock().unwrap())
                                         .position(pos.0, pos.1);
 									for animation in &state.animations {
@@ -2125,7 +2122,6 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 													let Some(conn) = &mut state.connection else { return; };
 													let gamemap = &mut conn.gamemap;
 													let Some(battle) = &mut conn.battle else { return; };
-													
                                                     unit_card_draw(drawing.pos, app, gfx, &state.assets, &state.fonts[0], battle, gamemap, draw, 0, 0 * *MAX_TROOPS / 2 + (drawing.pos.0 / BETWEEN_CELLS) as usize);
                                                 }
                                             },
@@ -2321,11 +2317,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 }
 
 type Tilemap<T> = [[T; MAP_SIZE]; MAP_SIZE];
-fn gen_army_troops(
-    rng: &mut ThreadRng,
-    units: &Vec<Unit>,
-    army: usize,
-) -> Vec<TroopType> {
+fn gen_army_troops(rng: &mut ThreadRng, units: &Vec<Unit>, army: usize) -> Vec<TroopType> {
     let mut troops = (0..*MAX_TROOPS / 2)
         .map(|i| {
             Troop {
@@ -2505,14 +2497,18 @@ fn gen_shaders(gfx: &mut Graphics) -> Vec<(Pipeline, Buffer)> {
         .unwrap();
     vec![(pipeline, uniforms)]
 }
-fn load_assets(gfx: &mut Graphics, assets: &mut HashMap<&'static str, HashMap<String, Asset<Texture>>>, req_assets: Vec<String>, path: &'static str) -> Result<(), String> {
-	let mut asset_map = HashMap::new();
-	for req in req_assets {
-		asset_map.insert(req.clone(),
-						 load_asset(gfx, &format!("{path}/{req}"))?);
-	}
-	assets.insert(path, asset_map);
-	Ok(())
+fn load_assets(
+    gfx: &mut Graphics,
+    assets: &mut HashMap<&'static str, HashMap<String, Asset<Texture>>>,
+    req_assets: Vec<String>,
+    path: &'static str,
+) -> Result<(), String> {
+    let mut asset_map = HashMap::new();
+    for req in req_assets {
+        asset_map.insert(req.clone(), load_asset(gfx, &format!("{path}/{req}"))?);
+    }
+    assets.insert(path, asset_map);
+    Ok(())
 }
 fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
     let mut assets = HashMap::new();
@@ -2564,28 +2560,26 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
     app.window()
         .set_size(settings.init_size.0, settings.init_size.1);
     let req_assets = parse_items(None, &settings.locale);
-	load_assets(gfx, &mut assets, req_assets.1, req_assets.0).expect("Loading items assets failed");
+    load_assets(gfx, &mut assets, req_assets.1, req_assets.0).expect("Loading items assets failed");
     {
         let locale = &mut LOCALE.lock().unwrap();
-		dbg!(&settings);
-		locale.set_lang((&settings.locale, &settings.additional_locale));
-        parse_locale(
-            &[&settings.locale, &settings.additional_locale],
-            locale,
-        );
+        dbg!(&settings);
+        locale.set_lang((&settings.locale, &settings.additional_locale));
+        parse_locale(&[&settings.locale, &settings.additional_locale], locale);
     }
-	let res = parse_units(None);
-	if let Err(err) = res {
-		log::error!("{}", err);
-		panic!("{}", err);
-	}
+    let res = parse_units(None);
+    if let Err(err) = res {
+        log::error!("{}", err);
+        panic!("{}", err);
+    }
     let Ok((units, req_assets)) = res else {
-		panic!("Unit parsing error")
-	};
-	load_assets(gfx, &mut assets, req_assets.1, req_assets.0).expect("Loading units assets failed");
+        panic!("Unit parsing error")
+    };
+    load_assets(gfx, &mut assets, req_assets.1, req_assets.0).expect("Loading units assets failed");
     let (objects, req_assets) = parse_objects();
-	load_assets(gfx, &mut assets, req_assets.1, req_assets.0).expect("Loading objects assets failed");
-	
+    load_assets(gfx, &mut assets, req_assets.1, req_assets.0)
+        .expect("Loading objects assets failed");
+
     let (mut gamemap, gameevents) = parse_story(
         &units,
         &objects,

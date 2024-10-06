@@ -103,13 +103,14 @@ pub fn register_locale(
 
 pub fn parse_locale(languages: &[&String], locale: &mut Locale) {
     for language in languages {
-        let props = advini::parse_for_props(&read_file_as_string(format!("{}_Locale.ini", language)));
+        let props =
+            advini::parse_for_props(&read_file_as_string(format!("{}_Locale.ini", language)));
         for (k, value) in props {
-			dbg!(&k, &value);
+            dbg!(&k, &value);
             locale.insert(k, value, &language);
         }
     }
-	dbg!(locale);
+    dbg!(locale);
 }
 
 pub fn parse_for_sections_localised(

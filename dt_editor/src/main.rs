@@ -1006,7 +1006,7 @@ impl App for DemoApp {
 
         egui::SidePanel::left("style").show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                egui_probe::Probe::new("Snarl style", &mut self.style).show(ui);
+                egui_probe::Probe::new(&mut self.style).show(ui);
             });
         });
 
@@ -1040,7 +1040,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "egui-snarl demo",
         native_options,
-        Box::new(|cx| Box::new(DemoApp::new(cx))),
+        Box::new(|cx| Ok(Box::new(DemoApp::new(cx)))),
     )
 }
 
