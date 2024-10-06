@@ -1,5 +1,5 @@
 [workspace]
-members = ["ini_core", "advini", "advini_derive", "math_thingies", "notan_ui", "ui", "dt_lib", "dt_editor", "dt_launcher", "quad_test"]
+members = ["ini_core", "advini", "advini_derive", "math_thingies", "notan_ui", "ui", "dt_lib", "dt_editor", "quad_test"]
 resolver = "2"
 
 [patch.crates-io] 

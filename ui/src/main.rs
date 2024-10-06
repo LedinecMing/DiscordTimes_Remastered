@@ -6,6 +6,7 @@ use alkahest::{serialize, serialized_size};
 use dt_lib::{
     battle::{army::*, battlefield::*, troop::Troop},
     items::item::*,
+    locale::{parse_locale, Locale},
     map::{
         event::{execute_event, Event as GameEvent, Execute},
         map::*,
@@ -14,11 +15,7 @@ use dt_lib::{
     },
     network::net::*,
     new_forms::{SubWindowSys, TextureRenderer},
-    parse::{
-        load_asset, parse_items, parse_objects, parse_settings, parse_story,
-        parse_units,
-    },
-	locale::{parse_locale, Locale},
+    parse::{load_asset, parse_items, parse_objects, parse_settings, parse_story, parse_units},
     time::time::Data as TimeData,
     units::{
         unit::{ActionResult, Unit, UnitPos},
@@ -711,7 +708,6 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                                     let texture = state.get_texture("assets/Items", &*item.get_info().icon);
                                                     draw.image(&texture)
                                                         .position(pos.0 + (53. + 5.) * i as f32, pos.1);
-                                                    
                                                 }
                                             }
 										}
@@ -734,7 +730,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                         if let Some(item_index) = get_menu_value_num(state, "items_item_index") {
                                             unit.add_item(Item { index: item_index as usize }.into(), slot);
                                             set_menu_value_num(state, "items_unit_stat_changed", 1);
-                                        }                                    
+                                        }
                                     }
                                 }
                             })
@@ -877,7 +873,6 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 											if app.keyboard.was_pressed(KeyCode::Escape) {
 												set_menu_value_num(state, "start_menu", 0);
 											}
-											
 										})
 										.build()?
 								),
@@ -960,9 +955,9 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 										})
 										.build()?
 								),
-							], 
-							select_window: |cont, state: &State| {
-								get_menu_value_num(state, "start_menu").unwrap_or(0) as usize
+							],
+						select_window: |cont, state: &State| {
+							get_menu_value_num(state, "start_menu").unwrap_or(0) as usize
 							},
 							rect: Rect {
 								pos: Position(size.0/2., size.1/2.),
@@ -974,7 +969,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 						|cont, app, assets, gfx, plugins, state: &mut State, draw| {
 							draw_gamemap(cont, app, gfx, &state.assets, &state.gamemap, &state.objects, draw);
 						}
-					)					
+					)
 					.after_draw(|cont,app,assets,plugins,state: &mut State| {
 						if get_menu_value_num(state, "start_menu").unwrap_or(0) == 0 {
 							if app.keyboard.was_pressed(KeyCode::Space) {
@@ -1060,7 +1055,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 												Execute::StartBattle(army, _) => {
 													if state.battle.army1 != army && state.battle.army2 != 0 {
 														let battle = BattleInfo::new(&mut state.gamemap, army, 0);
-														state.battle = battle;		
+														state.battle = battle;
 													}
 													set_menu_value_num(state, "start_menu", 1);
 												},
@@ -1658,7 +1653,6 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 			_ => {
 				dyn_cont({
 					let building = &state.gamemap.buildings[building];
-					
 					if let Some(recruitment) = &building.recruitment {
 						vec![Box::new(container(recruitment.units.iter().enumerate().map(|(n, unit)| {
 							let unit = &state.units[&unit.unit];
@@ -1704,8 +1698,6 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 					} else { vec![] }
 				},
 				).align_direction(Direction::Bottom)
-				
-
 			},
 		}
     }
@@ -2791,10 +2783,7 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
     dbg!(&settings);
     {
         let locale = &mut LOCALE.lock().unwrap();
-        parse_locale(      
-            &[&settings.locale, &settings.additional_locale],
-            locale,
-        );
+        parse_locale(&[&settings.locale, &settings.additional_locale], locale);
         locale.set_lang((&settings.locale, &settings.additional_locale));
     }
     let units = parse_units(&mut assets, gfx);

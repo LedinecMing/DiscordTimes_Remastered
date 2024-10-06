@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use super::parse::read_file_as_string;
 use advini;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Locale {
@@ -88,9 +88,9 @@ pub fn process_locale(locale: impl Into<String>, map_locale: &mut Locale) -> Str
             }
         }
     }
-	end_string
+    end_string
 }
- 
+
 pub fn register_locale(
     locale_name: impl Into<String>,
     locale: impl Into<String>,
@@ -104,7 +104,7 @@ pub fn register_locale(
 pub fn parse_locale(languages: &[&String], locale: &mut Locale) {
     for language in languages {
         let props = advini::parse_for_props(&*format!("{}_Locale.ini", language));
-        
+
         for (k, value) in props {
             locale.insert(k, value, &language);
         }
@@ -118,21 +118,12 @@ pub fn parse_for_sections_localised(
     let ini_doc = read_file_as_string(path.into());
     advini::parse_for_sections_with(
         &ini_doc,
-        |(prop, v, s)| {
-            (
-                prop.to_lowercase(),
-                process_locale(v, s),
-            )
-        },
+        |(prop, v, s)| (prop.to_lowercase(), process_locale(v, s)),
         locale,
     )
 }
 
-pub fn parse_map_locale(    
-    path: &str,
-    languages: &[&String],
-    locale: &mut Locale,
-) {
+pub fn parse_map_locale(path: &str, languages: &[&String], locale: &mut Locale) {
     for (sec, props) in advini::parse_for_sections(path) {
         if !languages.contains(&&sec) {
             continue;

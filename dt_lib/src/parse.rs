@@ -118,6 +118,7 @@ use super::{
     battle::{army::Control, troop::Troop},
     bonuses::*,
     items::item::{ItemInfo, *},
+    locale::*,
     map::{
         event::*,
         map::{GameMap, Tilemap, MAP_SIZE},
@@ -129,7 +130,6 @@ use super::{
         unit::{MagicDirection::*, MagicType::*, *},
         unitstats::ModifyUnitStats,
     },
-	locale::*
 };
 use crate::{
     battle::army::{Army, ArmyStats},
@@ -173,10 +173,7 @@ pub fn read_file_as_string(path: String) -> String {
     String::new()
 }
 
-pub fn load_asset(
-    gfx: &mut Graphics,
-    path: &str,
-) -> Result<Asset<Texture>, String> {
+pub fn load_asset(gfx: &mut Graphics, path: &str) -> Result<Asset<Texture>, String> {
     //manager.load_asset(path)
     log::warn!("Loading {path}");
     Ok(Asset::from_data(
@@ -243,7 +240,7 @@ pub fn match_magictype(
 }
 pub fn parse_units(
     asset_map: &mut HashMap<&str, HashMap<String, Asset<Texture>>>,
-    gfx: &mut Graphics,
+    gfx: &mut Gaaphics,
 ) -> HashMap<usize, Unit> {
     let mut units = HashMap::new();
     let sections = parse_for_sections("Units.ini");
@@ -1356,10 +1353,7 @@ pub fn parse_story(
         &mut locale,
         objects,
     );
-    let events = parse_events(
-        format!("{map_dir}{}", events_path.unwrap()),
-        &mut locale,
-    );
+    let events = parse_events(format!("{map_dir}{}", events_path.unwrap()), &mut locale);
 
     let gamemap = GameMap {
         armys: mapdata.3,

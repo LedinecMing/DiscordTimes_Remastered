@@ -1,6 +1,6 @@
 use crate::{
     battle::troop::Troop,
-	map::map::GameMap,
+    map::map::GameMap,
     mutrc::SendMut,
     time::time::Time,
     units::unit::{Unit, UnitPos},
@@ -158,7 +158,9 @@ impl Ini for Location {
         }
     }
 }
-#[derive(Clone, Debug, Default, Sections, serde::Serialize, serde::Deserialize, FieldNamesAsArray)]
+#[derive(
+    Clone, Debug, Default, Sections, serde::Serialize, serde::Deserialize, FieldNamesAsArray,
+)]
 pub struct Conditions {
     #[default_value = "false"]
     pub relative_time: bool,
@@ -231,7 +233,9 @@ impl Conditions {
         }
     }
 }
-#[derive(Clone, Debug, Default, Sections, serde::Serialize, serde::Deserialize, FieldNamesAsArray)]
+#[derive(
+    Clone, Debug, Default, Sections, serde::Serialize, serde::Deserialize, FieldNamesAsArray,
+)]
 pub struct EventResult {
     #[default_value = "None"]
     pub lit_lights: Option<Vec<usize>>,

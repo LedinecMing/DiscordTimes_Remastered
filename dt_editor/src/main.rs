@@ -1,21 +1,19 @@
 use std::collections::HashMap;
 
+use dt_lib::{
+    battle::army::Army,
+    locale::parse_locale,
+    map::{
+        event::{Conditions, Event, EventResult},
+        map::GameMap,
+    },
+    parse::{parse_items, parse_objects, parse_story},
+};
 use eframe::{App, CreationContext};
 use egui::{Color32, Ui};
 use egui_snarl::{
     ui::{AnyPins, PinInfo, SnarlStyle, SnarlViewer, WireStyle},
     InPin, InPinId, NodeId, OutPin, OutPinId, Snarl,
-};
-use dt_lib::{
-	map::{
-		map::GameMap,
-		event::{
-			Event, EventResult, Conditions
-		},
-	},
-	parse::{parse_items, parse_story, parse_objects},
-	locale::parse_locale,
-	battle::army::Army,
 };
 const STRING_COLOR: Color32 = Color32::from_rgb(0x00, 0xb0, 0x00);
 const NUMBER_COLOR: Color32 = Color32::from_rgb(0xb0, 0x00, 0x00);
@@ -24,8 +22,7 @@ const UNTYPED_COLOR: Color32 = Color32::from_rgb(0xb0, 0xb0, 0xb0);
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 enum DemoNode {
-
-	// Event,
+    // Event,
     /// Node with single input.
     /// Displays the value of the input.
     Sink,
@@ -197,7 +194,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                             PinInfo::square().with_fill(NUMBER_COLOR)
                         }
                         DemoNode::String(ref value) => {
-						assert_eq!(remote.output, 0, "String node has only one output");
+                            assert_eq!(remote.output, 0, "String node has only one output");
                             ui.label(format!("{:?}", value));
 
                             PinInfo::triangle().with_fill(STRING_COLOR).with_wire_style(
@@ -1028,7 +1025,7 @@ impl App for DemoApp {
     }
 }
 fn parse_game_configs() {
-	parse_items;		
+    parse_items;
 }
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
