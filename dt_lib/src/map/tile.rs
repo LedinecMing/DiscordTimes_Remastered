@@ -20,15 +20,20 @@ impl Tile {
     }
 }
 
-pub static TILES: [Tile; 10] = [
-    Tile::new(2, "Land.png", false),
-    Tile::new(1, "Badground.png", false),
-    Tile::new(4, "Road.png", false),
-    Tile::new(2, "Snow.png", false),
-    Tile::new(2, "Plain.png", false),
-    Tile::new(2, "LowLand.png", false),
-    Tile::new(4, "Water.png", true),
-    Tile::new(4, "Shallow.png", true),
+pub static TILES: [Tile; 15] = [
+	Tile::new(4, "Shallow.png", true),
+	Tile::new(4, "Water.png", true),
     Tile::new(0, "DeepWater.png", false),
-    Tile::new(2, "Desert.png", false),
+	Tile::new(0, "FlameLand.png", false),
+	Tile::new(4, "Road.png", false),
+	Tile::new(2, "LowLand.png", false),
+    Tile::new(2, "Land.png", false),
+	Tile::new(2, "Plain.png", false),
+	Tile::new(1, "Swamp.png", false),
+	Tile::new(0, "DeepSwamp.png", false),
+	Tile::new(2, "Desert.png", false),
+    Tile::new(1, "Badground.png", false),
+	Tile::new(1, "Rock.png", false),
+	Tile::new(1, "Dust.png", false),
+    Tile::new(2, "Snow.png", false),
 ];

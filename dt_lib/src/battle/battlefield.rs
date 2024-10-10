@@ -89,7 +89,7 @@ impl BattleInfo {
         if self.winner.is_some() {
             return None;
         }
-
+		
         fn max_speed(troops: &Vec<TroopType>) -> (usize, &TroopType) {
             troops
                 .iter()
@@ -585,8 +585,8 @@ mod tests {
             bonus: crate::bonuses::Bonus::NoBonus,
             stats: UnitStats {
                 speed,
-                hp: 1,
-                max_hp: 1,
+                hp: 100,
+                max_hp: 100,
                 moves,
                 max_moves: moves,
                 ..Default::default()
@@ -628,7 +628,7 @@ mod tests {
             vec![],
             (0, 0),
             true,
-            crate::battle::Control::PC,
+            crate::battle::control::Control::PC,
         );
         for _ in 0..10 {
             army.add_troop(Troop::new(get_unit(1, thread_rng().gen_range(1..10), army_num)).into())
@@ -647,7 +647,7 @@ mod tests {
             vec![],
             (0, 0),
             true,
-            crate::battle::Control::PC,
+            crate::battle::control::Control::PC,
         );
         for _ in 0..10 {
             army.add_troop(
@@ -664,18 +664,18 @@ mod tests {
     }
     #[test]
     fn selecting_active() {
-        for _ in 0..100 {
+        for iteration in 0..100 {
             let army1 = gen_army(0);
             let army2 = gen_army(1);
-            let mut armys = vec![army1, army2];
-            let battle = BattleInfo::new(&mut armys, 0, 1);
+            let mut armies = vec![army1, army2];
+            let battle = BattleInfo::new(&mut armies, 0, 1);
 
             let mut been = vec![];
-            while let Some(active_unit) = battle.search_next_active(&armys) {
+            while let Some(active_unit) = battle.search_next_active(&armies) {
                 if !been.contains(&active_unit) {
                     been.push(active_unit);
                 }
-                let troop = &mut armys[active_unit.0].troops[active_unit.1].get();
+                let troop = &mut armies[active_unit.0].troops[active_unit.1].get();
                 assert!(!troop_inactive(troop));
                 troop.unit.stats.moves -= 1;
                 troop.unit.recalc();
@@ -683,7 +683,16 @@ mod tests {
             let gen_expectations = |a| (0..10).map(move |v| (a, v));
             let mut expected = gen_expectations(0).chain(gen_expectations(1));
             let left_out = expected.filter(|v| !been.contains(&v)).collect::<Vec<_>>();
-            assert!(left_out.is_empty(), "{left_out:?}");
+            if !left_out.is_empty() {
+				dbg!(iteration);
+				for unit in left_out {
+					let troop = &armies[unit.0].troops[unit.1].get();
+					let unit = dbg!(&troop.unit);
+					dbg!(unit.modified.moves, unit.modified.max_moves, unit.modified.speed);
+					dbg!(troop_inactive(troop));
+					panic!("God damn it!");
+				}
+			}
         }
     }
     #[test]

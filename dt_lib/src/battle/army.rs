@@ -19,36 +19,7 @@ use num::{integer::sqrt, pow};
 use once_cell::sync::Lazy;
 use pathfinding::directed::astar::astar;
 
-#[derive(Clone, Debug, Default)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct Relations {
-    player: u8,
-    ally: u8,
-    neighbour: u8,
-    enemy: u8,
-}
-impl Ini for Relations {
-    fn eat<'a>(chars: std::str::Chars<'a>) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
-        match <(u8, u8, u8, u8) as Ini>::eat(chars) {
-            Ok(v) => Ok({
-                let rels = v.0;
-                (
-                    Self {
-                        player: rels.0,
-                        ally: rels.1,
-                        neighbour: rels.2,
-                        enemy: rels.3,
-                    },
-                    v.1,
-                )
-            }),
-            Err(err) => Err(err),
-        }
-    }
-    fn vomit(&self) -> String {
-        (self.player, self.ally, self.neighbour, self.enemy).vomit()
-    }
-}
+use super::control::Control;
 #[derive(Clone, Debug, Default, Sections)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ArmyStats {
@@ -79,37 +50,6 @@ fn eq_fields(index: usize, index1: usize, columns: usize, rows: usize) -> bool {
 
 pub const MAX_LINES: usize = 2;
 
-#[derive(Clone, Debug, Default)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub enum Control {
-    #[default]
-    PC,
-    Player(usize),
-}
-impl Ini for Control {
-    fn eat<'a>(chars: std::str::Chars<'a>) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
-        let (tag, chars) = match <u8 as Ini>::eat(chars) {
-            Ok(v) => Ok(v),
-            Err(err) => Err(err),
-        }?;
-        match tag {
-            0 => Ok((Control::PC, chars)),
-            _ => {
-                let (v, chars) = match <usize as Ini>::eat(chars) {
-                    Ok(v) => Ok(v),
-                    Err(err) => Err(err),
-                }?;
-                Ok((Control::Player(v), chars))
-            }
-        }
-    }
-    fn vomit(&self) -> String {
-        match self {
-            Control::PC => 0_u8.vomit(),
-            Control::Player(n) => (0_u8, *n).vomit(),
-        }
-    }
-}
 #[derive(Clone, Debug, Default)]
 //#[alkahest(Formula)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]

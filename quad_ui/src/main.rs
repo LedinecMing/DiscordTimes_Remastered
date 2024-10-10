@@ -30,7 +30,7 @@ use std::{
     ops::Index,
     sync::{Mutex, RwLock},
 };
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Assets {
     inner: HashMap<String, Texture2D, RandomState>,
 }
@@ -50,7 +50,7 @@ impl Index<&String> for Assets {
 }
 static LOCALE: Lazy<RwLock<Locale>> =
     Lazy::new(|| RwLock::new(Locale::new("Rus".into(), "Eng".into())));
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct State {
     pub assets: Assets,
     pub units: Vec<Unit>,
@@ -103,7 +103,8 @@ async fn game_init() -> State {
         panic!("Unit parsing error")
     };
     let (objects, req_assets_objects) = parse_objects();
-    let req_assets_list = [req_assets_items, req_assets_objects, req_assets_units];
+	let req_assets_tiles = ("assets/Terrain", TILES.iter().map(|tile| tile.sprite().to_string()).collect());
+    let req_assets_list = [req_assets_items, req_assets_objects, req_assets_units, req_assets_tiles];
     let assets = load_assets(&req_assets_list).await;
     let (mut gamemap, events) = parse_story(
         &units,
@@ -112,7 +113,6 @@ async fn game_init() -> State {
         &settings.additional_locale,
     );
     gamemap.calc_hitboxes(&objects);
-
     State {
         assets,
         units,
@@ -128,13 +128,13 @@ async fn game_init() -> State {
         }),
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Scenario {
     pub gamemap: GameMap,
     pub battle: Option<BattleInfo>,
     pub events: Vec<GameEvent>,
 }
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum Game {
     Single(Scenario),
     Online(ConnectionManager),
@@ -146,39 +146,73 @@ fn window_conf() -> Conf {
         ..Default::default()
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 enum Menu {
     Main,
-    Map,
+    Map(Camera2D),
     Battle,
     EventMessage,
 }
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Ui {
     pub main: Menu,
     pub stack: Vec<Menu>,
 }
-fn draw_menu(menu: Menu, state: &mut State) {
-    match menu {
+const SIZE: (f32, f32) = (54., 50.);
+fn draw_map(assets: &Assets, camera: &mut Camera2D, game: &mut Game) {
+	let gamemap = match game {
+		Game::Single(Scenario { gamemap, battle, events }) => gamemap,
+		Game::Online(conn) => &mut conn.gamemap,
+	};
+
+	for i in 0..MAP_SIZE {
+		for j in 0..MAP_SIZE {
+			let tile = TILES[gamemap.tilemap[i][j]];
+			draw_texture(assets.get(&tile.sprite().to_string()), i as f32 * SIZE.0, j as f32 * SIZE.1, Color::default());
+		}
+	}
+	if is_key_down(KeyCode::W) {
+		camera.offset += Vec2::new(0., -1.)
+	}
+	if is_key_down(KeyCode::D) {
+		camera.offset += Vec2::new(1., 0.);
+	}
+	if is_key_down(KeyCode::A) {
+		camera.offset += Vec2::new(-1., 0.);
+	}
+	if is_key_down(KeyCode::S) {
+		camera.offset += Vec2::new(0., 1.);
+	}
+	if is_key_down(KeyCode::Equal) {
+		camera.zoom += Vec2::new(0.01, 0.01);
+	}
+	if is_key_down(KeyCode::Minus) {
+		camera.zoom -= Vec2::new(0.01, 0.01);
+	}
+}
+fn draw_menu(state: &mut State) {
+    match &mut state.ui.main {
         Menu::Main => {
             Window::new(hash!(), vec2(0., 0.), vec2(screen_height(), screen_width()))
                 .titlebar(false)
                 .ui(&mut *root_ui(), |ui| {
                     ui.label(Some((50., 50.).into()), "Discord Times");
                     if ui.button(Some((50., 100.).into()), "Start") {
-                        state.ui.main = Menu::Map;
+                        state.ui.main = Menu::Map(Camera2D::default());
                     }
                 });
         }
-        Menu::Map => {}
+        Menu::Map(camera) => {
+			draw_map(&state.assets, camera, &mut state.game);
+		}
         _ => {}
     }
 }
 fn draw_ui(state: &mut State) {
-    draw_menu(state.ui.main, state);
-    for menu in state.ui.stack.clone() {
-        draw_menu(menu, state);
-    }
+    draw_menu(state);
+    //for menu in state.ui.stack.clone() {
+        //draw_menu(menu, state);
+    //}
 }
 #[macroquad::main(window_conf)]
 async fn main() {

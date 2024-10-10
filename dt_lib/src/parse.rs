@@ -115,7 +115,7 @@ use math_thingies::add_opt;
 use num::Num;
 
 use super::{
-    battle::{army::Control, troop::Troop},
+    battle::{control::Control, troop::Troop},
     bonuses::*,
     items::item::{ItemInfo, *},
     locale::*,

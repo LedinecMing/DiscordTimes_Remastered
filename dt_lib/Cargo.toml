@@ -30,3 +30,5 @@ log = "0.4.22"
 bzip2 = "0.4.4"
 encoding_rs = "0.8.34"
 bytes = "1.7.2"
+zerocopy = { version="0.8.2", features=["derive"] }
+num_enum = "0.7.3"

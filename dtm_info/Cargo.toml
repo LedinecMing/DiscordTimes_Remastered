@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.5.19", features = ["derive"] }
 dt_lib = { path = "../dt_lib" }
+zerocopy = "0.8.3"

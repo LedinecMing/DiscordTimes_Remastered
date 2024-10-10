@@ -2004,7 +2004,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                     Rect { pos: Position(0., 0.), size: Size(92., 92.) }
                                 ).if_clicked(|button, _app, _assets, _plugins, state| {
                                     let index = (button.rect.pos.0 / BETWEEN_CELLS) as usize + *MAX_TROOPS / 2;
-8									if !state.animations.is_empty() {return;}
+									if !state.animations.is_empty() {return;}
 									let Some(battle) = &mut state.battle else { return; };
 									if let Some(_) = battle.winner { state.menu_id = Menu::Start as usize; return; }
                                     let res = handle_action(Action::Cell(index, 1), battle, &mut state.gamemap.armys);
