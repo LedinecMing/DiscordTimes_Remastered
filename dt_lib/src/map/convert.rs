@@ -132,6 +132,87 @@ pub struct ArmyData {
 	pub action_model: u8, // модель поведения 86
 	pub _empty6: [u8; 3], // 3 пустых байта 89 
 }
+#[derive(FromBytes, Unaligned, Debug)]
+#[repr(packed(1))]
+pub struct EventData {
+    pub event_color: u8, // 1
+    pub event_type: u8, // 2 байт обозначает тип события(глобальное/локальное/задание/сплетни).
+    pub event_date: u32, // 3-6 4 байта, гранящие дату срабатывания события в минутах (отсчет идет с 00 ч 01 д 01 м 0000 г; то есть 01 ч 01 д 01 м 0000 года будет иметь 32-битное значение 60)
+    pub event_repeat: u16, // 7-8 2 байта под время повтора события - повтор каждый N день(также в минутах, в редакторе настраиваются дни)
+    pub event_duration: u16, // 9-10 2 байта под длительность срабатывания события(в минутах, в редакторе настраиваются часы)
+    pub hero_archetype: u8, // 11 байт архетип персонажа 00-для всех, 01-рыцарь, 02-архимаг, 03-следопыт.
+    pub unit_in_squad_amount: i16, // 12-13 2 байта со значениям количества юнитов в отряде(число отрядов) 16-битное число со знаком
+    pub army_strength: i16, // 14-15
+    pub army_unactive_id: u8, // 16
+    pub army_id_change_patrol: u8, // 17
+    pub change_patrol: i8, // 18
+    pub current_specifications_checkmark: u8, // 19
+    pub current_level: i16, // 20-21 2 байта со значениями текущего уровня 16-битное число со знаком
+    pub current_gold: i16, // 22-23
+    pub _empty: [u8; 2], // 24-25
+    pub current_mana: i16, // 26-27
+    pub _empty1: [u8; 2], // 28-29
+    pub buildings_ownership: u8, // 30
+    pub building_id: [u8; 3], // 31-33
+    pub building_ownership_group_id: [u8; 3], // 34-36 байт id первой группы(чье строение:  игрока\зеленых\синих\желтых\красных\не игрока) для принадлежности строений)
+    pub nominal_squad_in_army_checkmark: u8, // 37
+    pub unit_id: [u8; 3], // 38-40
+    pub nominal_unit1_id: [u8; 3], // 41-43 байт id первого именного юнита(id юнита заменяется при этом на id юнита именного юнита)
+    pub army_ownership_group_id: [u8; 3], // 44-46 байт id первой группы(чья армия:  игрока\зеленых\синих\желтых\красных\не игрока) для принадлежности юнитов(отрядов))
+    pub existing_items: u8, // 47
+    pub item_id: [u8; 3], // 48-50
+    pub existing_item_group_id: [u8; 3], // 51-53 байт id первой группы(чей артефакт:  игрока\зеленых\синих\желтых\красных\не игрока) для принадлежности артефактов)
+    pub enemy_defeat_checkmark: u8, // 54
+    pub army_defeat_id: [u8; 2], // 55-56
+    pub happened_event_answ_yes_checkmark: u8, // 57
+    pub happened_event_answ_yes_id: [u16; 2], // 58-61 2 байта id первого события указанного в меню произошедшее событие, ответ "да"
+    pub not_happened_event_checkmark: u8, // 62
+    pub not_happened_event_id: [u16; 2], // 63-66 2 байта id первого события указанного в меню не произошедшее событие
+    pub army_already_defeat: u8, // 67
+    pub defeat_army_id: [u8; 2], // 68-69
+    pub happened_event_answ_no_checkmark: u8, // 70
+    pub happened_event_answ_no_id: [u16; 2], // 71-74 2 байта id первого события указанного в меню произошедшее событие, ответ "нет"
+    pub army_meet_id: u8, // 75 байт id армии для встречи(встреча с армией)
+    pub army_active_id: u8, // 76 байт id армии которая активна(проверка армия активна)
+    pub confirm_question: u8, // 77
+    pub relative_event: u16, // 78-79
+    pub relative_event_time_in_hours: u16, // 80-81
+    pub activated_spell_id: u8, // 82
+    pub event_picture: u8, // 83 байт встроенная картинка к событию (200-поражение, 201 победа, или id юнита)
+    pub change_xp: i16, // 84-85
+    pub change_gold: i16, // 86-87
+    pub _empty2: [u8; 2], // 88-89
+    pub change_mana: i16, // 90-91
+    pub _empty3: [u8; 2], // 92-93
+    pub spell_learn_id: [u8; 4], // 94-97
+    pub unit_add_id: [u8; 4], // 98-101
+    pub unit_nominal_add_id: [u8; 4], // 102-105 байт id первого именного добавляемого юнита(не меняет id добавляемого юнита)
+    pub unit_quit_id: [u8; 4], // 106-109 байт id первого уходящего юнита или  FE(добавленный юнит), FF(любой юнит)
+    pub unit_nominal_quit_id: [u8; 4], // 110-113
+    pub item_add_id: [u8; 4], // 114-117
+    pub item_remove_id: [u8; 4], // 118-121
+    pub army_activate_id: [u8; 2], // 122-123
+    pub army_deactivate_id: u8, // 124
+    pub event_quest_complete_id: u16, // 125-126
+    pub event_delay_in_hours: u16, // 127-128
+    pub light_activate_light: [u16; 4], // 129-136
+    pub army_unit_leave_id: u8, // 137
+    pub unit_change_hero_army: u8, // 138
+    pub subordinate_event_id: u16, // 139-140
+    pub subordinate_event_checkmark: u8, // 141 байт галочка подчиненное событие(0- выключено, 1 включено). Редактор при переключении обнуляет дату срабатывания события, его длительность, время повтора, ставит галочку многократное событие. 
+    pub multiple_event: u8, // 142 байт галочка многократное событие(0-включено, 1-выключено).
+    pub army_from_unit_leave_id: u8, // 143 байт id армии из которой уходит юнит
+    pub move_to_hero_checkmark: u8, // 144
+    pub shown_army_id: u8, // 145
+    pub hero_have_only_1hp_checkmark: u8, // 146
+    pub army_in_native_building_id: u8, // 147
+    pub army_from_start_fight_id: u8, // 148
+    pub army_not_met_checkmark: u8, // 149
+    pub repeat_after_answ_yes_checkmark: u8, // 150
+    pub _empty4: [u8; 14], // 151-163
+    pub custom_picture_for_event: u16, // 164-???(165) кол-во байт кастомной картинки к событию, которая лежит в файле после текстовых данных.
+    pub _empty5: [u8; 6], // 166-171
+}
 #[derive(Debug, Clone, Copy, FromBytes)]
 pub struct LightOrEvent {
 	pub x: u16,
