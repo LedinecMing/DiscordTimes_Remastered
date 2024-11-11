@@ -54,6 +54,20 @@ pub struct ManyUnitsData {
 }
 #[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(packed(1))]
+pub struct RecruitUnit {
+    pub id: u8,
+    pub amount: u8,
+    pub max_amount: u8,
+}
+#[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
+#[repr(packed(1))]
+pub struct GarrisonUnit {
+    pub id: u8,
+    pub level: u8,
+    pub count: u8,
+}
+#[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
+#[repr(packed(1))]
 pub struct ArmyTroopsData {
 	pub main: UnitData,
 	pub troops: [ManyUnitsData; 6]
@@ -132,6 +146,7 @@ pub struct ArmyData {
 	pub action_model: u8, // модель поведения 86
 	pub _empty6: [u8; 3], // 3 пустых байта 89 
 }
+
 #[derive(FromBytes, Unaligned, Debug)]
 #[repr(packed(1))]
 pub struct EventData {
@@ -212,6 +227,113 @@ pub struct EventData {
     pub _empty4: [u8; 14], // 151-163
     pub custom_picture_for_event: u16, // 164-???(165) кол-во байт кастомной картинки к событию, которая лежит в файле после текстовых данных.
     pub _empty5: [u8; 6], // 166-171
+
+#[repr(packed(1))]
+#[derive(FromBytes, Unaligned, Debug, Clone)]
+pub struct BuildingData {
+    pub x: u16, // широта 2
+    pub y: u16, // долгота 4
+    pub picture_number: u8, // номер картинки типа строения 5
+    pub picture_variant: u8, // тип картинки строения 6
+    pub variant: u8, // тип строения 7
+	pub _empty0: [u8; 1], // 8
+    pub event_ids: [u16; 64], // айди событий в максимальном количестве 64 штуки 136
+    pub artifact_ids: [u16; 6], // на рынке 5 штук, в руинах 4 максимально 148
+	pub _empty_big: [u8; 117], //
+    pub recruits: [RecruitUnit; 6], // найм в казармах 282
+    pub gold_income: u16, // золотой доход 284
+	pub max_gold_income: u16, // максимальный золотой доход? 286
+	pub _empty: [u8; 2], // 288
+    pub event_amount: u8, // кол-во событий в строении 289
+    pub size_x: u8, // размер по широте 290
+    pub size_y: u8, // размер по долготе 291
+	pub _empty1: [u8; 1], // 292
+    pub owner_army_id: u8, // владелец строения FF - нет владельца, 00 - по-умолчанию 293
+	pub _empty2: [u8; 1], // 294
+    pub barracks_visibility: u8, // работают ли казармы? если найм не указан то 00 если да то 01 295
+    pub number_of_artifacts_for_sale: u8, // кол-во артефактов на продажу 296
+	pub _empty3: [u8; 12], // 308
+    pub spell_ids: [u8; 5], // айди заклинаний 314 bytes (info about spells available for study)
+    pub garrison_units: [GarrisonUnit; 6], // гарнизон 332 bytes
+    pub additional_garrison_defense: u8, // дополнительная защита гарнизона 333
+    pub min_artifact_price: u16, // минимальная стоимость артефактов 335,
+	pub max_artifact_price: u16, // максимальная стоимость артефактов 337,
+	pub group: u8, // союзник, сосед, враг в таком духе 338
+	pub relations: RelationsData, // отношения здания 342
+	pub _empty4: [u8; 8], // 350
+	pub mana_income: u8, // приток маны 351
+	pub max_mana_income: u8, // максимальный приток маны 352
+	pub _empty5: [u8; 1], // 353
+	pub knight_start_building: u8, // стартовое здание рыцаря 354
+	pub mage_start_building: u8, // стартовое здание архимага 355
+	pub ranger_start_building: u8, // стартовое здание следопыта 356
+	pub all_start_building: u8, // общее стартовое строение 357
+	pub garrison_only_pc: u8, // гарнизон только для ии? 358
+}
+#[derive(FromBytes, Unaligned, PartialEq, Eq, Debug, Copy, Clone)]
+#[repr(packed(1))]
+pub struct HeroInfoData {
+	pub _empty1: [u8; 6], // 6
+	pub battle_xp: u16, // 8
+	pub gold: u16, // 10
+	pub _empty2: [u8; 2], // 12
+	pub mana: u16, // 14
+	pub _empty0: [u8; 2], // 16
+	pub start_building: u8, // 17
+	pub _empty3: [u8; 2], // 19
+	pub army_data: [GarrisonUnit; 6], // 37
+	pub x: u16, // 39
+	pub y: u16, // 41
+	pub items: [u8; 3], // 44
+	pub spells: [u8; 5], // 49
+	pub _empty4: [u8; 1] // 50
+}
+#[derive(FromBytes, Unaligned, Debug, Copy, Clone)]
+#[repr(packed(1))]
+pub struct FractionRelationsData {
+	pub a: RelationsData,
+	pub b: RelationsData,
+	pub c: RelationsData,
+	pub d: RelationsData
+}
+#[derive(FromBytes, Unaligned, Debug, Clone, Copy)]
+#[repr(packed(1))]
+pub struct SettingsData {
+	pub size_x: u32, // 4
+	pub size_y: u32, // 8
+	pub seed: u32, // 12
+	pub text_start: u32, // в байтах 16
+	pub surface_size: u32, // 20
+	pub deco_size: u32, // 24
+	pub buildings_size: u32, // 28
+	pub armies_size: u32, // 32
+	pub lanterns_size: u32, // 36
+	pub events_size: u32, // 40
+	pub _empty: [u8; 4], // 44
+	pub start_time: u32, // в минутах 48
+	pub knight_data: HeroInfoData, // 98
+	pub mage_data: HeroInfoData, // 148
+	pub ranger_data: HeroInfoData, // 198 Если вы читаете это то знайте что я заебался искать тут недостающий байт и он оказался просто в конце этой несчастной структурки
+	pub winning_event_id: u16, // 200
+	pub _empty1: [u8; 4], // 204
+	pub losing_event_id: u16, // 206
+	pub _empty2: [u8; 4], // 210
+	pub global_relations: FractionRelationsData, // 226
+	pub named_units_amount: u8, // 227
+	pub names_units_ids: [u8; 32], // 259
+	pub scenario_variant: u8, // 00 - одиночный 01 - начальный компании 02 - обычный компании 260
+	pub save_money: u8, // сохранение денег при переходе на эту карту 261
+	pub save_mana: u8, // сохранение маны при переходе на эту карту 262
+	pub save_fame: u8, // сохранить что каво? тоннельщина 263
+	pub save_xp_and_lvl: u8, // сохранить опыт и уровень 264
+	pub save_own_items: u8, // сохранить личные артефакты 265
+	pub save_all_items: u8, // сохранить все артефакты 266
+	pub save_all_troops: u8, // сохранить всю армию 267
+	pub _empty3: [u8; 5], // 272
+	pub scenario_pic_size: [u16; 2], // размер картинки сценария 276
+	pub scenario_pic_id: u8, // номер картинки к сценарию 277
+	pub _empty4: [u8; 3], // 280
+	pub map_version: u16 // кол-во сохранений в редакторе 282
 }
 #[derive(Debug, Clone, Copy, FromBytes)]
 pub struct LightOrEvent {
@@ -223,14 +345,9 @@ pub struct LightOrEvent {
 	pub light_radius: u8,
 }
 pub struct MapData {
-    pub text_size: i32,
-    pub surface_size: i32,
-    pub objects_size: i32,
-    pub buildings_size: i32,
-    pub armies_size: i32,
-    pub lanterns_size: i32,
+    pub settings: SettingsData,
+	pub buildings: Vec<BuildingData>,
     pub map: Vec<u8>,
-    pub map_size: (i32, i32),
     pub decos: Vec<(u16, u16, u16)>,
 	pub armies: Vec<ArmyData>,
 }
@@ -272,26 +389,18 @@ pub fn convert_map(path: &Path) -> Result<MapData, ()> {
     {
         panic!("Wrong uncompressed header {:X?}", header_buf);
     }
-    let (map_width, map_height) = (data.get_i32_le(), data.get_i32_le());
-    data.advance(4);
-    let (text_size, surface_size, objects_size, buildings_size, armies_size, lanterns_size) = (
-        data.get_i32_le(),
-        data.get_i32_le(),
-        data.get_i32_le(),
-        data.get_i32_le(),
-        data.get_i32_le(),
-        data.get_i32_le(),
-    );
+	let bytes = &mut data.copy_to_bytes(282);
+    let settings = SettingsData::read_from_bytes(&bytes.as_bytes()).unwrap();
     let current_offset = file_size - data.remaining();
     let data_offset = 0x12F - 0xC - 0x8 - 0x4 * 0x6;
     println!("0x{:X?};0x{:X?}", current_offset, data_offset);
     data.advance(0x12F - current_offset);
-    let mut surface_data = data.copy_to_bytes(surface_size as usize);
-    let mut objects_data = data.copy_to_bytes(objects_size as usize);
-    let mut buildings_data = data.copy_to_bytes(buildings_size as usize);
-    let mut armies_data = data.copy_to_bytes(armies_size as usize);
-    let mut lanterns_data = data.copy_to_bytes(lanterns_size as usize);
-	// let mut texts_data = data.copy_to_bytes(text_size as usize);
+    let mut surface_data = data.copy_to_bytes(settings.surface_size as usize);
+    let mut objects_data = data.copy_to_bytes(settings.deco_size as usize);
+    let mut buildings_data = data.copy_to_bytes(settings.buildings_size as usize);
+    let mut armies_data = data.copy_to_bytes(settings.armies_size as usize);
+    let mut lanterns_data = data.copy_to_bytes(settings.lanterns_size as usize);
+	// let mut texts_data = data.copy_to_bytes(settings.text_size as usize);
     dbg!(surface_data.remaining());
     fn parse_by_2_bytes(mut bytes: Bytes) -> Vec<u8> {
         let mut map = vec![];
@@ -319,6 +428,14 @@ pub fn convert_map(path: &Path) -> Result<MapData, ()> {
         }
         armies
 	}
+	fn parse_buildings(mut bytes: Bytes) -> Vec<BuildingData> {
+		let mut buildings = vec![];
+        while !&bytes.is_empty() {
+            let data = &mut bytes.copy_to_bytes(358);
+            buildings.push(BuildingData::read_from_bytes(data.as_bytes()).unwrap());
+        }
+        buildings
+	}
 	fn parse_text(mut bytes: Bytes) -> Vec<String> {
 		let mut text_buffer = vec![];
 		for i in bytes.utf8_chunks() {
@@ -329,17 +446,13 @@ pub fn convert_map(path: &Path) -> Result<MapData, ()> {
     let mut map = parse_by_2_bytes(surface_data);
     let decos = parse_decos(objects_data);
 	let armies = parse_armies(armies_data);
+	let buildings = parse_buildings(buildings_data);
 	//let texts = parse_text(texts_data);
     Ok(MapData {
-        surface_size,
-        decos,
-        armies_size,
-        text_size,
-        objects_size,
-        lanterns_size,
-        buildings_size,
+		settings,
+		buildings,
+		decos,
         map,
-        map_size: (map_height, map_width),
 		armies
     })
 }
@@ -360,7 +473,7 @@ mod test {
             }
             let data = super::convert_map(&path.path().as_path()).unwrap();
             let map = data.map;
-            let (map_height, map_width) = (data.map_size.0 as usize, data.map_size.1 as usize);
+            let (map_height, map_width) = (data.settings.size_x as usize, data.settings.size_y as usize);
             let terr_ascii = [
                 "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F",
             ];
