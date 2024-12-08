@@ -1,92 +1,116 @@
-use wasm_bindgen::prelude::*;
-use web_sys::{ErrorEvent, MessageEvent, WebSocket};
+use std::sync::Arc;
+use dt_lib::{
+    battle::{army::*, battlefield::*, troop::Troop},
+    items::item::*,
+    locale::{parse_locale, Locale},
+    map::{
+        event::{execute_event, Event, Execute},
+        map::*,
+        object::ObjectInfo,
+        tile::*,
+    },
+    network::net::*,
+    parse::{parse_items, parse_objects, parse_settings, parse_story, parse_units},
+    time::time::Data as TimeData,
+    units::{
+        unit::{ActionResult, Unit, UnitPos},
+        unitstats::ModifyUnitStats,
+    },
+};
+use futures_util::StreamExt;
+use tokio::sync::oneshot;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tungstenite::client::IntoClientRequest;
 
-// Import the `window.alert` function from the Web.
-#[wasm_bindgen]
-extern "C" {
-    fn alert(s: &str);
-}
-macro_rules! console_log {
-    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+
+pub struct IncomingEvent((Vec<Army>, BattleInfo));
+pub struct OutcomingEvent((usize, usize));
+
+pub struct Connection {
+    pub incoming_events: futures_channel::mpsc::Receiver<IncomingEvent>,
+    pub events_sender: futures_channel::mpsc::Sender<OutcomingEvent>,
+    // tasks_handle: JoinAll<JoinHandle<()>>,
 }
 
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
-// Export a `greet` function from Rust to JavaScript, that alerts a
-// hello message.
-#[wasm_bindgen]
-pub fn greet(name: &str) {
-    alert(&format!("Hello, {}!", name));
-}
+pub async fn connect(room: &str, id: &str) -> Connection {
+    let mut request = "ws://localhost:3000/ws".into_client_request().unwrap();
+    {
+        let headers = request.headers_mut();
+        headers.insert("room-code", room.parse().unwrap());
+        headers.insert("player-id", id.parse().unwrap());
 
-#[wasm_bindgen]
-pub fn connect(room: &str) -> Result<(), JsValue> {
+        // welp you're gonna need to serialize it to a safe string
+        // let initial_data = Vec::new();
+        // alkahest::serialize_to_vec((0, 0), &mut initial_data);
+        // headers.insert("init-data", initial_data);
+    }
+
     // Connect to an echo server
-    let ws = WebSocket::new("ws://localhost:3000/ws")?;
-    // For small binary messages, like CBOR, Arraybuffer is more efficient than Blob handling
-    ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
-    // create callback
-    let mut state = ();
-    let cloned_ws = ws.clone();
-    let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
-        // Handle difference Text/Binary,...
-        if let Ok(abuf) = e.data().dyn_into::<js_sys::ArrayBuffer>() {
-            console_log!("message event, received arraybuffer: {:?}", abuf);
-            let array = js_sys::Uint8Array::new(&abuf);
-            let buf = array.to_vec();
+    let (ws_stream, _) = connect_async(request)
+        .await
+        .expect("failed to connect to the server");
 
-            // here you can for example use Serde Deserialize decode the message
-            // for demo purposes
-        } else if let Ok(blob) = e.data().dyn_into::<web_sys::Blob>() {
-            console_log!("message event, received blob: {:?}", blob);
-            // better alternative to juggling with FileReader is to use https://crates.io/crates/gloo-file
-            let fr = web_sys::FileReader::new().unwrap();
-            let fr_c = fr.clone();
-            // create onLoadEnd callback
-            let onloadend_cb = Closure::<dyn FnMut(_)>::new(move |_e: web_sys::ProgressEvent| {
-                let array = js_sys::Uint8Array::new(&fr_c.result().unwrap());
-                let len = array.byte_length() as usize;
-                console_log!("Blob received {}bytes: {:?}", len, array.to_vec());
-                // here you can for example use the received image/png data
-            });
-            fr.set_onloadend(Some(onloadend_cb.as_ref().unchecked_ref()));
-            fr.read_as_array_buffer(&blob).expect("blob not readable");
-            onloadend_cb.forget();
-        } else if let Ok(txt) = e.data().dyn_into::<js_sys::JsString>() {
-            console_log!("message event, received Text: {:?}", txt);
-        } else {
-            console_log!("message event, received Unknown: {:?}", e.data());
+    let (write, read) = ws_stream.split();
+
+    // ie = incoming events, oe = outcoming events
+    let (ie_tx, ie_rx) = futures_channel::mpsc::channel::<IncomingEvent>(256);
+    let (oe_tx, oe_rx) = futures_channel::mpsc::channel::<OutcomingEvent>(256);
+
+    let i = read.filter_map(|msg| async {
+        let Message::Binary(e) = msg.ok()? else {return None};
+        let data =
+            alkahest::deserialize::<(Vec<Army>, BattleInfo), (Vec<Army>, BattleInfo)>(&e).ok()?;
+        Some(Ok(IncomingEvent(data)))
+    }).forward(ie_tx);
+
+    let o = oe_rx.map(|OutcomingEvent(msg)| {
+        let mut result = Vec::new();
+        alkahest::serialize_to_vec::<(usize, usize), (usize, usize)>(msg, &mut result);
+        Ok(Message::binary(result))
+    }).forward(write);
+
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = i => (),
+            _ = o => (),
         }
     });
-    // set message event handler on WebSocket
-    ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
-    // forget the callback to keep it alive
-    onmessage_callback.forget();
 
-    let onerror_callback = Closure::<dyn FnMut(_)>::new(move |e: ErrorEvent| {
-        console_log!("error event: {:?}", e);
-    });
-    ws.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
-    onerror_callback.forget();
+    Connection {
+        incoming_events: ie_rx,
+        events_sender: oe_tx,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use futures_util::StreamExt;
+    use tokio::sync::oneshot;
+    use crate::connect;
 
-    let cloned_ws = ws.clone();
-    let onopen_callback = Closure::<dyn FnMut()>::new(move || {
-        console_log!("socket opened");
-        match cloned_ws.send_with_str("ping") {
-            Ok(_) => console_log!("message successfully sent"),
-            Err(err) => console_log!("error sending message: {:?}", err),
-        }
-        // send off binary message
-        match cloned_ws.send_with_u8_array(&[0, 1, 2, 3]) {
-            Ok(_) => console_log!("binary message successfully sent"),
-            Err(err) => console_log!("error sending message: {:?}", err),
-        }
-    });
-    ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
-    onopen_callback.forget();
+    #[tokio::test]
+    async fn test() {
+        let mut server_proc = tokio::process::Command::new(tokio::fs::canonicalize("../dt/dt_server").await.unwrap())
+            .current_dir("../dt/")
+            .spawn()
+            .unwrap();
 
-    Ok(())
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        let mut conn = connect("000000", "1").await;
+
+        conn.events_sender.try_send(crate::OutcomingEvent((0,0))).unwrap();
+        tokio::spawn(conn.incoming_events.for_each(|msg| async {
+            // dbg!(msg);
+            //
+            // HEEYAWYEYYAYSDYAYS READ THIS
+            //  SO BASICALLY
+            //  YOU SHOULD CHANGE THE TYPE OF INCOMINGEVENT TO YOUR NEED
+            // THE SERVER CAN RETURN AN ERROR OR SOME SHIT
+            //     HANDLE THAT
+            ()
+        }));
+
+        // stop_signal.0.send(()).unwrap();
+        server_proc.kill().await.unwrap();
+    }
 }

@@ -7,7 +7,7 @@ name = "DT_Remastered"
 version = "0.1.0"
 dependencies = [
  "advini",
- "alkahest 0.3.0 (git+https://github.com/zakarumych/alkahest.git?rev=99a5b68)",
+ "alkahest",
  "anyhow",
  "bytemuck",
  "derive_builder",
@@ -279,12 +279,6 @@ checksum = "8e60d3430d3a69478ad0993f19238d2df97c507009a52b3c10addcd7f6bcb916"
 dependencies = [
  "memchr",
 ]
-
-[[package]]
-name = "alkahest"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3afb453d344e42ba592019bb80778e8c0a4976c4f4986e0dba6a0ae7d5a9616"
 
 [[package]]
 name = "alkahest"
@@ -1822,10 +1816,13 @@ checksum = "f25c0e292a7ca6d6498557ff1df68f32c99850012b6ea401cf8daf771f22ff53"
 name = "dt_client"
 version = "0.1.0"
 dependencies = [
- "alkahest 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "js-sys",
- "wasm-bindgen",
- "web-sys",
+ "alkahest",
+ "dt_lib",
+ "futures-channel",
+ "futures-util",
+ "tokio",
+ "tokio-tungstenite",
+ "tungstenite",
 ]
 
 [[package]]
@@ -1859,7 +1856,7 @@ name = "dt_lib"
 version = "0.1.0"
 dependencies = [
  "advini",
- "alkahest 0.3.0 (git+https://github.com/zakarumych/alkahest.git?rev=99a5b68)",
+ "alkahest",
  "bytes",
  "bzip2",
  "derive_more",
@@ -1886,7 +1883,7 @@ dependencies = [
 name = "dt_server"
 version = "0.1.0"
 dependencies = [
- "alkahest 0.3.0 (git+https://github.com/zakarumych/alkahest.git?rev=99a5b68)",
+ "alkahest",
  "axum",
  "bincode",
  "dt_lib",
