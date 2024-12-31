@@ -119,17 +119,20 @@ impl Army {
         }
         army
     }
+	pub fn recalc_hitmap_solo(hitmap: &mut Vec<Option<usize>>, size: (usize, usize), pos: UnitPos, num: usize, columns: usize) {
+        for j in 0..size.1 {
+            for i in 0..size.0 {
+                hitmap[(j + pos.1) * columns + (i + pos.0)] = Some(num);
+            }
+        }
+	}
     pub fn recalc_hitmap(troops: &Vec<TroopType>, hitmap: &mut Vec<Option<usize>>, columns: usize) {
         let info = troops.iter().enumerate().map(|(num, troop)| {
             let troop = troop.get();
             (troop.unit.info.size, troop.pos, num)
         });
         for (size, pos, num) in info {
-            for j in 0..size.1 {
-                for i in 0..size.0 {
-                    hitmap[(j + pos.1) * columns + (i + pos.0)] = Some(num);
-                }
-            }
+			Army::recalc_hitmap_solo(hitmap, size, pos, num, columns);
         }
     }
     pub fn recalc_army_hitmap(&mut self) {

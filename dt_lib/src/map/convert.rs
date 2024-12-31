@@ -54,8 +54,8 @@ pub struct UnitData {
 #[repr(packed(1))]
 pub struct ManyUnitsData {
     pub id: u8,
-    pub amount: u8,
     pub level: u8,
+	pub amount: u8,
 }
 #[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(packed(1))]

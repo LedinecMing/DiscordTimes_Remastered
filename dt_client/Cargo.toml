@@ -2,17 +2,20 @@
 name = "dt_client"
 version = "0.1.0"
 edition = "2021"
-
+[[bin]]
+name = "dt_client"
+path = "src/main.rs"
 [lib]
-crate-type = ["cdylib"]
-
+name = "dt_client"
+path = "src/lib.rs"
+crate-type = ["lib"]
 [dependencies]
 # alkahest = "0.3.0"
 # js-sys = "0.3.72"
 # wasm-bindgen = "0.2.93"
 # web-sys = { version = "0.3.72", features = ["BinaryType","Blob","ErrorEvent","FileReader","MessageEvent","ProgressEvent","WebSocket"] }
 dt_lib = { path = "../dt_lib" }
-tokio = { version = "*", features = ["sync", "rt", "process", "macros", "fs", "time"] }
+tokio = { version = "*", features = ["sync", "rt", "rt-multi-thread", "process", "macros", "fs", "time"] }
 tokio-tungstenite = "0.24.0"
 tungstenite = "0.24.0"
 futures-util = "*"

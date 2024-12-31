@@ -11,7 +11,7 @@ use axum::{
     Error as AError, Router,
 };
 use futures::{
-    stream::{SplitSink, SplitStream},
+    stream::{self, SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,11 @@ struct WsSocket {
     stream: SplitStream<WebSocket>,
     sink: SplitSink<WebSocket, AWsMessage>,
 }
-
+impl WsSocket {
+	async fn send(&mut self, message: AWsMessage) {
+		self.sink.send(message).await;
+	}
+}
 impl From<WebSocket> for WsSocket {
     fn from(val: WebSocket) -> Self {
         let (sink, stream) = val.split();
@@ -64,6 +68,14 @@ use dt_lib::{
 type MutRc<T> = Arc<Mutex<T>>;
 enum ServerService {
     Matchmaking,
+}
+enum Incoming {
+	Action(UnitPos),
+	Status
+}
+enum Outcoming {
+	Battle((Vec<Army>, BattleInfo)),
+	Status()
 }
 #[derive(Clone)]
 pub struct State {
@@ -115,7 +127,7 @@ fn process_move(
     army: usize,
 ) -> Result<AWsMessage, AError> {
     let RoomInstance { armies, battle } = instance;
-    if battle.active_unit.is_some_and(|x| x.0 != army) {
+    if battle.active_unit.is_some_and(|x| x.army != army) {
         return Err(AError::new("fuck off!"));
     }
     let buf = message.into_data();
@@ -123,7 +135,7 @@ fn process_move(
     else {
         return Err(AError::new("bad data."));
     };
-    handle_action(Action::Cell(target_army, target_index), battle, armies);
+    handle_action((target_army, target_index), battle, armies);
     let mut buf = vec![];
     serialize::<(Vec<Army>, BattleInfo), (Vec<Army>, BattleInfo)>(
         (armies.clone(), battle.clone()),
@@ -171,14 +183,32 @@ async fn ws_handler(
 }
 
 async fn handle_socket(
-    socket: WebSocket,
+    mut socket: WebSocket,
     room_code: String,
     (hotel, mut instance): (Arc<Mutex<Hotel>>, RoomInstance),
 ) {
-    let room = {
+	{
+		let mut buf = vec![];
+		serialize::<(Vec<Army>, BattleInfo), (Vec<Army>, BattleInfo)>(
+			(instance.armies.clone(), instance.battle.clone()),
+			&mut buf,
+		).ok();
+		socket.send(AWsMessage::Binary(buf)).await;
+		if let Some(Some((Some(sock), None))) = hotel.lock().await.0.get_mut(&room_code) {
+			dbg!("Second player");
+			socket.send(AWsMessage::Text("Room full".to_owned())).await;
+			sock.send(AWsMessage::Text("Room full".to_owned())).await;
+		} else {
+			dbg!("First player");
+			socket.send(AWsMessage::Text("Wait for another player".to_owned())).await;
+		}
+	}
+    let mut room = {
         let mut hotel = hotel.lock().await;
-        match hotel.put_socket(&room_code, socket) {
-            Ok(None) => return,
+        match hotel.put_socket(room_code, socket).await {
+            Ok(None) => {
+				return;
+			},
             Ok(Some(room)) => room,
             Err((mut socket, e)) => {
                 socket.send(AWsMessage::Text(e.to_string())).await.unwrap();
@@ -187,7 +217,6 @@ async fn handle_socket(
             }
         }
     };
-
     fn stream_with_id<T, E>(
         stream: impl StreamExt<Item = Result<T, E>>,
         id: usize,
@@ -196,7 +225,6 @@ async fn handle_socket(
             .filter_map(|x| futures::future::ready(x.ok()))
             .map(move |x| (x, id))
     }
-
     futures::stream::select(
         stream_with_id(room.0.stream, 0),
         stream_with_id(room.1.stream, 1),

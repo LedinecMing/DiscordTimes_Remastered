@@ -1,1 +1,1 @@
-cd ui; cargo build --release; cd ..; mv target/release/DT_Remastered dt/. -f && cd dt
+cd ui; cargo build --release -p $1; cd ..; mv target/release/$1 dt/. -f && cd dt

@@ -28,16 +28,27 @@ pub fn field_type(index: usize, max_troops: usize) -> Field {
 pub fn troop_inactive(troop: &Troop) -> bool {
     troop.unit.modified.moves < 1 || troop.unit.is_dead()
 }
-
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub struct BattleUnit {
+	pub army: usize,
+	pub index: usize,
+}
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub struct BattleUnitPos {
+	pub army: usize,
+	pub pos: usize
+}
 #[derive(Clone, Default, Debug)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct BattleInfo {
     pub army1: usize,
     pub army2: usize,
     pub battle_ter: usize,
-    pub active_unit: Option<(usize, usize)>,
+    pub active_unit: Option<BattleUnit>,
     pub move_count: u64,
-    pub can_interact: Option<Vec<(usize, usize)>>,
+    pub can_interact: Option<Vec<BattleUnit>>,
     pub winner: Option<usize>,
     pub dead: Vec<TroopType>,
 }
@@ -83,7 +94,7 @@ impl BattleInfo {
         remove_corpses(self, &mut army2.troops);
         army2.recalc_army_hitmap();
     }
-    pub fn search_next_active(&self, armys: &Vec<Army>) -> Option<(usize, usize)> {
+    pub fn search_next_active(&self, armys: &Vec<Army>) -> Option<BattleUnit> {
         let army1 = &armys[self.army1];
         let army2 = &armys[self.army2];
         if self.winner.is_some() {
@@ -119,9 +130,9 @@ impl BattleInfo {
             let tr1_inactive = troop_inactive(&troop1);
             let tr2_inactive = troop_inactive(&troop2);
             if troop1.unit.modified.speed > troop2.unit.modified.speed && !tr1_inactive {
-                Some((troop1.unit.army, next1.0))
+                Some(BattleUnit { army: troop1.unit.army, index: next1.0})
             } else if !tr2_inactive {
-                Some((troop2.unit.army, next2.0))
+                Some(BattleUnit { army: troop2.unit.army, index: next2.0})
             } else {
                 None
             }
@@ -218,12 +229,12 @@ impl BattleInfo {
 pub fn search_interactions(
     battle: &mut BattleInfo,
     armys: &Vec<Army>,
-) -> Option<Vec<(usize, usize)>> {
+) -> Option<Vec<BattleUnit>> {
     let army1 = &armys[battle.army1];
     let army2 = &armys[battle.army2];
     let mut can_interact = Vec::new();
     if let Some(active_unit) = battle.active_unit {
-        let active_army = active_unit.0;
+        let active_army = active_unit.army;
 
         let (tr1, tr2) = (&army1.troops, &army2.troops);
         let (troops1, troops2) = (&tr1, &tr2);
@@ -233,27 +244,27 @@ pub fn search_interactions(
             troops2
         };
         fn collect_interactions(
-            active_unit: (usize, usize),
+            active_unit: BattleUnit,
             active_troops: &Vec<TroopType>,
             troops: &Vec<TroopType>,
             army: usize,
-            can_interact: &mut Vec<(usize, usize)>,
+            can_interact: &mut Vec<BattleUnit>,
         ) {
             can_interact.append(
                 &mut troops
                     .iter()
                     .enumerate()
                     .map(|(i, troop)| {
-                        if i == active_unit.1 && active_unit.0 == army {
+                        if i == active_unit.index && active_unit.army == army {
                             return None;
                         }
                         let troop = &troop.get();
                         let index = troop.pos.into();
                         let unit = &troop.unit;
-                        let active_troop = &active_troops[active_unit.1].get();
+                        let active_troop = &active_troops[active_unit.index].get();
                         let active_unit_unit = &active_troop.unit;
                         if active_unit_unit.can_attack(unit, troop.pos, active_troop.pos) {
-                            Some((0, index))
+                            Some(BattleUnit { army: 0, index })
                         } else {
                             None
                         }
@@ -379,9 +390,9 @@ pub fn check_row_fall(battle: &mut BattleInfo, armys: &mut Vec<Army>) {
 }
 
 /// Action represents possibilities in a battle, Cell
-pub enum Action {
-    Cell(usize, usize),
-    Move(usize, usize, usize),
+pub struct Action {
+    pos_index: usize,
+	army: usize,
 }
 pub fn move_thing(battle: &mut BattleInfo, armys: &mut Vec<Army>) {
     check_win(battle, &armys);
@@ -403,10 +414,7 @@ fn unit_interaction(
     armys: &mut Vec<Army>,
     pos: usize,
     army: usize,
-) -> (Option<ActionResult>, bool) {
-    if let Some(_) = battle.winner {
-        return (None, false);
-    }
+) -> Option<ActionResult> {
     let mut action_result = None;
     let army = if army == 0 {
         battle.army1
@@ -414,116 +422,64 @@ fn unit_interaction(
         battle.army2
     };
 
-    let mut unit_inactive = false;
-
     let Some(active_unit) = battle.active_unit else {
-        battle.active_unit = battle.search_next_active(armys);
-        move_thing(battle, armys);
-        return (None, false);
+        return None;
     };
-    let Some(target_index) = armys[army].hitmap[pos] else {
-        return if army == active_unit.0 {
-            (
-                handle_action(
-                    Action::Move(active_unit.0, active_unit.1, pos),
-                    battle,
-                    armys,
-                )
-                .and_then(|v| Some(v.0)),
-                true,
-            )
-        } else {
-            (None, false)
-        };
+
+	let Some(target_index) = armys[army].hitmap[pos] else {
+		let active_army = &mut armys[active_unit.army];
+		let size = {
+			let troop = &mut active_army.troops[active_unit.index].get();
+			troop.pos = UnitPos::from_index(pos);
+			troop.unit.info.size
+		};
+		// move character
+		Army::recalc_hitmap_solo(&mut active_army.hitmap, size, UnitPos::from_index(pos), active_unit.index, 2); // columns
+        return Some(ActionResult::Move);
     };
-    if active_unit.0 == army && target_index == active_unit.1 {
-        let troop = &mut armys[army].troops[target_index].get();
-        if troop_inactive(&troop) {
-            return (None, false);
-        }
-        let unit = &mut troop.unit;
-        unit.stats.moves -= 1;
-        unit.recalc();
-        return (None, troop_inactive(&troop));
+	let active_army = &armys[active_unit.army];
+	let Some(mut troop) = active_army.troops.get(active_unit.index).and_then(|x| Some(x.get())) else { return None; };
+	let active_unit_pos = troop.pos;
+	let unit = &mut troop.unit;
+
+    if active_unit.army == army && target_index == active_unit.index {
+		
     } else {
         let target_troops = &armys[army].troops;
-        let the_troops = {
-            let active_index = active_unit.1;
-            let active_army = active_unit.0;
-            (
-                armys[active_army].troops.get(active_index),
-                target_troops.get(target_index),
-            )
+        let the_troops = target_troops.get(target_index);
+        let Some(target_troop) = the_troops else {
+            return None;
         };
-        let (Some(active_troop), Some(target_troop)) = the_troops else {
-            return (None, unit_inactive);
-        };
-        let (mut active_troop, mut target_troop) = (active_troop.get(), target_troop.get());
-        if troop_inactive(&active_troop) {
-            return (None, true);
-        }
-        let active_unit_index = active_troop.pos.into();
-        let unit1 = &mut active_troop.unit;
+        let mut target_troop = target_troop.get();
         let unit2 = &mut target_troop.unit;
-        if !unit2.is_dead() {
-            let res = unit1.attack(
-                unit2,
-                UnitPos::from_index(pos),
-                UnitPos::from_index(active_unit_index),
-                &battle,
-            );
-            if res.is_some() {
-                unit1.stats.moves -= 1;
-                unit1.recalc();
-                if unit1.is_dead() || unit1.modified.moves < 1 {
-                    unit_inactive = true;
-                }
-            }
-            action_result = res;
-        }
+        let res = unit.attack(
+            unit2,
+            UnitPos::from_index(pos),
+            active_unit_pos,
+            &battle,
+        );
+        action_result = res;
     };
-    (action_result, unit_inactive)
+    unit.stats.moves -= 1;
+	unit.modified.moves = unit.modify.moves.apply(unit.stats.moves);
+    action_result
 }
 
 /// A method that processes an action with the given battle and gamemap, action is done by currently active unit, it will return None if action is impossible due to game rules.
 pub fn handle_action(
-    action: Action,
+    (pos, army): (usize, usize),
     battle: &mut BattleInfo,
     armies: &mut Vec<Army>,
-) -> Option<(ActionResult, (usize, usize))> {
-    match action {
-        Action::Cell(pos, army) => {
-            if let Some(_) = battle.winner {
-                // state.menu_id = Menu::Start as usize;
-                return None;
-            }
-            let active = battle.active_unit;
-            let res = unit_interaction(battle, armies, pos, army);
-            if res.1 {
-                battle.active_unit = battle.search_next_active(&armies);
-            }
-            move_thing(battle, armies);
-            res.0.and_then(|v| Some((v, active.unwrap())))
-        }
-        Action::Move(army, troop, to) => {
-            let army = &mut armies[army];
-            let unit_inactive = {
-                let troop = &mut army.troops[troop].get();
-                troop.pos = UnitPos::from_index(to);
-                let unit = &mut troop.unit;
-                unit.stats.moves -= 1;
-                unit.recalc();
-                unit.modified.moves < 1 || unit.is_dead()
-            };
-            army.recalc_army_hitmap();
-            let active = battle.active_unit;
-            if unit_inactive {
-                battle.active_unit = battle.search_next_active(&armies);
-            }
-            move_thing(battle, armies);
-            Some((ActionResult::Move, active.unwrap()))
-        }
+) -> Option<(ActionResult, BattleUnit)> {
+    if let Some(_) = battle.winner {
+        // state.menu_id = Menu::Start as usize;
+        return None;
     }
+    let active = battle.active_unit;
+    let res = unit_interaction(battle, armies, pos, army);
+    battle.active_unit = battle.search_next_active(&armies);
+    move_thing(battle, armies);
+    res.and_then(|v| Some((v, active.unwrap())))
 }
 
 /// Used for processing an action in a context of using a server
@@ -549,11 +505,11 @@ pub fn handle_server_action(connection: &mut Option<ConnectionManager>, action: 
             let Some(battle) = &mut connection.battle else {
                 return;
             };
-            if Some(army) != battle.active_unit.and_then(|v| Some(v.0)).as_ref() {
+            if Some(army) != battle.active_unit.and_then(|v| Some(v.army)).as_ref() {
                 return;
             }
             handle_action(
-                Action::Cell(action.0, action.1),
+                action,
                 battle,
                 &mut connection.gamemap.armys,
             );
@@ -675,18 +631,18 @@ mod tests {
                 if !been.contains(&active_unit) {
                     been.push(active_unit);
                 }
-                let troop = &mut armies[active_unit.0].troops[active_unit.1].get();
+                let troop = &mut armies[active_unit.army].troops[active_unit.index].get();
                 assert!(!troop_inactive(troop));
                 troop.unit.stats.moves -= 1;
                 troop.unit.recalc();
             }
-            let gen_expectations = |a| (0..10).map(move |v| (a, v));
+            let gen_expectations = |a| (0..10).map(move |v| BattleUnit{ army: a, index: v });
             let mut expected = gen_expectations(0).chain(gen_expectations(1));
             let left_out = expected.filter(|v| !been.contains(&v)).collect::<Vec<_>>();
             if !left_out.is_empty() {
                 dbg!(iteration);
                 for unit in left_out {
-                    let troop = &armies[unit.0].troops[unit.1].get();
+                    let troop = &armies[unit.army].troops[unit.index].get();
                     let unit = dbg!(&troop.unit);
                     dbg!(
                         unit.modified.moves,
@@ -694,8 +650,8 @@ mod tests {
                         unit.modified.speed
                     );
                     dbg!(troop_inactive(troop));
-                    panic!("God damn it!");
                 }
+				panic!("God damn it!");
             }
         }
     }
@@ -710,11 +666,11 @@ mod tests {
             let army1 = gen_army_from_units(0, &units);
             let army2 = gen_army_from_units(1, &units);
             let mut armys = vec![army1, army2];
-            let mut battle = BattleInfo::new(&mut armys, 0, 1);
+            let mut battle = BattleInfo::new(&mut armys, 29, 30);
             while battle.winner.is_none() {
                 if let Some(interactions) = &battle.can_interact.clone() {
                     if let Some(interaction) = interactions.iter().choose(&mut thread_rng()) {
-                        unit_interaction(&mut battle, &mut armys, interaction.0, interaction.1);
+                        unit_interaction(&mut battle, &mut armys, interaction.army, interaction.index);
                     }
                 }
                 move_thing(&mut battle, &mut armys);

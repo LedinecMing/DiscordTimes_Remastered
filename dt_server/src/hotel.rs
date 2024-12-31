@@ -20,14 +20,12 @@ impl Hotel {
     }
 
     // If the second player joined, returns both sockets and sets the room full
-    pub fn put_socket(
+    pub async fn put_socket(
         &mut self,
-        room_code: &RoomCode,
-        socket: AWsSocket,
+        room_code: RoomCode,
+        mut socket: AWsSocket,
     ) -> Result<Option<(WsSocket, WsSocket)>, (AWsSocket, &'static str)> {
-        let Some(room_ext) = self.0.get_mut(room_code) else {
-            return Err((socket, "Room doesn't exist"));
-        };
+        let room_ext = self.0.entry(room_code).or_insert(Some((None, None)));
         let Some(room) = room_ext else {
             return Err((socket, "Room is full"));
         };

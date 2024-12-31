@@ -123,7 +123,7 @@ fn get_menu_value_num(state: &State, id: &'static str) -> Option<i64> {
 
 fn set_menu_value_str(state: &mut State, id: &'static str, new: String) {
     match state.menu_data.get_mut(id) {
-        Some(value) => match value {
+       Some(value) => match value {
             Value::Str(string) => {
                 *string = new;
             }
@@ -712,7 +712,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 														pos.0 = cont.pos.0 + i as f32 * 102.;
 														pos.1 = cont.pos.1 + army as f32 * 250. + row as f32 * 112.;
 														if app.mouse.left_was_released() && (Rect { pos: pos, size: Size(92., 102.) }).collides((app.mouse.x, app.mouse.y).into()) {
-															handle_action(Action::Cell(i + (army as i64 - row as i64).abs() as usize * half_troops, army), battle, &mut state.gamemap.armys);
+															handle_action((i + (army as i64 - row as i64).abs() as usize * half_troops, army), battle, &mut state.gamemap.armys);
 														}
 													}
 												}
@@ -1852,20 +1852,20 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                     1. - stats.hp as f32 / stats.max_hp as f32,
                 ));
             if let Some(active_unit) = battle.active_unit {
-                if active_unit.0 == army
+                if active_unit.army == army
                     && let Some(index) = gamemap.armys[army].hitmap[index]
                 {
-                    if active_unit.1 == index {
+                    if active_unit.index == index {
                         draw.rect((pos.0, pos.1), (92., 92.))
                             .color(Color::TRANSPARENT)
                             .stroke_color(Color::from_rgba(0., 255., 0., 0.3))
                             .stroke(10.);
                     }
                 } else if let Some(can_interact) = &battle.can_interact {
-                    if can_interact.contains(&(army, index)) {
+                    if can_interact.contains(&BattleUnit { army, index }) {
                         draw.rect((pos.0, pos.1), (92., 92.))
                             .color(Color::TRANSPARENT)
-                            .stroke_color(if active_unit.0 == army {
+                            .stroke_color(if active_unit.army == army {
                                 Color::from_rgba(0.1, 0.1, 0.6, 0.5)
                             } else {
                                 Color::from_rgba(0.8, 0., 0.01, 0.5)
@@ -1874,12 +1874,12 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                     }
                 }
             }
-        }
+        } 
     }
     type AssetsMap = HashMap<&'static str, HashMap<String, Asset<Texture>>>;
     fn handle_action_result(
         res: ActionResult,
-        active_unit: (usize, usize),
+        active_unit: BattleUnit,
         to: (usize, usize),
     ) -> AnimationTime<AssetsMap> {
         let texture = match res {
@@ -1904,8 +1904,8 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
             Animation::new(
                 MovementChange::new(
                     (
-                        (active_unit.0 % line) as f32 * BETWEEN_CELLS + BETWEEN_CELLS / 2. - 25.,
-                        ((active_unit.1 as i64).abs() * 500) as f32
+                        (active_unit.army % line) as f32 * BETWEEN_CELLS + BETWEEN_CELLS / 2. - 25.,
+                        ((active_unit.index as i64).abs() * 500) as f32
                             + (((to.0 as i64 / line as i64).max(MAX_LINES as i64 - 1)).abs() as f32
                                 * BETWEEN_CELLS) as f32
                             - 25.,
@@ -1929,7 +1929,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
     fn handle_animations(
         state: &mut State,
         to: (usize, usize),
-        res: Option<(ActionResult, (usize, usize))>,
+        res: Option<(ActionResult, BattleUnit)>,
     ) {
         let Some((res, mut active_unit)) = res else {
             return;
@@ -1939,11 +1939,11 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
             return;
         };
         let gamemap = &state.gamemap;
-        let index = active_unit.1;
+        let index = active_unit.index;
 
-        active_unit.1 = if active_unit.0 == battle.army1 { 0 } else { 1 };
-        let active_index: usize = gamemap.armys[active_unit.0].troops[index].get().pos.into();
-        active_unit.0 = active_index;
+        active_unit.index = if active_unit.army == battle.army1 { 0 } else { 1 };
+        let active_index: usize = gamemap.armys[active_unit.army].troops[index].get().pos.into();
+        active_unit.army = active_index;
         state
             .animations
             .push(handle_action_result(res, active_unit, to));
@@ -1970,7 +1970,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 											if !state.animations.is_empty() {return;}
 											let Some(battle) = &mut state.battle else { return; };
 											if let Some(_) = battle.winner { state.menu_id = Menu::Start as usize; return; }
-                                            let res = handle_action(Action::Cell(index, 0), battle, &mut state.gamemap.armys);
+                                            let res = handle_action((index, 0), battle, &mut state.gamemap.armys);
 											handle_animations(state, (index, 0), res);
                                         }).build().unwrap()
                                     }).collect::<Vec<_>>())
@@ -1991,7 +1991,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 									if !state.animations.is_empty() {return;}
 									let Some(battle) = &mut state.battle else { return; };
 									if let Some(_) = battle.winner { state.menu_id = Menu::Start as usize; return; }
-                                    let res = handle_action(Action::Cell(index, 0), battle, &mut state.gamemap.armys);
+                                    let res = handle_action((index, 0), battle, &mut state.gamemap.armys);
 									handle_animations(state, (index, 0), res);
                                 })
                                     .build().unwrap()
@@ -2022,7 +2022,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 									if !state.animations.is_empty() {return;}
 									let Some(battle) = &mut state.battle else { return; };
 									if let Some(_) = battle.winner { state.menu_id = Menu::Start as usize; return; }
-                                    let res = handle_action(Action::Cell(index, 1), battle, &mut state.gamemap.armys);
+                                    let res = handle_action((index, 1), battle, &mut state.gamemap.armys);
 									handle_animations(state, (index, 1), res);
                                 }).build().unwrap()
                             }).collect::<Vec<_>>())
@@ -2043,7 +2043,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 									if !state.animations.is_empty() {return;}
 									let Some(battle) = &mut state.battle else { return; };
 									if let Some(_) = battle.winner { state.menu_id = Menu::Start as usize; return; }
-                                    let res = handle_action(Action::Cell(index, 1), battle, &mut state.gamemap.armys);
+                                    let res = handle_action((index, 1), battle, &mut state.gamemap.armys);
 									handle_animations(state, (index, 1), res);
                                 })
                                     .build().unwrap()
@@ -2116,7 +2116,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
             if app.keyboard.was_pressed(KeyCode::Space) {
 				let Some(battle) = &mut state.battle else { return; };
 				if let Some(active_unit) = battle.active_unit {
-					handle_action(Action::Cell(active_unit.1, active_unit.0), battle, &mut state.gamemap.armys);
+					handle_action((active_unit.index, active_unit.army), battle, &mut state.gamemap.armys);
 				}
             }
         }),
@@ -2321,7 +2321,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
             if app.keyboard.was_pressed(KeyCode::Space) {
 				let Some(battle) = &mut state.battle else { return; };
 				if let Some(active_unit) = battle.active_unit {
-					handle_action(Action::Cell(active_unit.1, active_unit.0), battle, &mut state.gamemap.armys);
+					handle_action((active_unit.index, active_unit.army), battle, &mut state.gamemap.armys);
 				}
             }
         }),

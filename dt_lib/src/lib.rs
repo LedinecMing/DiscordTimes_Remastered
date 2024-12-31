@@ -10,7 +10,7 @@ pub mod network;
 pub mod parse;
 pub mod time;
 pub mod units;
-
+pub mod hwid;
 #[repr(u32)]
 pub enum Menu {
     Main,

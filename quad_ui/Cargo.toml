@@ -6,7 +6,10 @@ edition = "2021"
 [dependencies]
 macroquad = "0.4.11"
 dt_lib = {path = "../dt_lib/"}
+dt_client = {path = "../dt_client"}
 ahash = { version = "0.8.11" }
+tokio = { version = "*", features = ["sync", "rt", "process", "macros", "fs", "time"] }
+futures-util = "*"
 once_cell = "1.19.0"
 [package.metadata.android]
 assets = "../dt/"

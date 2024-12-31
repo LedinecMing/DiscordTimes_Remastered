@@ -17,22 +17,34 @@ use dt_lib::{
         unitstats::ModifyUnitStats,
     },
 };
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use tokio::sync::oneshot;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tungstenite::client::IntoClientRequest;
 
+#[derive(Debug)]
+pub enum IncomingEvent {
+	Game((Vec<Army>, BattleInfo)),
+	Info(String)
+}
+#[derive(Debug, Copy, Clone)]
+pub struct OutcomingEvent(pub (usize, usize));
 
-pub struct IncomingEvent((Vec<Army>, BattleInfo));
-pub struct OutcomingEvent((usize, usize));
-
+#[derive(Debug)]
 pub struct Connection {
     pub incoming_events: futures_channel::mpsc::Receiver<IncomingEvent>,
     pub events_sender: futures_channel::mpsc::Sender<OutcomingEvent>,
     // tasks_handle: JoinAll<JoinHandle<()>>,
 }
-
-pub async fn connect(room: &str, id: &str) -> Connection {
+impl Connection {
+	pub fn send_action(&mut self, action: OutcomingEvent) {
+		self.events_sender.send(action);
+	}
+	pub fn req_one(&mut self) -> Option<IncomingEvent> {
+		self.incoming_events.try_next().ok().flatten()
+	}
+}
+pub async fn connect(room: String, id: String) -> Connection {
     let mut request = "ws://localhost:3000/ws".into_client_request().unwrap();
     {
         let headers = request.headers_mut();
@@ -57,10 +69,18 @@ pub async fn connect(room: &str, id: &str) -> Connection {
     let (oe_tx, oe_rx) = futures_channel::mpsc::channel::<OutcomingEvent>(256);
 
     let i = read.filter_map(|msg| async {
-        let Message::Binary(e) = msg.ok()? else {return None};
+		dbg!("new mesage");
+		let e = match msg.ok() {
+			Some(Message::Binary(e)) => e,
+			Some(Message::Text(text)) => {
+				println!("Incoming: {}", &text);
+				return Some(Ok(IncomingEvent::Info(text)));
+			},
+			_ => { return None; }
+		};
         let data =
             alkahest::deserialize::<(Vec<Army>, BattleInfo), (Vec<Army>, BattleInfo)>(&e).ok()?;
-        Some(Ok(IncomingEvent(data)))
+        Some(Ok(IncomingEvent::Game(data)))
     }).forward(ie_tx);
 
     let o = oe_rx.map(|OutcomingEvent(msg)| {
@@ -75,7 +95,6 @@ pub async fn connect(room: &str, id: &str) -> Connection {
             _ = o => (),
         }
     });
-
     Connection {
         incoming_events: ie_rx,
         events_sender: oe_tx,
@@ -96,7 +115,7 @@ mod tests {
 
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-        let mut conn = connect("000000", "1").await;
+        let mut conn = connect("000000".to_owned(), "1".to_owned()).await;
 
         conn.events_sender.try_send(crate::OutcomingEvent((0,0))).unwrap();
         tokio::spawn(conn.incoming_events.for_each(|msg| async {

@@ -180,10 +180,10 @@ impl GameServer {
                     return;
                 };
                 if Some(client_id.and_then(|v| self.auth.get(&v)).unwrap_or(&0usize))
-                    == battle.active_unit.and_then(|v| Some(v.0)).as_ref()
+                    == battle.active_unit.and_then(|v| Some(v.army)).as_ref()
                 {
                     handle_action(
-                        Action::Cell(v.0 as usize, v.1 as usize),
+                        v,
                         battle,
                         &mut gamemap.armys,
                     );
@@ -314,10 +314,10 @@ impl GameServer {
                                 continue;
                             };
                             if self.auth.get(&client_id)
-                                == battle.active_unit.and_then(|v| Some(v.0)).as_ref()
+                                == battle.active_unit.and_then(|v| Some(v.army)).as_ref()
                             {
                                 handle_action(
-                                    Action::Cell(v.0 as usize, v.1 as usize),
+                                    v,
                                     battle,
                                     &mut gamemap.armys,
                                 );
