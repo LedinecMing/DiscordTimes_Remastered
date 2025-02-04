@@ -1,3 +1,4 @@
+
 use crate::{
     battle::{
         army::{MAX_LINES, MAX_TROOPS},
@@ -6,7 +7,7 @@ use crate::{
     parse::LOCALE,
 };
 use advini::Sections;
-use num::abs;
+use num::{abs, Signed};
 use once_cell::sync::Lazy;
 
 use super::unitstats::ModifyUnitStats;
@@ -255,7 +256,7 @@ impl Into<(usize, usize)> for UnitPos {
 }
 impl Into<usize> for UnitPos {
     fn into(self) -> usize {
-        self.0 + self.1 * *MAX_TROOPS / 2
+        self.0 + self.1 * *MAX_TROOPS / MAX_LINES
     }
 }
 
@@ -423,12 +424,14 @@ fn magic_attack(
         }
         _ => {}
     }
-    if magic_curse(me, target, damage, magic_type).is_none() {
+    if let Some(res) = magic_curse(me, target, damage, magic_type) {
+		Some(res)
+	} else {
         damage.hand = 0;
         damage.ranged = 0;
-        target.being_attacked(&damage, me, target_pos, my_pos, battle);
+        let res = target.being_attacked(&damage, me, target_pos, my_pos, battle);
+		Some(ActionResult::Melee)
     }
-    Some(ActionResult::Debuff)
 }
 
 fn elemental_attack(
@@ -455,6 +458,7 @@ fn get_magic_direction(magic_type: MagicType) -> MagicDirection {
         Elemental(direction) => direction,
     }
 }
+#[derive(Debug)]
 pub enum ActionResult {
     Buff,
     Debuff,
@@ -507,10 +511,9 @@ impl Unit {
             && (!me_in_reserve || self.bonus.can_attack_from_reserve())
             && !enemy_in_reserve)
             || (!is_enemy && (both_not_in_reserve || both_in_reserve));
-
-        return if !can_attack {
-            false
-        } else if damage.ranged > 0
+		if !can_attack { return false; }
+		
+		if damage.ranged > 0
             && (target_pos.1 == my_pos.1 && abs(target_pos.0 as i64 - my_pos.0 as i64) < 2
                 || my_field == Field::Back)
             && is_enemy
@@ -586,7 +589,7 @@ impl Unit {
                     }
                 }
             }
-        };
+        }
     }
     pub fn attack(
         &mut self,
@@ -618,12 +621,12 @@ impl Unit {
         {
             damage.hand = 0;
             damage.magic = 0;
-            target.being_attacked(&damage, self, target_pos, my_pos, battle);
+            let _ = target.being_attacked(&damage, self, target_pos, my_pos, battle);
             Some(ActionResult::Ranged)
         } else if damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy {
             damage.ranged = 0;
             damage.magic = 0;
-            target.being_attacked(&damage, self, target_pos, my_pos, battle);
+            let _ = target.being_attacked(&damage, self, target_pos, my_pos, battle);
             Some(ActionResult::Melee)
         } else {
 			let Some(magic_type) = self.info.magic_type else { return None; };
@@ -732,10 +735,14 @@ impl Unit {
         self.recalc();
         true
     }
-    pub fn add_item(&mut self, item: Item, index: usize) -> bool {
-        if let Some(Some(_)) = self.inventory.items.get(index) {
-            return false;
-        }
+    pub fn add_item(&mut self, item: Option<Item>, index: usize) -> bool {
+        // if let Some(Some(_)) = self.inventory.items.get(index) {
+        //     return false;
+        //}
+		let Some(item) = item else {
+			self.inventory.items[index] = None;
+			return true;
+		};
         if item.can_equip(&*self) {
             self.modify += item.get_info().modify;
             self.inventory.items[index] = Some(item);
@@ -797,17 +804,10 @@ impl Unit {
             attacker_pos,
             battle,
         );
-        let mut corrected_damage_units =
-            corrected_damage.magic + corrected_damage.ranged + corrected_damage.hand;
-        if corrected_damage_units == 0 {
-            corrected_damage_units = 1;
-        }
-        if corrected_damage_units as i64 > self.modified.hp {
-            self.stats.hp = -self.modified.hp;
-        } else {
-            self.stats.hp -= corrected_damage_units as i64;
-        }
-        self.recalc();
+        let corrected_damage_units = 
+            (corrected_damage.magic + corrected_damage.ranged + corrected_damage.hand).max(1);
+		self.stats.hp = self.stats.hp.abs_sub(&(corrected_damage_units as i64));
+        self.modified.hp = self.modify.hp.apply(self.stats.hp);
         corrected_damage_units
     }
     pub fn correct_damage(&self, damage: &Power, magic_type: Option<MagicType>) -> Power {
@@ -834,21 +834,10 @@ impl Unit {
         }
     }
     pub fn tick(&mut self) -> bool {
-        let mut i = 0;
-        loop {
-            if i >= self.effects.len() {
-                break;
-            }
-            let mut effect = self.effects.remove(i);
-            effect.tick(self);
-            if effect.is_dead() {
-                effect.kill(self);
-                i -= 1;
-            } else {
-                self.effects.push(effect);
-            };
-            i += 1;
-        }
+		let removed: Vec<_> = self.effects.extract_if(|ef| ef.on_tick() && ef.is_dead()).collect();
+        for mut effect in removed {
+			effect.kill(self);
+		}
         self.get_bonus().on_tick(self);
         self.recalc();
         true

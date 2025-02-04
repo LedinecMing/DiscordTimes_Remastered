@@ -1818,6 +1818,7 @@ version = "0.1.0"
 dependencies = [
  "alkahest",
  "dt_lib",
+ "dt_server",
  "futures-channel",
  "futures-util",
  "tokio",

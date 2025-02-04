@@ -1,4 +1,4 @@
-use ahash::RandomState;
+ use ahash::RandomState;
 use dt_lib::{
     battle::{army::*, battlefield::*, troop::Troop}, hwid, items::item::*, locale::{parse_locale, Locale}, map::{
         convert::{convert_dtm_map, parse_dtm_map}, event::{execute_event, Event as GameEvent, Execute}, map::*, object::ObjectInfo, tile::*
@@ -16,9 +16,9 @@ use macroquad::{
 };
 use dt_client::*;
 use once_cell::sync::Lazy;
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, task::futures};
 use std::{
-    collections::HashMap, num::Saturating, ops::Index, sync::{Mutex, RwLock}
+    collections::HashMap, future, num::Saturating, ops::Index, sync::{Mutex, RwLock}
 };
 #[derive(Debug)]
 struct Assets {
@@ -118,6 +118,7 @@ async fn game_init() -> State {
 	fonts.insert("gothic", gothic);
     let assets = {
         let req_assets_items = parse_items(None, &settings.locale);
+		assert!(ITEMS.lock().unwrap().len()>0);
         let res = parse_units(None);
         if let Err(err) = res {
             error!("{}", err);
@@ -170,7 +171,7 @@ async fn game_init() -> State {
     gamemap.calc_hitboxes(objects!());
 	let mut battle = BattleInfo::new(&mut gamemap.armys, 0, 1);
 	battle.start(&mut gamemap.armys);
-	let rt = tokio::runtime::Builder::new_current_thread().enable_io().enable_time().build().unwrap();
+	let rt = tokio::runtime::Runtime::new().unwrap();
     State {
 		rt,
         assets,
@@ -180,6 +181,7 @@ async fn game_init() -> State {
         },
         game: Game {
             gamemap,
+			focus: BattleUnit { army: 0, index: 0 },
             battle: Some(battle),
             variant: GameVariant::Single(Scenario {events} ),
         },
@@ -208,7 +210,8 @@ enum GameVariant {
 struct Game {
 	pub gamemap: GameMap,
 	pub battle: Option<BattleInfo>,
-	pub variant: GameVariant
+	pub variant: GameVariant,
+	pub focus: BattleUnit
 }
 fn window_conf() -> Conf {
     Conf {
@@ -225,7 +228,6 @@ enum Menu {
     Battle,
 	RoomCreation,
 	RoomOnline,
-    EventMessage,
 }
 #[derive(Debug)]
 struct Ui {
@@ -235,7 +237,7 @@ struct Ui {
 fn is_clicked(area: Rect) -> bool {
 	is_mouse_button_released(MouseButton::Left) && area.contains(mouse_position().into())
 }
-fn unit_card_battle(army: usize, unit_index: usize, battle: &mut BattleInfo, armies: &mut Vec<Army>, pos: (f32, f32), assets: &Assets) {
+fn unit_card_battle(army: usize, unit_index: usize, battle: &mut BattleInfo, armies: &mut Vec<Army>, pos: (f32, f32), assets: &Assets) -> bool {
 	let Some(unit) = armies[army].get_troop(unit_index) else {
 		let texture = assets.get(&match field_type(unit_index, *MAX_TROOPS) {
 			Field::Back => { "backyard.png" },
@@ -245,7 +247,7 @@ fn unit_card_battle(army: usize, unit_index: usize, battle: &mut BattleInfo, arm
 		let undercell = assets.get(&"undercell.png".to_owned());
 		draw_texture(texture, pos.0, pos.1, WHITE);
 		draw_texture(undercell, pos.0, pos.1 + 102., WHITE);
-		return;
+		return false;
 	};
 	let troop = unit.get();
 	let unit_texture = assets.get(&format!("unit_{}.png", troop.unit.info.icon_index));
@@ -275,11 +277,12 @@ fn unit_card_battle(army: usize, unit_index: usize, battle: &mut BattleInfo, arm
 		draw_rectangle_lines(pos.0, pos.1, draw_size.0, draw_size.1, 15., outline_color);
 	}
 	if is_clicked(draw_rect) {
+		dbg!("i cliked");
 		draw_rectangle_lines(pos.0, pos.1, draw_size.0, draw_size.1, 15., BLACK);
-		handle_action((unit_index, army), battle, armies);
-	}
+		true
+	} else { false }
 }
-fn draw_battle(assets: &Assets, game: &mut Game) {
+fn draw_battle(assets: &Assets, game: &mut Game, is_battle_active: bool) {
 	let (armies, battle) = (&mut game.gamemap.armys, &mut game.battle);
 	let Some(battle) = battle.as_mut() else { return; };
 	let half_troops = *MAX_TROOPS / 2;
@@ -301,7 +304,17 @@ fn draw_battle(assets: &Assets, game: &mut Game) {
 					battle.army2
 				} as usize;
 				let unit_index = i + (army as i64 - row as i64).abs() as usize * half_troops;
-				unit_card_battle(army, unit_index, battle, armies, pos, assets);
+				if unit_card_battle(army, unit_index, battle, armies, pos, assets) {
+					game.focus = BattleUnit { index: unit_index, army};
+					if !is_battle_active { continue; }
+					if let GameVariant::Online(Online { conn, .. }) = &mut game.variant {
+						dbg!("I send the action on-line");
+						conn.send_action(dt_server::Incoming::Action(BattleUnit { index: unit_index, army}));
+					} else {
+						dbg!("I handle the action myself");
+						handle_action((unit_index, army), battle, armies);
+					}
+				}
             }
         }
     }
@@ -399,7 +412,8 @@ fn process_event(state: &mut State, event: IncomingEvent) {
 				}
 				_ => { dbg!(text); }
 			}
-		}
+		},
+		IncomingEvent::Acceptance(a) => {}
 	}
 }
 #[macroquad::main(window_conf)]
@@ -472,12 +486,18 @@ async fn main() {
 				WHITE,
 			),
 			Menu::Battle => {
-				draw_battle(&state.assets, &mut state.game);
+				draw_battle(&state.assets, &mut state.game, true);
+				if let GameVariant::Online(Online { conn, .. }) = &mut state.game.variant {
+					if let Some(mes) = conn.req_one() {
+						println!("New message! {mes:?}");
+						process_event(&mut state, mes);
+					}
+				}
 			},
 			Menu::RoomCreation => {
 				let connected = matches!(state.game.variant, GameVariant::Online(_));
 				let mut connecting = false;
-				Window::new(hash!(), vec2(0., 0.), vec2(screen_height(), screen_width()))
+				Window::new(hash!(), vec2(100., 0.), vec2(screen_width(), screen_height()))
 					.titlebar(false)
 					.ui(&mut *root_ui(), |ui| {
 						ui.label(Some((50., 50.).into()), "Discord Times");
@@ -491,22 +511,59 @@ async fn main() {
 						}
 						if let GameVariant::Online(Online {status, .. }) = &state.game.variant {
 							if status == &ConnectionStatus::Full {
-								state.ui.main = Menu::Battle;
+								state.ui.main = Menu::RoomOnline;
 							}
 						}
 					});
 				if connecting {
-					let conn = connect(input.clone(), hwid::get_id().unwrap()).await;
+					let conn = state.rt.block_on(connect(input.clone(), hwid::get_id().unwrap()));
+					//root_ui().pop_skin();
 					state.game.variant = GameVariant::Online(Online {conn, status: ConnectionStatus::NotFull });
-					//state.rt.spawn(conn.incoming_events.for_each(|x| async { dbg!(x); }));
 				}
-				match &mut state.game.variant {
-					GameVariant::Online(v) => {
-						if let Some(event) = v.conn.req_one() {
-							process_event(&mut state, event);
+				if let GameVariant::Online(Online { conn, .. }) = &mut state.game.variant {
+					if let Some(mes) = conn.req_one() {
+						println!("New message! {mes:?}");
+						process_event(&mut state, mes);
+					}
+				}
+			},
+			Menu::RoomOnline => {
+				draw_battle(&state.assets, &mut state.game, false);
+				let GameVariant::Online(Online { conn, .. }) = &mut state.game.variant else {
+					continue;
+				};
+				let pos = 102. * (*MAX_TROOPS/2) as f32;
+				Window::new(hash!(), vec2(pos, 000.), vec2(1000., 1000.))
+					.titlebar(false)
+					.ui(&mut *root_ui(), |ui| {
+						let items = &state.game.gamemap.armys[state.game.focus.army].inventory;
+						for (i, item) in items.iter().enumerate() {
+							if let Some(item) = item {
+								let texture = item.get_info().icon;
+								let texture = state.assets.get(&texture);
+								ui.texture(texture.weak_clone(), 50., 50.);
+							}
+							ui.button(vec2(50. * i as f32, 0.), "Edit");
+							if ui.last_item_clicked() {
+								*ui.get_bool(hash!(i, "items")) ^= true;
+							}
+							if *ui.get_bool(hash!(i, "items")) {
+								ui.label(vec2(50. * i as f32, 50.), "You clicked!");
+								for (item_index, item) in ITEMS.lock().unwrap().iter() {
+									let texture = &item.icon;
+									let texture = state.assets.get(&texture);
+									if ui.texture(texture.weak_clone(), 50., 50.) {
+										conn.send_action(dt_server::Incoming::SetItem((state.game.focus, (i, Some(*item_index)))));
+									}
+									ui.label(None, &item.name);
+								}
+							}
 						}
-					},
-					_ => {}
+					});
+				
+				if let Some(mes) = conn.req_one() {
+					println!("New message! {mes:?}");
+					process_event(&mut state, mes);
 				}
 			}
 			_ => {}

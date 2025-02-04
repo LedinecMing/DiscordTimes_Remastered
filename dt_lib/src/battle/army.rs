@@ -51,7 +51,6 @@ fn eq_fields(index: usize, index1: usize, columns: usize, rows: usize) -> bool {
 pub const MAX_LINES: usize = 2;
 
 #[derive(Clone, Debug, Default)]
-//#[alkahest(Formula)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Army {
     pub troops: Vec<TroopType>, // vec of units
@@ -62,7 +61,7 @@ pub struct Army {
     //#[inline_parsing]
     pub stats: ArmyStats,
     //#[default_value="Vec::new()"]
-    pub inventory: Vec<Item>,
+    pub inventory: Vec<Option<Item>>,
     pub pos: (usize, usize),
     //#[default_value="true"]
     pub active: bool,
@@ -74,19 +73,6 @@ pub struct Army {
     //#[unused]
     pub path: Vec<(usize, usize)>,
 }
-// [TODO REMOVE NAHUJ]
-// impl<'de> Deserialize<'de, Self> for Army {
-// 	fn deserialize(mut de: Deserializer<'de>) -> Result<Self, DeserializeError>
-//     where
-//         Self: Sized {
-// 		let formula = with_formula(|s: &Self| match *s {
-// 			Self { ref troops, ref hitmap, ref building, ref stats, ref inventory, ref pos, ref active, ref defeated, ref control, ref path } => hitmap,
-// 			_ => unreachable!()
-// 		});
-// 		let hitmap = formula.read_field(&mut de, false)?;
-// 		Ok(Self { hitmap, ..Default::default() })
-// 	}
-// }
 pub type TroopType = SendMut<Troop>;
 
 pub static MAX_TROOPS: Lazy<usize> = Lazy::new(|| unsafe { &SETTINGS }.max_troops);
@@ -95,12 +81,15 @@ impl Army {
     pub fn new(
         troops: Vec<TroopType>,
         stats: ArmyStats,
-        inventory: Vec<Item>,
+        mut inventory: Vec<Option<Item>>,
         pos: (usize, usize),
         active: bool,
         control: Control,
     ) -> Self {
         let hitmap: Vec<Option<usize>> = (0..*MAX_TROOPS).map(|_| None::<usize>).collect();
+		if inventory.len() < 4 {
+			inventory.extend([None].iter().cycle().take(4-inventory.len()));
+		}
         let mut army = Army {
 			pc_settings: None,
             troops: Vec::new(),
@@ -227,13 +216,18 @@ impl Army {
     }
 
     pub fn add_item(&mut self, item: Item) {
-        self.inventory.push(item)
+        let first = self.inventory.iter().position(|x| x.is_none());
+		if let Some(index) = first {
+			self.inventory[index] = Some(item);
+		}
     }
     pub fn remove_item(&mut self, rem_item: usize) {
         if let Some(index) = self
             .inventory
             .iter()
-            .position(|item| item.index == rem_item)
+            .position(|item| {
+				*item == Some(Item { index: rem_item})
+			}) 
         {
             self.inventory.remove(index);
         }

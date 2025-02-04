@@ -13,6 +13,13 @@ panic = "abort"
 opt-level = "z"
 codegen-units = 1
 
+#[dev-dependencies]
+#criterion = { version = "0.5", features = ["html_reports"] }
+
+#[[bench]]
+#me = "battles"
+#harness = false
+
 [profile.dev]
 debug = 2
 lto = true

@@ -42,7 +42,7 @@ pub struct ItemInfo {
     pub modify: ModifyUnitStats,
 }
 pub static ITEMS: Lazy<Mutex<HashMap<usize, ItemInfo>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Item {
     pub index: usize,
@@ -60,6 +60,7 @@ impl Ini for Item {
 }
 impl Item {
     pub fn get_info(&self) -> ItemInfo {
+		dbg!(self.index);
         ITEMS.lock().unwrap().get(&self.index).unwrap().clone()
     }
     pub fn can_equip(&self, unit: &Unit) -> bool {

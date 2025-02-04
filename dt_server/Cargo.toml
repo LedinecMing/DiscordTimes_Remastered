@@ -2,7 +2,13 @@
 name = "dt_server"
 version = "0.1.0"
 edition = "2021"
-
+[lib]
+name = "dt_server"
+path = "src/main.rs"
+crate-type = ["lib"]
+[[bin]]
+name = "dt_server"
+path = "src/main.rs"
 [dependencies]
 dt_lib = { path = "../dt_lib" }
 axum = { version = "*", features = ["ws"] }

@@ -173,7 +173,7 @@ fn menu_button<T: ToText<State>>(
                     .unwrap(),
                 Rect {
                     pos: Position(0., 0.),
-                    size: Size(300., 50.),
+                    size: Size(300., 25.),
                 },
             )
             .if_clicked(if_clicked)
@@ -548,7 +548,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 											for i in 0..4 {
                                                 draw.rect((pos.0 + (53. + 5.) * i as f32, pos.1), (53., 53.))
                                                     .stroke_color(Color::BLACK)
-                                                    .stroke(5.);
+                                                    .stroke(51.);
 												if let Some(item) = &troop.get().unit.inventory.items[i] {
                                                     let texture = state.get_texture("assets/Items", &*item.get_info().icon);
                                                     draw.image(&texture)
@@ -840,8 +840,8 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 								let clicked_at = app.mouse.position();
 								let start = state.gamemap.armys[0].pos;
 								let goal = (
-									(clicked_at.0 / SIZE.0) as usize - state.gamemap.armys[0].pos.0,
-									(clicked_at.1 / SIZE.1) as usize - state.gamemap.armys[0].pos.1,
+									((clicked_at.0 / SIZE.0) as usize).saturating_sub(state.gamemap.armys[0].pos.0),
+									((clicked_at.1 / SIZE.1) as usize).saturating_sub(state.gamemap.armys[0].pos.1),
 								);
 								if let Some(army) = state.gamemap.hitmap[goal].army  {
 									if army != 0 {

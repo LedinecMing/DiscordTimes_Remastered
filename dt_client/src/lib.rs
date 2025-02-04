@@ -21,11 +21,12 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::sync::oneshot;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tungstenite::client::IntoClientRequest;
-
+pub use dt_server;
 #[derive(Debug)]
 pub enum IncomingEvent {
 	Game((Vec<Army>, BattleInfo)),
-	Info(String)
+	Info(String),
+	Acceptance([bool;2])
 }
 #[derive(Debug, Copy, Clone)]
 pub struct OutcomingEvent(pub (usize, usize));
@@ -33,12 +34,12 @@ pub struct OutcomingEvent(pub (usize, usize));
 #[derive(Debug)]
 pub struct Connection {
     pub incoming_events: futures_channel::mpsc::Receiver<IncomingEvent>,
-    pub events_sender: futures_channel::mpsc::Sender<OutcomingEvent>,
+    pub events_sender: futures_channel::mpsc::Sender<dt_server::Incoming>,
     // tasks_handle: JoinAll<JoinHandle<()>>,
 }
 impl Connection {
-	pub fn send_action(&mut self, action: OutcomingEvent) {
-		self.events_sender.send(action);
+	pub fn send_action(&mut self, action: dt_server::Incoming) {
+		self.events_sender.try_send(action);
 	}
 	pub fn req_one(&mut self) -> Option<IncomingEvent> {
 		self.incoming_events.try_next().ok().flatten()
@@ -66,7 +67,7 @@ pub async fn connect(room: String, id: String) -> Connection {
 
     // ie = incoming events, oe = outcoming events
     let (ie_tx, ie_rx) = futures_channel::mpsc::channel::<IncomingEvent>(256);
-    let (oe_tx, oe_rx) = futures_channel::mpsc::channel::<OutcomingEvent>(256);
+    let (oe_tx, oe_rx) = futures_channel::mpsc::channel::<dt_server::Incoming>(256);
 
     let i = read.filter_map(|msg| async {
 		dbg!("new mesage");
@@ -79,13 +80,17 @@ pub async fn connect(room: String, id: String) -> Connection {
 			_ => { return None; }
 		};
         let data =
-            alkahest::deserialize::<(Vec<Army>, BattleInfo), (Vec<Army>, BattleInfo)>(&e).ok()?;
-        Some(Ok(IncomingEvent::Game(data)))
+            alkahest::deserialize::<dt_server::Outcoming, dt_server::Outcoming>(&e).ok().unwrap();
+		let data = match data {
+			dt_server::Outcoming::Battle(g) => IncomingEvent::Game(g),
+			dt_server::Outcoming::Status(a) => IncomingEvent::Acceptance(a)
+		};
+        Some(Ok(data))
     }).forward(ie_tx);
 
-    let o = oe_rx.map(|OutcomingEvent(msg)| {
+    let o = oe_rx.map(|msg| {
         let mut result = Vec::new();
-        alkahest::serialize_to_vec::<(usize, usize), (usize, usize)>(msg, &mut result);
+        alkahest::serialize_to_vec::<dt_server::Incoming, dt_server::Incoming>(msg, &mut result);
         Ok(Message::binary(result))
     }).forward(write);
 
@@ -95,6 +100,7 @@ pub async fn connect(room: String, id: String) -> Connection {
             _ = o => (),
         }
     });
+	dbg!("connection established");
     Connection {
         incoming_events: ie_rx,
         events_sender: oe_tx,
@@ -102,6 +108,7 @@ pub async fn connect(room: String, id: String) -> Connection {
 }
 #[cfg(test)]
 mod tests {
+    use dt_lib::battle::BattleUnit;
     use futures_util::StreamExt;
     use tokio::sync::oneshot;
     use crate::connect;
@@ -117,7 +124,7 @@ mod tests {
 
         let mut conn = connect("000000".to_owned(), "1".to_owned()).await;
 
-        conn.events_sender.try_send(crate::OutcomingEvent((0,0))).unwrap();
+        conn.events_sender.try_send(dt_server::Incoming::Action(BattleUnit { army: 0, index: 0 })).unwrap();
         tokio::spawn(conn.incoming_events.for_each(|msg| async {
             // dbg!(msg);
             //

@@ -191,7 +191,13 @@ impl EffectTrait for DisableMagic {
         if self.magic_power < 20 {
             return;
         }
-        let add_moves = 1 + (self.magic_power / 50) as i64;
+        let add_moves = match self.magic_power {
+			0..20 => 0,
+			20..45 => 1,
+			45..100 => 2,
+			100..256 => 3,
+			_ => 3 + (self.magic_power - 256) / 50 / 5
+		} as i64;
         unit.modify.moves -= *Modify::default().add(add_moves);
         unit.modify.max_moves -= *Modify::default().add(add_moves);
     }

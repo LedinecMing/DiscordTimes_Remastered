@@ -1,7 +1,7 @@
 mod hotel;
 
 use crate::hotel::*;
-use alkahest::{deserialize, serialize};
+use alkahest::{deserialize, serialize, serialize_to_vec, serialized_size, Formula};
 use axum::{
     extract::{
         ws::{Message as AWsMessage, WebSocket, WebSocketUpgrade},
@@ -11,18 +11,11 @@ use axum::{
     Error as AError, Router,
 };
 use futures::{
-    stream::{self, SplitSink, SplitStream},
-    SinkExt, StreamExt,
+    future, stream::{self, SplitSink, SplitStream}, SinkExt, StreamExt
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::LazyCell,
-    collections::HashSet,
-    error::Error,
-    net::SocketAddr,
-    sync::{Arc, LazyLock},
-    task::Context,
-    time::Duration,
+    cell::LazyCell, collections::HashSet, error::Error, net::SocketAddr, ops::Bound, sync::{Arc, LazyLock}, task::Context, time::Duration
 };
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::{
@@ -69,21 +62,32 @@ type MutRc<T> = Arc<Mutex<T>>;
 enum ServerService {
     Matchmaking,
 }
-enum Incoming {
-	Action(UnitPos),
-	Status
-}
-enum Outcoming {
+#[derive(alkahest::Deserialize, alkahest::Serialize, Formula)]
+pub enum Outcoming {
 	Battle((Vec<Army>, BattleInfo)),
-	Status()
+	Status([bool; 2]),
+}
+#[derive(alkahest::Deserialize, alkahest::Serialize, Formula)]
+pub enum Incoming {
+	Action(BattleUnit),
+	SetItem((BattleUnit, (usize, Option<usize>))),
+	SetUnit((BattleUnit, Option<usize>)),
+	Status(bool),
 }
 #[derive(Clone)]
 pub struct State {
     pub hotel: MutRc<Hotel>,
 }
+pub enum RoomStatus {
+	Preparing,
+	Battle,
+	End
+}
 struct RoomInstance {
     pub armies: Vec<Army>,
     pub battle: BattleInfo,
+	pub status: RoomStatus,
+	pub acceptance: [bool;2]
 }
 impl RoomInstance {
     pub fn new(units: &Vec<Unit>) -> Self {
@@ -91,7 +95,7 @@ impl RoomInstance {
         armies.push(gen_army(0, units));
         armies.push(gen_army(1, units));
         let battle = BattleInfo::new(&mut armies, 0, 1);
-        Self { armies, battle }
+        Self { armies, battle, acceptance: [false, false], status: RoomStatus::Preparing }
     }
 }
 fn gen_army(army_num: usize, units: &Vec<Unit>) -> Army {
@@ -102,7 +106,7 @@ fn gen_army(army_num: usize, units: &Vec<Unit>) -> Army {
             mana: 0,
             army_name: String::new(),
         },
-        vec![],
+        vec![None, None, None, None],
         (0, 0),
         true,
         dt_lib::battle::control::Control::PC,
@@ -121,27 +125,72 @@ fn setup() -> State {
         hotel: Arc::new(Mutex::new(Hotel::new())),
     }
 }
+fn serialize_gamemap(armies: &Vec<Army>, battle: &BattleInfo) -> AWsMessage {
+	let msg = (armies.clone(), battle.clone());
+    let mut buf = vec![];
+    serialize_to_vec::<Outcoming, Outcoming>(
+        Outcoming::Battle(msg.clone()),
+        &mut buf,
+    );
+	assert!(deserialize::<Outcoming, Outcoming>(&buf).is_ok());
+	AWsMessage::Binary(buf)
+}
+fn process_message(message: AWsMessage, instance: &mut RoomInstance, army: usize) -> Result<AWsMessage, AError> {
+	let action = deserialize::<Incoming, Incoming>(&message.into_data());
+	match action {
+		Ok(Incoming::Action(action)) => {
+			process_move(action, instance, army)
+		},
+		Ok(Incoming::SetItem((pos, (index, item_id)))) => {
+			let army = pos.army;
+			if let Some(troop) = instance.armies[army].get_troop(pos.index) {
+				let unit = &mut troop.get().unit;
+				unit.add_item(item_id.and_then(|index| Some(Item { index })), index);
+			};
+			Ok(serialize_gamemap(&instance.armies, &instance.battle))
+		},
+		Ok(Incoming::SetUnit((pos, unit_id))) => {
+			let army = pos.army;
+			let RoomInstance { armies, battle, .. } = instance;
+			let pos: usize = pos.index;
+			let index = armies[army].hitmap[pos];
+			if let Some(index) = index {
+				armies[army].troops.remove(index);
+			}
+			if let Some(unit_id) = unit_id {
+				let new_unit = UNITS.get(unit_id).cloned();
+				let Some(new_unit) = new_unit else { return Err(AError::new("fuck")) };
+				let mut new_troop = Troop::new(new_unit);
+				new_troop.pos = UnitPos::from_index(pos);
+				armies[army].troops.push(new_troop.into());
+			} else {
+				
+			}
+			armies[army].recalc_army_hitmap();
+			Ok(serialize_gamemap(&armies, &battle))
+		},
+		Ok(Incoming::Status(status)) => {
+			instance.acceptance[army] = status;
+			let mut buf = vec![];
+			serialize_to_vec::<Outcoming, Outcoming>(Outcoming::Status(instance.acceptance), &mut buf);
+			Ok(AWsMessage::Binary(buf))
+		},
+		Err(_) => { Err(AError::new(r#"shit happens ¯\_(ツ)_/¯"#)) }
+	}
+}
 fn process_move(
-    message: AWsMessage,
+    action: BattleUnit,
     instance: &mut RoomInstance,
     army: usize,
 ) -> Result<AWsMessage, AError> {
-    let RoomInstance { armies, battle } = instance;
+    let RoomInstance { armies, battle, .. } = instance;
     if battle.active_unit.is_some_and(|x| x.army != army) {
-        return Err(AError::new("fuck off!"));
+		return Err(AError::new("Not your turn".to_owned()));
     }
-    let buf = message.into_data();
-    let Ok((target_army, target_index)) = deserialize::<(usize, usize), (usize, usize)>(&*buf)
-    else {
-        return Err(AError::new("bad data."));
-    };
+    let (target_army, target_index) = (action.army, action.index);
+    
     handle_action((target_army, target_index), battle, armies);
-    let mut buf = vec![];
-    serialize::<(Vec<Army>, BattleInfo), (Vec<Army>, BattleInfo)>(
-        (armies.clone(), battle.clone()),
-        &mut buf,
-    );
-    Ok(AWsMessage::Binary(buf))
+	Ok(serialize_gamemap(&armies, &battle))
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -188,21 +237,18 @@ async fn handle_socket(
     (hotel, mut instance): (Arc<Mutex<Hotel>>, RoomInstance),
 ) {
 	{
-		let mut buf = vec![];
-		serialize::<(Vec<Army>, BattleInfo), (Vec<Army>, BattleInfo)>(
-			(instance.armies.clone(), instance.battle.clone()),
-			&mut buf,
-		).ok();
-		socket.send(AWsMessage::Binary(buf)).await;
+		let buf = serialize_gamemap(&instance.armies, &instance.battle);
+		socket.send(buf);
 		if let Some(Some((Some(sock), None))) = hotel.lock().await.0.get_mut(&room_code) {
 			dbg!("Second player");
-			socket.send(AWsMessage::Text("Room full".to_owned())).await;
+			socket.send(AWsMessage::Text("Room full".to_owned())).await.expect("Wtf?");
 			sock.send(AWsMessage::Text("Room full".to_owned())).await;
 		} else {
 			dbg!("First player");
-			socket.send(AWsMessage::Text("Wait for another player".to_owned())).await;
+			socket.send(AWsMessage::Text("Wait for another player".to_owned())).await.expect("Wtf?");
 		}
 	}
+	dbg!("Creating room");
     let mut room = {
         let mut hotel = hotel.lock().await;
         match hotel.put_socket(room_code, socket).await {
@@ -217,6 +263,12 @@ async fn handle_socket(
             }
         }
     };
+	{
+		let buf = serialize_gamemap(&instance.armies, &instance.battle);
+		room.0.send(buf.clone()).await;
+		room.1.send(buf).await;
+	}
+	dbg!("Room established");
     fn stream_with_id<T, E>(
         stream: impl StreamExt<Item = Result<T, E>>,
         id: usize,
@@ -229,8 +281,9 @@ async fn handle_socket(
         stream_with_id(room.0.stream, 0),
         stream_with_id(room.1.stream, 1),
     )
-    .map(|(x, id)| process_move(x, &mut instance, id))
-    .forward(room.1.sink.fanout(room.0.sink))
+		.map(|(x, id)| process_message(x, &mut instance, id))
+		.filter(|x| future::ready(x.is_ok()))
+		.forward(room.1.sink.fanout(room.0.sink))
     .await
-    .unwrap();
+		.ok();
 }

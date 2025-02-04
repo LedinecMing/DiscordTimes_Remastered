@@ -598,7 +598,11 @@ impl FromDtm for Army {
 			mana: 0,
 			army_name
 		};
-		let inventory = army.items_ids.map(|index| Item { index: index as usize }).to_vec();
+		let inventory = army.items_ids.map(|index| {
+			if index > 0 {
+				Some(Item { index: index as usize - 1 })
+			} else { None }
+		}).to_vec();
 		let pos = pos_from_dtm((army.x as usize, army.y as usize));
 		let active = army.activity.to_bool();
 		let control = Control::PC;

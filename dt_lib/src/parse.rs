@@ -1041,7 +1041,7 @@ fn parse_mapdata(
                         "inventory" => {
                             inv = split_and_parse(prop.1)
                                 .iter()
-                                .map(|num| items::item::Item { index: *num })
+                                .map(|num| Some(items::item::Item { index: *num }))
                                 .collect()
                         }
                         "pos" => {
