@@ -121,9 +121,10 @@ impl Market {
     }
     fn update(&mut self) {
         for _ in self.max_items - self.items.len()..0 {
-            let items = ITEMS.lock().unwrap();
+            let items = ITEMS.read().unwrap();
             let nice_items = items
                 .iter()
+                .enumerate()
                 .filter(|(_, item)| {
                     self.itemcost_range.0 <= item.cost && item.cost <= self.itemcost_range.1
                 })
@@ -131,7 +132,7 @@ impl Market {
             self.items.append(
                 &mut nice_items
                     .choose_multiple(&mut thread_rng(), self.max_items)
-                    .map(|(index, _)| Item { index: **index })
+                    .map(|(index, _)| Item { index: *index })
                     .collect(),
             );
         }

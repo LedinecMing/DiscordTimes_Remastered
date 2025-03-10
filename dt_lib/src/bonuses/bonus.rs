@@ -119,7 +119,7 @@ impl Bonus {
                 }
             }
             Self::Counterblow => {
-                sender.attack(receiver, receiver_pos, sender_pos, battle);
+                sender.attack(receiver, receiver_pos, sender_pos, battle, true);
                 damage
             }
             Self::Stealth => {
@@ -160,7 +160,7 @@ impl Bonus {
                     if damage.ranged > 1 || damage.hand > 1 {
                         receiver.add_effect(Fire::default());
                     } else if damage.magic > 1
-                        && matches!(sender.info.magic_type, Some(MagicType::Elemental(_)))
+                        && matches!(sender.info.magic_info.and_then(|x| Some(x.0)), Some(MagicType::Elemental))
                     {
                         receiver.add_effect(Fire::new(sender.modified.damage.magic as i64));
                     }

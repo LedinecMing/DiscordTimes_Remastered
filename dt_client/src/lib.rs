@@ -17,13 +17,15 @@ use dt_lib::{
         unitstats::ModifyUnitStats,
     },
 };
+use futures_channel::mpsc::SendError;
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::JoinHandle};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tungstenite::client::IntoClientRequest;
 pub use dt_server;
 #[derive(Debug)]
 pub enum IncomingEvent {
+	Id(usize),
 	Game((Vec<Army>, BattleInfo)),
 	Info(String),
 	Acceptance([bool;2])
@@ -35,6 +37,7 @@ pub struct OutcomingEvent(pub (usize, usize));
 pub struct Connection {
     pub incoming_events: futures_channel::mpsc::Receiver<IncomingEvent>,
     pub events_sender: futures_channel::mpsc::Sender<dt_server::Incoming>,
+	pub handle: JoinHandle<()>,
     // tasks_handle: JoinAll<JoinHandle<()>>,
 }
 impl Connection {
@@ -70,8 +73,10 @@ pub async fn connect(room: String, id: String) -> Connection {
     let (oe_tx, oe_rx) = futures_channel::mpsc::channel::<dt_server::Incoming>(256);
 
     let i = read.filter_map(|msg| async {
-		dbg!("new mesage");
 		let e = match msg.ok() {
+			Some(Message::Close(_)) => {
+				return None;
+			},
 			Some(Message::Binary(e)) => e,
 			Some(Message::Text(text)) => {
 				println!("Incoming: {}", &text);
@@ -82,19 +87,20 @@ pub async fn connect(room: String, id: String) -> Connection {
         let data =
             alkahest::deserialize::<dt_server::Outcoming, dt_server::Outcoming>(&e).ok().unwrap();
 		let data = match data {
+			dt_server::Outcoming::Id(army) => IncomingEvent::Id(army),
 			dt_server::Outcoming::Battle(g) => IncomingEvent::Game(g),
 			dt_server::Outcoming::Status(a) => IncomingEvent::Acceptance(a)
 		};
         Some(Ok(data))
     }).forward(ie_tx);
-
+	
     let o = oe_rx.map(|msg| {
         let mut result = Vec::new();
         alkahest::serialize_to_vec::<dt_server::Incoming, dt_server::Incoming>(msg, &mut result);
         Ok(Message::binary(result))
     }).forward(write);
-
-    tokio::spawn(async move {
+	
+    let handle = tokio::spawn(async move {
         tokio::select! {
             _ = i => (),
             _ = o => (),
@@ -104,11 +110,12 @@ pub async fn connect(room: String, id: String) -> Connection {
     Connection {
         incoming_events: ie_rx,
         events_sender: oe_tx,
+		handle
     }
 }
 #[cfg(test)]
 mod tests {
-    use dt_lib::battle::BattleUnit;
+    use dt_lib::battle::{BattleUnit, BattleUnitPos};
     use futures_util::StreamExt;
     use tokio::sync::oneshot;
     use crate::connect;
@@ -124,7 +131,7 @@ mod tests {
 
         let mut conn = connect("000000".to_owned(), "1".to_owned()).await;
 
-        conn.events_sender.try_send(dt_server::Incoming::Action(BattleUnit { army: 0, index: 0 })).unwrap();
+        conn.events_sender.try_send(dt_server::Incoming::Action(BattleUnitPos { army: 0, pos: 0 })).unwrap();
         tokio::spawn(conn.incoming_events.for_each(|msg| async {
             // dbg!(msg);
             //

@@ -47,6 +47,9 @@ impl Troop {
         let unit = &mut self.unit;
         let mut i = 0;
         loop {
+			if i + 1 >= unit.effects.len() {
+                break;
+            }
             if unit.effects[i].on_battle_end() && unit.effects[i].is_dead() {
                 let mut effect = unit.effects.remove(i);
                 effect.kill(unit);

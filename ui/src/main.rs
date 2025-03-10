@@ -209,7 +209,6 @@ enum Menu {
 fn move_thing(battle: &mut BattleInfo, armys: &mut Vec<Army>) {
     check_win(battle, armys);
     check_row_fall(battle, armys);
-    battle.remove_corpses(armys);
     if battle.winner.is_none() {
         if battle.active_unit == None {
             next_move(battle, armys);
@@ -454,7 +453,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                             .to_draw(|drawing: &mut Drawing<State>, _app, _assets, _gfx, _plugins, state: &mut State, draw| {
                                 if let Some(item_index) = get_menu_value_num(state, "items_item_index") {
                                     let pos = drawing.pos;
-                                    draw.image(&state.get_texture("assets/Items", &*ITEMS.lock().unwrap().get(&(item_index as usize)).as_ref().expect(&*item_index.to_string()).icon))
+                                    draw.image(&state.get_texture("assets/Items", &*ITEMS.read().unwrap().get(item_index as usize).as_ref().expect(&*item_index.to_string()).icon))
                                         .position(pos.0, pos.1);
                                 }
                             })
@@ -1451,11 +1450,11 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
 			1 => {
 				dyn_cont({
 					let building = &state.gamemap.buildings[building];
-					let items = ITEMS.lock().unwrap();
+					let items = ITEMS.read().unwrap();
 					if let Some(market) = &building.market {
 					vec![Box::new(container(
 							market.items.iter().enumerate().map(|(n, itemn)| {
-								let item = &items[&itemn.index];
+								let item = &items[itemn.index];
 								button(single(TupleContainerBuilder::default()
 									.inside((
 										TextureRenderer {

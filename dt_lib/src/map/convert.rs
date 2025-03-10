@@ -555,7 +555,7 @@ pub fn parse_dtm_texts(
 
     // TODO: Named units handling
 
-    dbg!(((name, desc), (comp, next), buildings, armies, events))
+    ((name, desc), (comp, next), buildings, armies, events)
 }
 trait FromDtm {
 	type From;

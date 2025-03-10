@@ -168,6 +168,7 @@ mod test {
         let mut locale = Locale::new("Rus".into(), "Eng".into());
         let doc = r#"
 a=test
+dggdgdd=adddlk
 b = test
 c = 
 test"#;
@@ -176,5 +177,6 @@ test"#;
         assert!(dbg!(process_locale("$a", &mut locale)) == "test".to_string());
         assert!(dbg!(process_locale("$b", &mut locale)) == "test".to_string());
         assert!(dbg!(process_locale("$c", &mut locale)) == "test".to_string());
+		assert_eq!(locale.get("dggdgdd"), "adddlk".to_string())
     }
 }

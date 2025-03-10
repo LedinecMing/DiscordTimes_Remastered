@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+#![allow(unused_variables)]
 #![feature(extract_if)]
 pub mod battle;
 pub mod bonuses;

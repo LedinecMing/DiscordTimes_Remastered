@@ -33,3 +33,4 @@ bytes = "1.7.2"
 zerocopy = { version="0.8.2", features=["derive"] }
 num_enum = "0.7.3"
 thiserror = "2.0.9"
+itertools = "0.14.0"

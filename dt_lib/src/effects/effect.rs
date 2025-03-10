@@ -251,7 +251,13 @@ impl EffectTrait for ElementalSupport {
         if self.magic_power < 20 {
             return;
         }
-        let add_moves = 1 + (self.magic_power / 50) as i64;
+		let add_moves = match self.magic_power {
+			0..=19 => 0,
+			20..=44 => 1,
+			45..=99 => 2,
+			100..=255 => 3,
+			_ => self.magic_power as i64 / 64
+		};
         unit.modify.moves += *Modify::default().add(add_moves);
         unit.modify.max_moves += *Modify::default().add(add_moves);
     }
@@ -267,7 +273,13 @@ impl EffectTrait for ElementalSupport {
         if self.magic_power < 20 {
             return;
         }
-        let add_moves = 1 + (self.magic_power / 50) as i64;
+        let add_moves = match self.magic_power {
+			0..=19 => 0,
+			20..=44 => 1,
+			45..=99 => 2,
+			100..=255 => 3,
+			_ => self.magic_power as i64 / 64
+		};
         unit.modify.moves -= *Modify::default().add(add_moves);
         unit.modify.max_moves -= *Modify::default().add(add_moves);
     }
@@ -298,7 +310,7 @@ impl Default for AttackMagic {
         Self {
             info: EffectInfo { lifetime: 1 },
             magic_power: 15,
-            magic_type: MagicType::Death(MagicDirection::ToEnemy),
+            magic_type: MagicType::Death,
         }
     }
 }

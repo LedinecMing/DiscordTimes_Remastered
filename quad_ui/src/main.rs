@@ -1,9 +1,9 @@
- use ahash::RandomState;
+use ahash::RandomState;
 use dt_lib::{
-    battle::{army::*, battlefield::*, troop::Troop}, hwid, items::item::*, locale::{parse_locale, Locale}, map::{
+    battle::{army::*, battlefield::*, troop::Troop}, hwid, items::item::*, locale::{find_all_matches_in_string, parse_locale, Locale}, map::{
         convert::{convert_dtm_map, parse_dtm_map}, event::{execute_event, Event as GameEvent, Execute}, map::*, object::ObjectInfo, tile::*
     }, network::GameServer, parse::{collect_errors, parse_items, parse_objects, parse_settings, parse_story, parse_units}, time::time::Data as TimeData, units::{
-        unit::{ActionResult, Unit, UnitPos},
+        unit::{display_unit, ActionResult, Unit, UnitPos},
         unitstats::ModifyUnitStats,
     }
 };
@@ -11,14 +11,15 @@ use futures_util::StreamExt;
 use macroquad::{
     prelude::*, telemetry::Zone, ui::{
         hash, root_ui,
-        widgets::{self, Window}, Skin, Style,
+        widgets::{self, Button, Group, Texture, Window}, Skin, Style,
     }
 };
 use dt_client::*;
+use miniquad::window::screen_size;
 use once_cell::sync::Lazy;
 use tokio::{runtime::Runtime, task::futures};
 use std::{
-    collections::HashMap, future, num::Saturating, ops::Index, sync::{Mutex, RwLock}
+    collections::HashMap, fmt::Display, future, num::Saturating, ops::{Index, Not}, sync::{Mutex, RwLock}
 };
 #[derive(Debug)]
 struct Assets {
@@ -29,8 +30,8 @@ impl Assets {
     fn new(inner: HashMap<String, Texture2D, RandomState>, fonts: HashMap<&'static str, Font>) -> Self {
         Assets { inner, fonts }
     }
-    fn get(&self, key: &String) -> &Texture2D {
-        self.inner.get(key).unwrap_or_else(|| panic!("No asset {key}"))
+    fn get<T: Display + ToString + ?Sized>(&self, key: &T) -> &Texture2D {
+        self.inner.get(&key.to_string()).unwrap_or_else(|| panic!("No asset {key}"))
     }
 	fn get_font(&self, key: &'static str) -> &Font {
 		self.fonts.get(&key).unwrap_or_else(|| panic!("No font {key}"))
@@ -42,10 +43,10 @@ impl Index<&String> for Assets {
         self.get(index)
     }
 }
-static LOCALE: Lazy<RwLock<Locale>> =
-    Lazy::new(|| RwLock::new(Locale::new("Rus".into(), "Eng".into())));
+use dt_lib::parse::LOCALE;
 static UNITS: Lazy<RwLock<Vec<Unit>>> = Lazy::new(|| RwLock::new(vec![]));
 static OBJECTS: Lazy<RwLock<Vec<ObjectInfo>>> = Lazy::new(|| RwLock::new(vec![]));
+const CARD_SIZE: f32 = 180.;
 macro_rules! units {
     () => {
         &UNITS.read().unwrap()
@@ -108,6 +109,7 @@ async fn game_init() -> State {
         let locale = &mut LOCALE.write().unwrap();
         locale.set_lang((&settings.locale, &settings.additional_locale));
         parse_locale(&[&settings.locale, &settings.additional_locale], locale);
+		dbg!(locale);
     }
 	let benguiat = load_ttf_font("Benguiat Rus Regular.ttf").await.expect("shit happened");
 	let z003 = load_ttf_font("Z003-MediumItalic.ttf").await.expect("shit happened");
@@ -118,7 +120,7 @@ async fn game_init() -> State {
 	fonts.insert("gothic", gothic);
     let assets = {
         let req_assets_items = parse_items(None, &settings.locale);
-		assert!(ITEMS.lock().unwrap().len()>0);
+		assert!(ITEMS.read().unwrap().len()>0);
         let res = parse_units(None);
         if let Err(err) = res {
             error!("{}", err);
@@ -151,13 +153,20 @@ async fn game_init() -> State {
             "gold.png",
             "red.png"].map(|x| x.to_owned()).to_vec(),
         );
-
+		let req_assets_stats_list = ("assets/StatsIcons", [
+			"crossed-swords.png",
+			"hearts.png",
+			"high-shot.png",
+			"sprint.png",
+			"wizard-staff.png"
+		].map(|x| x.to_owned()).to_vec());
         let req_assets_list = [
             req_assets_objects,
             req_assets_items,
             req_assets_units,
             req_assets_tiles,
-			req_assets_windows
+			req_assets_windows,
+			req_assets_stats_list
         ];
         load_assets(&req_assets_list, fonts).await
     };
@@ -172,16 +181,25 @@ async fn game_init() -> State {
 	let mut battle = BattleInfo::new(&mut gamemap.armys, 0, 1);
 	battle.start(&mut gamemap.armys);
 	let rt = tokio::runtime::Runtime::new().unwrap();
+	let mut camera = Camera2D::from_display_rect(
+		Rect {
+			x: 0.,
+			y: 1080.,
+			w: 1920.,
+			h: -1080.
+		});
+	camera.rotation = 0.;
     State {
 		rt,
         assets,
         ui: Ui {
             main: Menu::Main,
+			camera, 
             stack: Vec::new(),
         },
         game: Game {
             gamemap,
-			focus: BattleUnit { army: 0, index: 0 },
+			focus: BattleUnitPos { army: 0, pos: 0 },
             battle: Some(battle),
             variant: GameVariant::Single(Scenario {events} ),
         },
@@ -194,12 +212,13 @@ struct Scenario {
 #[derive(Debug, PartialEq, Eq)]
 enum ConnectionStatus {
 	NotFull,
-	Full
+	Full(bool),
 }
 #[derive(Debug)]
 struct Online {
 	conn: Connection,
 	status: ConnectionStatus,
+	army: usize,
 }
 #[derive(Debug)]
 enum GameVariant {
@@ -211,7 +230,7 @@ struct Game {
 	pub gamemap: GameMap,
 	pub battle: Option<BattleInfo>,
 	pub variant: GameVariant,
-	pub focus: BattleUnit
+	pub focus: BattleUnitPos
 }
 fn window_conf() -> Conf {
     Conf {
@@ -232,12 +251,63 @@ enum Menu {
 #[derive(Debug)]
 struct Ui {
     pub main: Menu,
+	pub camera: Camera2D,
     pub stack: Vec<Menu>,
 }
 fn is_clicked(area: Rect) -> bool {
-	is_mouse_button_released(MouseButton::Left) && area.contains(mouse_position().into())
+	is_mouse_button_released(MouseButton::Left) && is_hovered(area)
 }
-fn unit_card_battle(army: usize, unit_index: usize, battle: &mut BattleInfo, armies: &mut Vec<Army>, pos: (f32, f32), assets: &Assets) -> bool {
+fn is_hovered(area: Rect) -> bool {
+	let mouse = Camera2D::from_display_rect(
+		Rect {
+			x: 0.,
+			y: 1080.,
+			w: 1920.,
+			h: -1080.
+		}).screen_to_world(mouse_position().into());
+	area.contains(mouse)
+}
+fn draw_texture_size(texture: &Texture2D, pos: (f32, f32), size: (f32, f32)) {
+	draw_texture_ex(texture, pos.0, pos.1, Color::from_rgba(255, 255, 255, 255), DrawTextureParams {
+		dest_size: Some(size.into()),
+		..Default::default()
+	})
+}
+fn unit_card_battle(army: usize, unit_index: usize, battle: &mut BattleInfo, armies: &mut Vec<Army>, pos: (f32, f32), assets: &Assets, is_in_focus: bool, is_battle_active: bool, is_my_move: bool) -> bool {
+	fn draw_stats(troop: &Troop, mut pos: (f32, f32), assets: &Assets, draw_size: (f32, f32)) {
+		let bg_color = if troop.is_main {
+			Color::from_rgba(168, 48, 48, 255)
+		} else {
+			Color::from_rgba(132, 46, 46, 255)
+		};
+		draw_rectangle(pos.0, pos.1, draw_size.0, draw_size.1, bg_color);
+		let stats = troop.unit.modified;
+		draw_texture_size(assets.get("hearts.png"), pos, (32., 32.));
+		draw_text(&format!("{}/{}", stats.hp, stats.max_hp), pos.0 + 32., pos.1 + 32., 32., WHITE);
+		let start_pos = pos;
+		if stats.damage.hand > 0 {
+			pos.1 += 32.;
+			draw_texture_size(assets.get("crossed-swords.png"), pos, (32., 32.));
+			draw_text(&format!("{}", stats.damage.hand), pos.0 + 32., pos.1 + 32., 32., WHITE);
+		}
+		if stats.damage.ranged > 0 {
+			pos.1 += 32.;
+			draw_texture_size(assets.get("high-shot.png"), pos, (32., 32.));
+			draw_text(&format!("{}", stats.damage.ranged), pos.0 + 32., pos.1 + 32., 32., WHITE);
+		}
+		if stats.damage.magic > 0 {
+			pos.1 += 32.;
+			draw_texture_size(assets.get("wizard-staff.png"), pos, (32., 32.));
+			draw_text(&format!("{}", stats.damage.magic), pos.0 + 32., pos.1 + 32., 32., WHITE);
+		}
+		let text = &format!("{}", stats.speed);
+		let text_size = measure_text(&text, None, 32, 1.).width;
+		draw_texture_size(assets.get("sprint.png"), (start_pos.0 + CARD_SIZE - 32. - text_size, start_pos.1), (32., 32.));
+		draw_text(&text, start_pos.0 + CARD_SIZE - text_size, start_pos.1 + 32., 32., WHITE);
+		let text = &format!("Moves {}/{}", stats.moves, stats.max_moves);
+		let text_size = measure_text(&text, None, 26, 1.).width;
+		draw_text(&text, start_pos.0 + CARD_SIZE - text_size, start_pos.1 + 64., 26., WHITE);
+	}
 	let Some(unit) = armies[army].get_troop(unit_index) else {
 		let texture = assets.get(&match field_type(unit_index, *MAX_TROOPS) {
 			Field::Back => { "backyard.png" },
@@ -245,82 +315,107 @@ fn unit_card_battle(army: usize, unit_index: usize, battle: &mut BattleInfo, arm
 			Field::Reserve => { "tent.png" }
 		}.to_owned());
 		let undercell = assets.get(&"undercell.png".to_owned());
-		draw_texture(texture, pos.0, pos.1, WHITE);
-		draw_texture(undercell, pos.0, pos.1 + 102., WHITE);
+		draw_texture_size(texture, pos, (CARD_SIZE, CARD_SIZE));
+		let pos = (pos.0, pos.1 + CARD_SIZE);
+		let size = (CARD_SIZE, CARD_SIZE / 2.);
+		draw_texture_size(undercell, pos, size);
 		return false;
 	};
 	let troop = unit.get();
 	let unit_texture = assets.get(&format!("unit_{}.png", troop.unit.info.icon_index));
-	let is_active = battle.active_unit == Some(BattleUnit{ army, index: unit_index});
-	let is_interactable = battle.can_interact.as_ref().is_some_and(|x| x.contains(&BattleUnit { army, index: unit_index}));
-	//draw_texture_ex(undercell_texture, pos.0, pos.1, Color::default(), DrawTextureParams {
-	//	dest_size: Some(Vec2::from_array([5., 5.])),
-	//	..Default::default()
-	//}	dest_size: Some(Vec2::from_array([5., 5.])),
-	//);
-	let bg_color = if troop.is_main {
-		Color::from_rgba(168, 48, 48, 255)
-	} else {
-		Color::from_rgba(132, 46, 46, 255)
-	};
+	let is_interactable = battle.can_interact.as_ref().is_some_and(|x| x.contains(&BattleUnitPos { army, pos
+																								   : unit_index}));
 	let size = troop.unit.info.size;
-	let draw_size = (size.0 as f32 * 102., size.1 as f32 * 102.);
+	let draw_size = (size.0 as f32 * CARD_SIZE, size.1 as f32 * CARD_SIZE);
 	let draw_rect = Rect::new(pos.0, pos.1, draw_size.0, draw_size.1);
-	draw_rectangle(pos.0, pos.1, draw_size.0, draw_size.1 + 52., bg_color);
-	draw_texture(unit_texture, pos.0, pos.1, Color::from_rgba(255, 255, 255, 255));
-	let outline_color = if is_active {
-		Some(Color::from_rgba(91, 255, 66, 128 + (get_time().sin() * 128.) as u8))
-	} else if is_interactable {
-		Some(Color::from_rgba(255, 22, 22, 128 + (get_time().sin() * 128.) as u8))
+	let stats = troop.unit.modified;
+	let hp = 1. - stats.hp as f32 / stats.max_hp as f32;
+	draw_texture_size(unit_texture, pos, draw_size);
+	draw_stats(&troop, (pos.0, pos.1 + CARD_SIZE), assets, draw_size);
+	draw_rectangle(pos.0, pos.1 + draw_size.1, draw_size.0, -draw_size.1 * hp, Color::new(hp, 0., 0., hp/2.));
+	let outline_color = if is_interactable && is_my_move {
+		if let Some(active_unit) = battle.active_unit {
+			Some(if armies[army].hitmap[unit_index].is_some_and(|index|active_unit == BattleUnit { army, index }) {
+				Color::from_rgba(22, 255, 22, 128 + (get_time().sin() * 128.) as u8)
+			} else if active_unit.army != army {
+				Color::from_rgba(255, 22, 22, 128 + (get_time().sin() * 128.) as u8)
+			} else {
+				Color::from_rgba(22, 22, 255, 128 + (get_time().sin() * 128.) as u8)
+			})
+		} else { None }
 	} else { None };
 	if let Some(outline_color) = outline_color {
 		draw_rectangle_lines(pos.0, pos.1, draw_size.0, draw_size.1, 15., outline_color);
 	}
+	if !is_battle_active && is_in_focus {
+		draw_rectangle_lines(pos.0, pos.1, draw_size.0, draw_size.1, 15., BLUE);
+	}
+	let items = &troop.unit.inventory.items;
+	for (i, item) in items.iter().enumerate() {
+		if let Some(item) = item {
+			let texture = item.get_info().icon;
+			let texture = assets.get(&texture);
+			let item_pos = CARD_SIZE / 4. * i as f32;
+			draw_texture_size(texture, (pos.0 + item_pos, pos.1), (CARD_SIZE / 4., CARD_SIZE / 4.));
+		};
+	}
 	if is_clicked(draw_rect) {
-		dbg!("i cliked");
 		draw_rectangle_lines(pos.0, pos.1, draw_size.0, draw_size.1, 15., BLACK);
 		true
 	} else { false }
 }
-fn draw_battle(assets: &Assets, game: &mut Game, is_battle_active: bool) {
+fn draw_battle(assets: &Assets, game: &mut Game, is_battle_active: bool) -> Option<usize> {
 	let (armies, battle) = (&mut game.gamemap.armys, &mut game.battle);
-	let Some(battle) = battle.as_mut() else { return; };
+	let Some(battle) = battle.as_mut() else { return None; };
+	let is_my_move = if let GameVariant::Online(Online { army, .. }) = &game.variant {
+		battle.active_unit.is_some_and(|active| active.army == *army)
+	} else {
+		true
+	};
 	let half_troops = *MAX_TROOPS / 2;
+	let winner = battle.winner;
     for army in 0..=1 {
         for row in 0..=1 {
             for i in 0..(*MAX_TROOPS / 2) {
                 let mut pos = (0., 0.);
-                pos.0 = i as f32 * 102.;
-                pos.1 = army as f32 * 360. + row as f32 * 152.;
+                pos.0 = i as f32 * CARD_SIZE;
+                pos.1 = army as f32 * CARD_SIZE * 3. + row as f32 * CARD_SIZE * 1.5;
                 // f(x) = { 0, 6, 6, 0 } where x = { {0, 0}, {0, 1}, {1, 0}, {1, 1} }
                 // abs(0 * 6 - 0 * 6) = 0
                 // abs(0 * 6 - 1 * 6) = 6
                 // abs(1 * 6 - 0 * 6) = 6
                 // abs(1 * 6 - 1 * 6) = 0
-				draw_rectangle(pos.0, pos.1, 92., 102., Color::from_rgba(0, 0, 0, 1));
+				draw_rectangle(pos.0, pos.1, CARD_SIZE, CARD_SIZE, Color::from_rgba(0, 0, 0, 1));
 				let army = if army == 0 {
 					battle.army1
 				} else {
 					battle.army2
 				} as usize;
 				let unit_index = i + (army as i64 - row as i64).abs() as usize * half_troops;
-				if unit_card_battle(army, unit_index, battle, armies, pos, assets) {
-					game.focus = BattleUnit { index: unit_index, army};
+				let is_focused = game.focus.army == army && game.focus.pos == unit_index;
+				let draw_size = (CARD_SIZE, CARD_SIZE);
+				let draw_rect = Rect::new(pos.0, pos.1, draw_size.0, draw_size.1);
+				if is_clicked(draw_rect) {
+					game.focus = BattleUnitPos { pos: unit_index, army};
+				}
+				if unit_card_battle(army, unit_index, battle, armies, pos, assets, is_focused, is_battle_active, is_my_move) && winner.is_none() {
+					game.focus = BattleUnitPos { pos: unit_index, army};
 					if !is_battle_active { continue; }
 					if let GameVariant::Online(Online { conn, .. }) = &mut game.variant {
-						dbg!("I send the action on-line");
-						conn.send_action(dt_server::Incoming::Action(BattleUnit { index: unit_index, army}));
+						conn.send_action(dt_server::Incoming::Action(BattleUnitPos { pos: unit_index, army}));
 					} else {
-						dbg!("I handle the action myself");
 						handle_action((unit_index, army), battle, armies);
 					}
+				}
+				if game.focus == (BattleUnitPos { army, pos: unit_index }) && !is_battle_active {
+					draw_rectangle_lines(pos.0, pos.1, draw_size.0, draw_size.1, 15., BLUE);
 				}
             }
         }
     }
+	winner
 }
 fn count_tileset_index(map: &GameMap, pos: (usize, usize)) -> usize {
-	const DIRT: usize = 0;
 	let is_dirt = |pos: (usize, usize)| if map.tilemap[pos.min((map.tilemap.size - 1, map.tilemap.size - 1))] == 6 { 1 } else { 0 };
 	
 	let bitmask = 
@@ -334,6 +429,7 @@ const SIZE: (f32, f32) = (256., 242.);
 fn draw_map(assets: &Assets, camera: &mut Camera2D, game: &mut Game) -> Option<Menu> {
     let (gamemap, battle) = (&mut game.gamemap, &mut game.battle);
     set_camera(camera);
+	
     for i in 0..gamemap.tilemap.size {
         for j in 0..gamemap.tilemap.size {
 			let tile_index = gamemap.tilemap[(j, i)];
@@ -369,7 +465,7 @@ fn draw_map(assets: &Assets, camera: &mut Camera2D, game: &mut Game) -> Option<M
         }
     }
 	if is_key_down(KeyCode::Enter) {
-		battle.insert(BattleInfo::new(&mut gamemap.armys, 0, 1));
+		*battle = Some(BattleInfo::new(&mut gamemap.armys, 0, 1));
 		return Some(Menu::Battle);
 	}
 	if is_key_down(KeyCode::Escape) {
@@ -398,7 +494,11 @@ fn draw_map(assets: &Assets, camera: &mut Camera2D, game: &mut Game) -> Option<M
 }
 fn process_event(state: &mut State, event: IncomingEvent) {
 	let GameVariant::Online(conn) = &mut state.game.variant else { return; };
-	match dbg!(event) {
+	match event {
+		IncomingEvent::Id(army) => {
+			println!("My id is {army}");
+			conn.army = army;
+		},
 		IncomingEvent::Game(game) => {
 			state.game.gamemap.armys = game.0; state.game.battle = Some(game.1);
 		},
@@ -408,12 +508,16 @@ fn process_event(state: &mut State, event: IncomingEvent) {
 					conn.status = ConnectionStatus::NotFull;
 				},
 				"Room full" => {
-					conn.status = ConnectionStatus::Full;
+					conn.status = ConnectionStatus::Full(false);
 				}
 				_ => { dbg!(text); }
 			}
 		},
-		IncomingEvent::Acceptance(a) => {}
+		IncomingEvent::Acceptance(a) => {
+			if a == [true, true] {
+				conn.status = ConnectionStatus::Full(true);
+			}
+		}
 	}
 }
 #[macroquad::main(window_conf)]
@@ -435,21 +539,24 @@ async fn main() {
 		label_style: label,
 		button_style: button.clone(),
 		window_style: bg,
-		editbox_style: button,
+		editbox_style: button.clone(),
+		group_style: button,
 		..root_ui().default_skin()
 	};
 	let mut input = String::new();
 	root_ui().push_skin(&skin);
     loop {
+		set_camera(&state.ui.camera);
         clear_background(WHITE);
 		match &mut state.ui.main {
 			Menu::Main => {
-				Window::new(hash!(), vec2(0., 0.), vec2(screen_height(), screen_width()))
+				Window::new(hash!(), vec2(0., 0.), vec2(screen_width(), screen_height()))
 					.titlebar(false)
 					.ui(&mut *root_ui(), |ui| {
+						let locale = LOCALE.read().unwrap();
 						ui.texture(state.assets.get(&"Menu.png".to_owned()).weak_clone(), screen_width(), screen_height());
-						ui.label(Some((50., 50.).into()), "Discord Times");
-						if ui.button(Some((50., 100.).into()), "Start") {
+						ui.label(Some((50., 50.).into()), &locale.get("menu_game_name"));
+						if ui.button(Some((50., 100.).into()), locale.get("menu_start_title")) {
 							state.ui.main = Menu::Map(Camera2D::from_display_rect(Rect::new(
 								0.,
 								0.,
@@ -460,10 +567,10 @@ async fn main() {
 						if ui.button(Some((50., 150.).into()), "Atlas") {
 							state.ui.main = Menu::Atlas;
 						}
-						if ui.button(Some((50., 250.).into()), "Battle") {
+						if ui.button(Some((50., 250.).into()), locale.get("menu_battle_title")) {
 							state.ui.main = Menu::Battle;
 						}
-						if ui.button(Some((50., 300.).into()), "Mp") {
+						if ui.button(Some((50., 300.).into()), locale.get("menu_pvp_title")) {
 							state.ui.main = Menu::RoomCreation;
 						}
 					});
@@ -486,31 +593,65 @@ async fn main() {
 				WHITE,
 			),
 			Menu::Battle => {
-				draw_battle(&state.assets, &mut state.game, true);
-				if let GameVariant::Online(Online { conn, .. }) = &mut state.game.variant {
+				let winner = draw_battle(&state.assets, &mut state.game, true);
+				let go_back = if let GameVariant::Online(Online { conn, army, .. }) = &mut state.game.variant {
+					let go_back = if let Some(winner) = winner {
+						let text = if winner == *army {
+							"Ты победил. Нажми."
+						} else {
+							"Ты проиграл. Нажми."
+						};
+						let size = measure_text(&text, Some(&state.assets.fonts["benguiat"]), 64, 1.);
+						let pos = (1920. / 2. - size.width / 2., 1080. / 2. - size.height / 2.);
+						if Button::new(text).position(Some(pos.into())).ui(&mut *root_ui()) {
+							conn.handle.abort();
+							true
+						} else { false }
+					} else { false };
 					if let Some(mes) = conn.req_one() {
-						println!("New message! {mes:?}");
 						process_event(&mut state, mes);
 					}
+					go_back
+				} else { false };
+				let pos = CARD_SIZE * (*MAX_TROOPS/2) as f32;
+				Window::new(hash!(), vec2(pos, 000.), vec2(1000., 1000.))
+					.titlebar(false)
+					.ui(&mut *root_ui(), |ui| {
+						if let Some(active) = state.game.battle.as_ref().and_then(|battle| battle.active_unit) {
+							let troop = &state.game.gamemap.armys[active.army].troops[active.index];
+							let troop = troop.get();
+							let texture = state.assets.get(&format!("unit_{}.png", troop.unit.info.icon_index));
+							let info = display_unit(&troop.unit).join("\n");
+							ui.texture(texture.weak_clone(), CARD_SIZE, CARD_SIZE);
+							ui.label(None, &info);
+						}
+					});
+				if go_back {
+					state.game.variant = GameVariant::Single(Scenario { events: vec![] });
+					state.ui.main = Menu::Main;
 				}
 			},
 			Menu::RoomCreation => {
 				let connected = matches!(state.game.variant, GameVariant::Online(_));
 				let mut connecting = false;
-				Window::new(hash!(), vec2(100., 0.), vec2(screen_width(), screen_height()))
+				Window::new(hash!(), vec2(0., 0.), vec2(screen_width(), screen_height()))
 					.titlebar(false)
 					.ui(&mut *root_ui(), |ui| {
-						ui.label(Some((50., 50.).into()), "Discord Times");
+						let locale = LOCALE.read().unwrap();
+						ui.label(Some((50., 50.).into()), &locale.get("menu_game_name"));
 						
-						ui.input_text(hash!(), "Room Code: ", &mut input);
-						if !connected && (ui.button(Some((150., 150.).into()), "Connect") || is_key_released(KeyCode::Enter)) {
+						ui.input_text(hash!(), &locale.get("ui_room_code"), &mut input);
+						if !connected && (ui.button(Some((150., 150.).into()), locale.get("ui_connect")) || is_key_released(KeyCode::Enter)) {
 							connecting = true;
 						}
 						if connected {
-							ui.label(Some((150., 150.).into()), "Waiting for second player...");
+							ui.label(Some((150., 150.).into()), &locale.get("ui_awaiting"));
+							if ui.button(None, locale.get("ui_cancel_connection")) {
+								state.game.variant = GameVariant::Single(Scenario { events: vec![] });
+							};
 						}
 						if let GameVariant::Online(Online {status, .. }) = &state.game.variant {
-							if status == &ConnectionStatus::Full {
+							if status == &ConnectionStatus::Full(false) {
 								state.ui.main = Menu::RoomOnline;
 							}
 						}
@@ -518,51 +659,118 @@ async fn main() {
 				if connecting {
 					let conn = state.rt.block_on(connect(input.clone(), hwid::get_id().unwrap()));
 					//root_ui().pop_skin();
-					state.game.variant = GameVariant::Online(Online {conn, status: ConnectionStatus::NotFull });
+					state.game.variant = GameVariant::Online(Online {conn, status: ConnectionStatus::NotFull, army: 0 });
 				}
 				if let GameVariant::Online(Online { conn, .. }) = &mut state.game.variant {
 					if let Some(mes) = conn.req_one() {
-						println!("New message! {mes:?}");
 						process_event(&mut state, mes);
 					}
 				}
 			},
 			Menu::RoomOnline => {
 				draw_battle(&state.assets, &mut state.game, false);
-				let GameVariant::Online(Online { conn, .. }) = &mut state.game.variant else {
+				let GameVariant::Online(Online { conn, status, .. }) = &mut state.game.variant else {
 					continue;
 				};
-				let pos = 102. * (*MAX_TROOPS/2) as f32;
+				if matches!(status, ConnectionStatus::Full(true)) {
+					conn.send_action(dt_server::Incoming::GetState);
+					state.ui.main = Menu::Battle;
+					continue;
+				}
+				let pos = CARD_SIZE * (*MAX_TROOPS/2) as f32;
 				Window::new(hash!(), vec2(pos, 000.), vec2(1000., 1000.))
 					.titlebar(false)
 					.ui(&mut *root_ui(), |ui| {
-						let items = &state.game.gamemap.armys[state.game.focus.army].inventory;
-						for (i, item) in items.iter().enumerate() {
-							if let Some(item) = item {
-								let texture = item.get_info().icon;
-								let texture = state.assets.get(&texture);
-								ui.texture(texture.weak_clone(), 50., 50.);
-							}
-							ui.button(vec2(50. * i as f32, 0.), "Edit");
-							if ui.last_item_clicked() {
-								*ui.get_bool(hash!(i, "items")) ^= true;
-							}
-							if *ui.get_bool(hash!(i, "items")) {
-								ui.label(vec2(50. * i as f32, 50.), "You clicked!");
-								for (item_index, item) in ITEMS.lock().unwrap().iter() {
-									let texture = &item.icon;
+						let locale = LOCALE.read().unwrap();
+						if ui.button(vec2(0., 800.), locale.get("ui_ready")) {
+							let ready = ui.get_bool(hash!("ready"));
+							*ready = ready.not();
+							conn.send_action(dt_server::Incoming::Status(*ready));
+						}
+						let ready = ui.get_bool(hash!("ready"));
+						if *ready {
+							return;
+						}
+						if let Some(troop) = &state.game.gamemap.armys[state.game.focus.army].get_troop(state.game.focus.pos) {
+							let troop = &troop.get();
+							let items = &troop.unit.inventory.items;
+							for (i, item) in items.iter().enumerate() {
+								let change = if let Some(item) = item {
+									let texture = item.get_info().icon;
 									let texture = state.assets.get(&texture);
-									if ui.texture(texture.weak_clone(), 50., 50.) {
-										conn.send_action(dt_server::Incoming::SetItem((state.game.focus, (i, Some(*item_index)))));
-									}
-									ui.label(None, &item.name);
+									Texture::new(texture.weak_clone())
+										.size(50., 50.).ui(ui)
+								} else {
+									ui.button(None, locale.get("ui_item"))
+								};
+								if change {
+									let val = ui.get_any::<usize>(hash!("items"));
+									if *val == i + 1 {
+										*val = 0;
+									} else { *val = i + 1 };
 								}
+								if *ui.get_any::<usize>(hash!("items")) == i + 1 {
+									Group::new(hash!(), vec2(200., 500.))
+										.layout(macroquad::ui::Layout::Vertical)
+										.ui(ui, |ui| {
+											for (item_index, item) in ITEMS.read().unwrap()
+												.iter()
+												.enumerate()
+												.filter(|(_, item)| {
+													item.can_equip(&troop.unit)
+												}) {
+													let texture = &item.icon;
+													let texture = state.assets.get(&texture);
+													if ui.texture(texture.weak_clone(), 50., 50.) {
+														conn.send_action(dt_server::Incoming::SetItem((state.game.focus, (i, Some(item_index)))));
+													}
+													ui.label(None, &item.name);
+											}
+										});
+								}
+							};
+						}
+						if let Some(troop) = &state.game.gamemap.armys[state.game.focus.army].get_troop(state.game.focus.pos) {
+							let troop = troop.get();
+							let texture = state.assets.get(&format!("unit_{}.png", troop.unit.info.icon_index));
+							Group::new(hash!(), vec2(300., 500.))
+									.layout(macroquad::ui::Layout::Vertical)
+									.ui(ui, |ui| {
+										let info = display_unit(&troop.unit);
+										for string in info {
+											ui.label(None, &string);
+										}
+									});
+							Texture::new(texture.weak_clone())
+								.size(CARD_SIZE, CARD_SIZE).ui(ui);
+							if ui.button(None, locale.get("ui_displace")) {
+								conn.send_action(dt_server::Incoming::SetUnit((state.game.focus, None)));
+								*ui.get_any::<usize>(hash!("unit")) = 0;
+							}
+						} else {
+							let change = ui.button(None, locale.get("ui_unit"));
+							let val = ui.get_any::<usize>(hash!("unit"));
+							if change {
+								if *val == 1 {
+									*val = 0;
+								} else { *val = 1 };
+							}
+							if *val == 1 {
+								Group::new(hash!(), vec2(CARD_SIZE, 500.))
+									.layout(macroquad::ui::Layout::Vertical)
+									.ui(ui, |ui| {
+										for (unit_index, unit) in UNITS.read().unwrap().iter().enumerate() {
+											let texture = state.assets.get(&format!("unit_{}.png", unit.info.icon_index));
+											if ui.texture(texture.weak_clone(), CARD_SIZE, CARD_SIZE) {
+												conn.send_action(dt_server::Incoming::SetUnit((state.game.focus, Some(unit_index))));
+											}
+											ui.label(None, &unit.info.name);
+										}
+									});
 							}
 						}
 					});
-				
 				if let Some(mes) = conn.req_one() {
-					println!("New message! {mes:?}");
 					process_event(&mut state, mes);
 				}
 			}

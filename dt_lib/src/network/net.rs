@@ -1,7 +1,7 @@
 use crate::{
     battle::{
         army::{find_path, Army, TroopType},
-        battlefield::{handle_action, Action, BattleInfo},
+        battlefield::{handle_action, BattleInfo},
         troop::Troop,
     },
     map::{

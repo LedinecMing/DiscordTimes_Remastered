@@ -19,7 +19,7 @@ use num::{integer::sqrt, pow};
 use once_cell::sync::Lazy;
 use pathfinding::directed::astar::astar;
 
-use super::control::{Control, PC_ControlSetings};
+use super::{control::{Control, PC_ControlSetings}, troop_inactive};
 #[derive(Clone, Debug, Default, Sections)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ArmyStats {
@@ -116,9 +116,12 @@ impl Army {
         }
 	}
     pub fn recalc_hitmap(troops: &Vec<TroopType>, hitmap: &mut Vec<Option<usize>>, columns: usize) {
-        let info = troops.iter().enumerate().map(|(num, troop)| {
+        let info = troops.iter().enumerate().filter_map(|(num, troop)| {
             let troop = troop.get();
-            (troop.unit.info.size, troop.pos, num)
+			if troop.is_dead() {
+				return None;
+			}
+            Some((troop.unit.info.size, troop.pos, num))
         });
         for (size, pos, num) in info {
 			Army::recalc_hitmap_solo(hitmap, size, pos, num, columns);

@@ -8,7 +8,7 @@ use std::{
     ops::{Add, AddAssign, Neg, Sub, SubAssign},
 };
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Modify<V: Num + NumCast> {
     pub set: Option<V>,

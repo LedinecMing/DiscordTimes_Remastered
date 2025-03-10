@@ -149,7 +149,7 @@ use std::{
     fmt::{Debug, Display},
     io::Read,
     ops::Add,
-    str::FromStr,
+    str::FromStr, sync::RwLock,
 };
 use tracing_mutex::stdsync::TracingMutex as Mutex;
 
@@ -234,9 +234,9 @@ pub fn match_magictype(
     direction: MagicDirection,
 ) -> Option<MagicType> {
     match magic_type {
-        "LifeMagic" => Some(Life(direction)),
-        "ElementalMagic" => Some(Elemental(direction)),
-        "DeathMagic" => Some(Death(direction)),
+        "LifeMagic" => Some(Life),
+        "ElementalMagic" => Some(Elemental),
+        "DeathMagic" => Some(Death),
         "NoMagic" | "" => None,
         _ => {
             collect_errors(
@@ -476,7 +476,7 @@ pub fn parse_units(path: Option<&str>) -> Result<(Vec<Unit>, (&'static str, Vec<
                 icon_index: counter.unwrap() - 1,
                 unit_type,
                 next_unit: Vec::new(),
-                magic_type,
+                magic_info: magic_type.and_then(|x| Some((x, magic_direction))),
                 size: size.unwrap_or((1, 1)),
                 surrender,
                 lvl: LevelUpInfo {
@@ -544,8 +544,8 @@ pub static mut SETTINGS: Settings = Settings {
     init_size: (1600, 1200),
     port: 0,
 };
-pub static LOCALE: Lazy<Mutex<Locale>> =
-    Lazy::new(|| Mutex::new(Locale::new("Rus".into(), "Eng".into())));
+pub static LOCALE: Lazy<RwLock<Locale>> =
+    Lazy::new(|| RwLock::new(Locale::new("Rus".into(), "Eng".into())));
 
 pub fn parse_settings() -> Settings {
     let sections = parse_for_sections("Settings.ini");
@@ -711,7 +711,7 @@ fn match_magic_variants(
  */
 pub fn parse_items(path: Option<&str>, lang: &String) -> (&'static str, Vec<String>) {
     let mut error_collector: Vec<String> = Vec::new();
-    let mut items = ITEMS.lock().unwrap();
+    let mut items = vec![];
     let mut req_assets = Vec::new();
 
     let secs = parse_for_sections(path.unwrap_or("Rus_Artefacts.ini"));
@@ -724,7 +724,7 @@ pub fn parse_items(path: Option<&str>, lang: &String) -> (&'static str, Vec<Stri
         let direction = MagicDirection::ToAll;
         let mut icon = None;
         let mut magic = None;
-        let mut index = None;
+        let mut index: Option<u64> = None;
         let mut bonus = None;
         let itemtype_name = "";
         for (k, value) in props.iter() {
@@ -911,7 +911,7 @@ pub fn parse_items(path: Option<&str>, lang: &String) -> (&'static str, Vec<Stri
                 _ => {}
             }
         }
-        items.insert(
+        items.push((
             index.unwrap(),
             ItemInfo {
                 name: name.expect("No name field").into(),
@@ -930,8 +930,11 @@ pub fn parse_items(path: Option<&str>, lang: &String) -> (&'static str, Vec<Stri
                 itemtype: itemtype.expect(&*format!("{name}", name = name.unwrap())),
                 modify,
             },
-        );
+        ));
     }
+	items.sort_by_key(|x| x.0);
+	ITEMS.write().unwrap().extend(items.iter().map(|(_, v)| v.clone()));
+	assert!(ITEMS.read().unwrap().len() > 0);
     ("assets/Items", req_assets)
 }
 
