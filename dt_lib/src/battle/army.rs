@@ -18,6 +18,7 @@ use alkahest::{alkahest, private::*};
 use num::{integer::sqrt, pow};
 use once_cell::sync::Lazy;
 use pathfinding::directed::astar::astar;
+use zerocopy::Usize;
 
 use super::{control::{Control, PC_ControlSetings}, troop_inactive};
 #[derive(Clone, Debug, Default, Sections)]
@@ -50,12 +51,13 @@ fn eq_fields(index: usize, index1: usize, columns: usize, rows: usize) -> bool {
 
 pub const MAX_LINES: usize = 2;
 
+pub type HitMap = Vec<Option<usize>>;
 #[derive(Clone, Debug, Default)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Army {
     pub troops: Vec<TroopType>, // vec of units
     //#[unused]
-    pub hitmap: Vec<Option<usize>>, // map of maybe units ids
+    pub hitmap: HitMap, // map of maybe units ids
     //#[unused]
     pub building: Option<usize>, // what building army in
     //#[inline_parsing]
@@ -86,7 +88,7 @@ impl Army {
         active: bool,
         control: Control,
     ) -> Self {
-        let hitmap: Vec<Option<usize>> = (0..*MAX_TROOPS).map(|_| None::<usize>).collect();
+        let hitmap: HitMap = (0..*MAX_TROOPS).map(|_| None::<usize>).collect();
 		if inventory.len() < 4 {
 			inventory.extend([None].iter().cycle().take(4-inventory.len()));
 		}
@@ -108,14 +110,14 @@ impl Army {
         }
         army
     }
-	pub fn recalc_hitmap_solo(hitmap: &mut Vec<Option<usize>>, size: (usize, usize), pos: UnitPos, num: usize, columns: usize) {
+	pub fn recalc_hitmap_solo(hitmap: &mut HitMap, size: (usize, usize), pos: UnitPos, num: usize, columns: usize) {
         for j in 0..size.1 {
             for i in 0..size.0 {
                 hitmap[(j + pos.1) * columns + (i + pos.0)] = Some(num);
             }
         }
 	}
-    pub fn recalc_hitmap(troops: &Vec<TroopType>, hitmap: &mut Vec<Option<usize>>, columns: usize) {
+    pub fn recalc_hitmap(troops: &Vec<TroopType>, hitmap: &mut HitMap, columns: usize) {
         let info = troops.iter().enumerate().filter_map(|(num, troop)| {
             let troop = troop.get();
 			if troop.is_dead() {

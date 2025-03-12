@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-macroquad = "0.4.11"
+macroquad = { git = "https://github.com/not-fl3/macroquad.git" }
 dt_lib = {path = "../dt_lib/"}
 dt_client = {path = "../dt_client"}
 ahash = { version = "0.8.11" }

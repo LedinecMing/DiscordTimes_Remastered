@@ -1,3 +1,4 @@
+#![allow(clippy::use_self)] 
 use std::collections::HashMap;
 
 use dt_lib::{
@@ -9,12 +10,14 @@ use dt_lib::{
     },
     parse::{parse_items, parse_objects, parse_story},
 };
+
 use eframe::{App, CreationContext};
-use egui::{Color32, Ui};
+use egui::{Color32, Id, Ui};
 use egui_snarl::{
-    ui::{AnyPins, PinInfo, SnarlStyle, SnarlViewer, WireStyle},
+    ui::{AnyPins, NodeLayout, PinInfo, PinPlacement, SnarlStyle, SnarlViewer, WireStyle},
     InPin, InPinId, NodeId, OutPin, OutPinId, Snarl,
 };
+
 const STRING_COLOR: Color32 = Color32::from_rgb(0x00, 0xb0, 0x00);
 const NUMBER_COLOR: Color32 = Color32::from_rgb(0xb0, 0x00, 0x00);
 const IMAGE_COLOR: Color32 = Color32::from_rgb(0xb0, 0x00, 0xb0);
@@ -22,7 +25,6 @@ const UNTYPED_COLOR: Color32 = Color32::from_rgb(0xb0, 0xb0, 0xb0);
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 enum DemoNode {
-    // Event,
     /// Node with single input.
     /// Displays the value of the input.
     Sink,
@@ -43,6 +45,16 @@ enum DemoNode {
 }
 
 impl DemoNode {
+    const fn name(&self) -> &str {
+        match self {
+            DemoNode::Sink => "Sink",
+            DemoNode::Number(_) => "Number",
+            DemoNode::String(_) => "String",
+            DemoNode::ShowImage(_) => "ShowImage",
+            DemoNode::ExprNode(_) => "ExprNode",
+        }
+    }
+
     fn number_out(&self) -> f64 {
         match self {
             DemoNode::Number(value) => *value,
@@ -68,7 +80,7 @@ impl DemoNode {
 
     fn string_out(&self) -> &str {
         match self {
-            DemoNode::String(value) => &value,
+            DemoNode::String(value) => value,
             _ => unreachable!(),
         }
     }
@@ -95,6 +107,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
     #[inline]
     fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<DemoNode>) {
         // Validate connection
+        #[allow(clippy::match_same_arms)] // For match clarity
         match (&snarl[from.id.node], &snarl[to.id.node]) {
             (DemoNode::Sink, _) => {
                 unreachable!("Sink node has no outputs")
@@ -152,10 +165,8 @@ impl SnarlViewer<DemoNode> for DemoViewer {
 
     fn inputs(&mut self, node: &DemoNode) -> usize {
         match node {
-            DemoNode::Sink => 1,
-            DemoNode::Number(_) => 0,
-            DemoNode::String(_) => 0,
-            DemoNode::ShowImage(_) => 1,
+            DemoNode::Sink | DemoNode::ShowImage(_) => 1,
+            DemoNode::Number(_) | DemoNode::String(_) => 0,
             DemoNode::ExprNode(expr_node) => 1 + expr_node.bindings.len(),
         }
     }
@@ -163,20 +174,16 @@ impl SnarlViewer<DemoNode> for DemoViewer {
     fn outputs(&mut self, node: &DemoNode) -> usize {
         match node {
             DemoNode::Sink => 0,
-            DemoNode::Number(_) => 1,
-            DemoNode::String(_) => 1,
-            DemoNode::ShowImage(_) => 1,
-            DemoNode::ExprNode(_) => 1,
+            DemoNode::Number(_)
+            | DemoNode::String(_)
+            | DemoNode::ShowImage(_)
+            | DemoNode::ExprNode(_) => 1,
         }
     }
 
-    fn show_input(
-        &mut self,
-        pin: &InPin,
-        ui: &mut Ui,
-        scale: f32,
-        snarl: &mut Snarl<DemoNode>,
-    ) -> PinInfo {
+    #[allow(clippy::too_many_lines)]
+    #[allow(refining_impl_trait)]
+    fn show_input(&mut self, pin: &InPin, ui: &mut Ui, snarl: &mut Snarl<DemoNode>) -> PinInfo {
         match snarl[pin.id.node] {
             DemoNode::Sink => {
                 assert_eq!(pin.id.input, 0, "Sink node has only one input");
@@ -184,20 +191,20 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                 match &*pin.remotes {
                     [] => {
                         ui.label("None");
-                        PinInfo::star().with_fill(UNTYPED_COLOR)
+                        PinInfo::circle().with_fill(UNTYPED_COLOR)
                     }
                     [remote] => match snarl[remote.node] {
                         DemoNode::Sink => unreachable!("Sink node has no outputs"),
                         DemoNode::Number(value) => {
                             assert_eq!(remote.output, 0, "Number node has only one output");
                             ui.label(format_float(value));
-                            PinInfo::square().with_fill(NUMBER_COLOR)
+                            PinInfo::circle().with_fill(NUMBER_COLOR)
                         }
                         DemoNode::String(ref value) => {
                             assert_eq!(remote.output, 0, "String node has only one output");
-                            ui.label(format!("{:?}", value));
+                            ui.label(format!("{value:?}"));
 
-                            PinInfo::triangle().with_fill(STRING_COLOR).with_wire_style(
+                            PinInfo::circle().with_fill(STRING_COLOR).with_wire_style(
                                 WireStyle::AxisAligned {
                                     corner_radius: 10.0,
                                 },
@@ -206,14 +213,12 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                         DemoNode::ExprNode(ref expr) => {
                             assert_eq!(remote.output, 0, "Expr node has only one output");
                             ui.label(format_float(expr.eval()));
-                            PinInfo::square().with_fill(NUMBER_COLOR)
+                            PinInfo::circle().with_fill(NUMBER_COLOR)
                         }
                         DemoNode::ShowImage(ref uri) => {
                             assert_eq!(remote.output, 0, "ShowImage node has only one output");
 
-                            let image = egui::Image::new(uri)
-                                .fit_to_original_size(scale)
-                                .show_loading_spinner(true);
+                            let image = egui::Image::new(uri).show_loading_spinner(true);
                             ui.add(image);
 
                             PinInfo::circle().with_fill(IMAGE_COLOR)
@@ -236,7 +241,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                         .desired_width(0.0)
                         .margin(ui.spacing().item_spacing)
                         .show(ui);
-                    PinInfo::triangle().with_fill(STRING_COLOR).with_wire_style(
+                    PinInfo::circle().with_fill(STRING_COLOR).with_wire_style(
                         WireStyle::AxisAligned {
                             corner_radius: 10.0,
                         },
@@ -254,7 +259,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                     let input = snarl[pin.id.node].string_in();
                     *input = new_value;
 
-                    PinInfo::triangle().with_fill(STRING_COLOR).with_wire_style(
+                    PinInfo::circle().with_fill(STRING_COLOR).with_wire_style(
                         WireStyle::AxisAligned {
                             corner_radius: 10.0,
                         },
@@ -285,11 +290,11 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                             .show(ui);
 
                         let input = snarl[pin.id.node].string_in();
-                        if new_string != *input {
+                        if new_string == *input {
+                            false
+                        } else {
                             *input = new_string;
                             true
-                        } else {
-                            false
                         }
                     }
                     _ => unreachable!("Expr pins has only one wire"),
@@ -298,68 +303,65 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                 if changed {
                     let expr_node = snarl[pin.id.node].expr_node();
 
-                    match syn::parse_str(&expr_node.text) {
-                        Ok(expr) => {
-                            expr_node.expr = expr;
+                    if let Ok(expr) = syn::parse_str(&expr_node.text) {
+                        expr_node.expr = expr;
 
-                            let values = Iterator::zip(
-                                expr_node.bindings.iter().map(String::clone),
-                                expr_node.values.iter().copied(),
-                            )
-                            .collect::<HashMap<String, f64>>();
+                        let values = Iterator::zip(
+                            expr_node.bindings.iter().map(String::clone),
+                            expr_node.values.iter().copied(),
+                        )
+                        .collect::<HashMap<String, f64>>();
 
-                            let mut new_bindings = Vec::new();
-                            expr_node.expr.extend_bindings(&mut new_bindings);
+                        let mut new_bindings = Vec::new();
+                        expr_node.expr.extend_bindings(&mut new_bindings);
 
-                            let old_bindings =
-                                std::mem::replace(&mut expr_node.bindings, new_bindings.clone());
+                        let old_bindings =
+                            std::mem::replace(&mut expr_node.bindings, new_bindings.clone());
 
-                            let new_values = new_bindings
-                                .iter()
-                                .map(|name| values.get(&**name).copied().unwrap_or(0.0))
-                                .collect::<Vec<_>>();
+                        let new_values = new_bindings
+                            .iter()
+                            .map(|name| values.get(&**name).copied().unwrap_or(0.0))
+                            .collect::<Vec<_>>();
 
-                            expr_node.values = new_values;
+                        expr_node.values = new_values;
 
-                            let old_inputs = (0..old_bindings.len())
-                                .map(|idx| {
-                                    snarl.in_pin(InPinId {
-                                        node: pin.id.node,
-                                        input: idx + 1,
-                                    })
+                        let old_inputs = (0..old_bindings.len())
+                            .map(|idx| {
+                                snarl.in_pin(InPinId {
+                                    node: pin.id.node,
+                                    input: idx + 1,
                                 })
-                                .collect::<Vec<_>>();
+                            })
+                            .collect::<Vec<_>>();
 
-                            for (idx, name) in old_bindings.iter().enumerate() {
-                                let new_idx =
-                                    new_bindings.iter().position(|new_name| *new_name == *name);
+                        for (idx, name) in old_bindings.iter().enumerate() {
+                            let new_idx =
+                                new_bindings.iter().position(|new_name| *new_name == *name);
 
-                                match new_idx {
-                                    None => {
-                                        snarl.drop_inputs(old_inputs[idx].id);
-                                    }
-                                    Some(new_idx) if new_idx != idx => {
-                                        let new_in_pin = InPinId {
-                                            node: pin.id.node,
-                                            input: new_idx,
-                                        };
-                                        for &remote in &old_inputs[idx].remotes {
-                                            snarl.disconnect(remote, old_inputs[idx].id);
-                                            snarl.connect(remote, new_in_pin);
-                                        }
-                                    }
-                                    _ => {}
+                            match new_idx {
+                                None => {
+                                    snarl.drop_inputs(old_inputs[idx].id);
                                 }
+                                Some(new_idx) if new_idx != idx => {
+                                    let new_in_pin = InPinId {
+                                        node: pin.id.node,
+                                        input: new_idx,
+                                    };
+                                    for &remote in &old_inputs[idx].remotes {
+                                        snarl.disconnect(remote, old_inputs[idx].id);
+                                        snarl.connect(remote, new_in_pin);
+                                    }
+                                }
+                                _ => {}
                             }
                         }
-                        Err(_) => {}
                     }
                 }
-                PinInfo::triangle().with_fill(STRING_COLOR).with_wire_style(
-                    WireStyle::AxisAligned {
+                PinInfo::circle()
+                    .with_fill(STRING_COLOR)
+                    .with_wire_style(WireStyle::AxisAligned {
                         corner_radius: 10.0,
-                    },
-                )
+                    })
             }
             DemoNode::ExprNode(ref expr_node) => {
                 if pin.id.input <= expr_node.bindings.len() {
@@ -368,7 +370,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                             let node = &mut snarl[pin.id.node];
                             ui.label(node.label_in(pin.id.input));
                             ui.add(egui::DragValue::new(node.number_in(pin.id.input)));
-                            PinInfo::square().with_fill(NUMBER_COLOR)
+                            PinInfo::circle().with_fill(NUMBER_COLOR)
                         }
                         [remote] => {
                             let new_value = snarl[remote.node].number_out();
@@ -376,7 +378,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                             ui.label(node.label_in(pin.id.input));
                             ui.label(format_float(new_value));
                             *node.number_in(pin.id.input) = new_value;
-                            PinInfo::square().with_fill(NUMBER_COLOR)
+                            PinInfo::circle().with_fill(NUMBER_COLOR)
                         }
                         _ => unreachable!("Expr pins has only one wire"),
                     }
@@ -388,13 +390,8 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         }
     }
 
-    fn show_output(
-        &mut self,
-        pin: &OutPin,
-        ui: &mut Ui,
-        _scale: f32,
-        snarl: &mut Snarl<DemoNode>,
-    ) -> PinInfo {
+    #[allow(refining_impl_trait)]
+    fn show_output(&mut self, pin: &OutPin, ui: &mut Ui, snarl: &mut Snarl<DemoNode>) -> PinInfo {
         match snarl[pin.id.node] {
             DemoNode::Sink => {
                 unreachable!("Sink node has no outputs")
@@ -402,7 +399,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
             DemoNode::Number(ref mut value) => {
                 assert_eq!(pin.id.output, 0, "Number node has only one output");
                 ui.add(egui::DragValue::new(value));
-                PinInfo::square().with_fill(NUMBER_COLOR)
+                PinInfo::circle().with_fill(NUMBER_COLOR)
             }
             DemoNode::String(ref mut value) => {
                 assert_eq!(pin.id.output, 0, "String node has only one output");
@@ -411,17 +408,17 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                     .desired_width(0.0)
                     .margin(ui.spacing().item_spacing);
                 ui.add(edit);
-                PinInfo::triangle().with_fill(STRING_COLOR).with_wire_style(
-                    WireStyle::AxisAligned {
+                PinInfo::circle()
+                    .with_fill(STRING_COLOR)
+                    .with_wire_style(WireStyle::AxisAligned {
                         corner_radius: 10.0,
-                    },
-                )
+                    })
             }
             DemoNode::ExprNode(ref expr_node) => {
                 let value = expr_node.eval();
                 assert_eq!(pin.id.output, 0, "Expr node has only one output");
                 ui.label(format_float(value));
-                PinInfo::square().with_fill(NUMBER_COLOR)
+                PinInfo::circle().with_fill(NUMBER_COLOR)
             }
             DemoNode::ShowImage(_) => {
                 ui.allocate_at_least(egui::Vec2::ZERO, egui::Sense::hover());
@@ -434,13 +431,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         true
     }
 
-    fn show_graph_menu(
-        &mut self,
-        pos: egui::Pos2,
-        ui: &mut Ui,
-        _scale: f32,
-        snarl: &mut Snarl<DemoNode>,
-    ) {
+    fn show_graph_menu(&mut self, pos: egui::Pos2, ui: &mut Ui, snarl: &mut Snarl<DemoNode>) {
         ui.label("Add node");
         if ui.button("Number").clicked() {
             snarl.insert_node(pos, DemoNode::Number(0.0));
@@ -451,11 +442,11 @@ impl SnarlViewer<DemoNode> for DemoViewer {
             ui.close_menu();
         }
         if ui.button("String").clicked() {
-            snarl.insert_node(pos, DemoNode::String("".to_owned()));
+            snarl.insert_node(pos, DemoNode::String(String::new()));
             ui.close_menu();
         }
         if ui.button("Show image").clicked() {
-            snarl.insert_node(pos, DemoNode::ShowImage("".to_owned()));
+            snarl.insert_node(pos, DemoNode::ShowImage(String::new()));
             ui.close_menu();
         }
         if ui.button("Sink").clicked() {
@@ -472,7 +463,6 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         &mut self,
         pos: egui::Pos2,
         ui: &mut Ui,
-        _scale: f32,
         src_pins: AnyPins,
         snarl: &mut Snarl<DemoNode>,
     ) {
@@ -482,29 +472,25 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         // In your implementation, you may want to define specifications for each node's
         // pin inputs and outputs and compatibility to make this easier.
 
-        ui.label("Add node");
-
         type PinCompat = usize;
         const PIN_NUM: PinCompat = 1;
         const PIN_STR: PinCompat = 2;
         const PIN_IMG: PinCompat = 4;
         const PIN_SINK: PinCompat = PIN_NUM | PIN_STR | PIN_IMG;
 
-        fn pin_out_compat(node: &DemoNode) -> PinCompat {
+        const fn pin_out_compat(node: &DemoNode) -> PinCompat {
             match node {
                 DemoNode::Sink => 0,
-                DemoNode::Number(_) => PIN_NUM,
                 DemoNode::String(_) => PIN_STR,
                 DemoNode::ShowImage(_) => PIN_IMG,
-                DemoNode::ExprNode(_) => PIN_NUM,
+                DemoNode::Number(_) | DemoNode::ExprNode(_) => PIN_NUM,
             }
         }
 
-        fn pin_in_compat(node: &DemoNode, pin: usize) -> PinCompat {
+        const fn pin_in_compat(node: &DemoNode, pin: usize) -> PinCompat {
             match node {
                 DemoNode::Sink => PIN_SINK,
-                DemoNode::Number(_) => 0,
-                DemoNode::String(_) => 0,
+                DemoNode::Number(_) | DemoNode::String(_) => 0,
                 DemoNode::ShowImage(_) => PIN_STR,
                 DemoNode::ExprNode(_) => {
                     if pin == 0 {
@@ -515,6 +501,8 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                 }
             }
         }
+
+        ui.label("Add node");
 
         match src_pins {
             AnyPins::Out(src_pins) => {
@@ -527,24 +515,22 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                 let src_out_ty = pin_out_compat(snarl.get_node(src_pin.node).unwrap());
                 let dst_in_candidates = [
                     ("Sink", (|| DemoNode::Sink) as fn() -> DemoNode, PIN_SINK),
-                    ("Show Image", || DemoNode::ShowImage("".to_owned()), PIN_STR),
+                    ("Show Image", || DemoNode::ShowImage(String::new()), PIN_STR),
                     ("Expr", || DemoNode::ExprNode(ExprNode::new()), PIN_STR),
                 ];
 
                 for (name, ctor, in_ty) in dst_in_candidates {
-                    if src_out_ty & in_ty != 0 {
-                        if ui.button(name).clicked() {
-                            // Create new node.
-                            let new_node = snarl.insert_node(pos, ctor());
-                            let dst_pin = InPinId {
-                                node: new_node,
-                                input: 0,
-                            };
+                    if src_out_ty & in_ty != 0 && ui.button(name).clicked() {
+                        // Create new node.
+                        let new_node = snarl.insert_node(pos, ctor());
+                        let dst_pin = InPinId {
+                            node: new_node,
+                            input: 0,
+                        };
 
-                            // Connect the wire.
-                            snarl.connect(src_pin, dst_pin);
-                            ui.close_menu();
-                        }
+                        // Connect the wire.
+                        snarl.connect(src_pin, dst_pin);
+                        ui.close_menu();
                     }
                 }
             }
@@ -559,37 +545,33 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                         (|| DemoNode::Number(0.)) as fn() -> DemoNode,
                         PIN_NUM,
                     ),
-                    ("String", || DemoNode::String("".to_owned()), PIN_STR),
+                    ("String", || DemoNode::String(String::new()), PIN_STR),
                     ("Expr", || DemoNode::ExprNode(ExprNode::new()), PIN_NUM),
-                    ("Show Image", || DemoNode::ShowImage("".to_owned()), PIN_IMG),
+                    ("Show Image", || DemoNode::ShowImage(String::new()), PIN_IMG),
                 ];
 
                 for (name, ctor, out_ty) in dst_out_candidates {
-                    if all_src_types & out_ty != 0 {
-                        if ui.button(name).clicked() {
-                            // Create new node.
-                            let new_node = ctor();
-                            let dst_ty = pin_out_compat(&new_node);
+                    if all_src_types & out_ty != 0 && ui.button(name).clicked() {
+                        // Create new node.
+                        let new_node = ctor();
+                        let dst_ty = pin_out_compat(&new_node);
 
-                            let new_node = snarl.insert_node(pos, new_node);
-                            let dst_pin = OutPinId {
-                                node: new_node,
-                                output: 0,
-                            };
+                        let new_node = snarl.insert_node(pos, new_node);
+                        let dst_pin = OutPinId {
+                            node: new_node,
+                            output: 0,
+                        };
 
-                            // Connect the wire.
-                            for src_pin in pins {
-                                let src_ty = pin_in_compat(
-                                    snarl.get_node(src_pin.node).unwrap(),
-                                    src_pin.input,
-                                );
-                                if src_ty & dst_ty != 0 {
-                                    // In this demo, input pin MUST be unique ...
-                                    // Therefore here we drop inputs of source input pin.
-                                    snarl.drop_inputs(*src_pin);
-                                    snarl.connect(dst_pin, *src_pin);
-                                    ui.close_menu();
-                                }
+                        // Connect the wire.
+                        for src_pin in pins {
+                            let src_ty =
+                                pin_in_compat(snarl.get_node(src_pin.node).unwrap(), src_pin.input);
+                            if src_ty & dst_ty != 0 {
+                                // In this demo, input pin MUST be unique ...
+                                // Therefore here we drop inputs of source input pin.
+                                snarl.drop_inputs(*src_pin);
+                                snarl.connect(dst_pin, *src_pin);
+                                ui.close_menu();
                             }
                         }
                     }
@@ -608,7 +590,6 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         _inputs: &[InPin],
         _outputs: &[OutPin],
         ui: &mut Ui,
-        _scale: f32,
         snarl: &mut Snarl<DemoNode>,
     ) {
         ui.label("Node menu");
@@ -628,7 +609,6 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         _inputs: &[InPin],
         _outputs: &[OutPin],
         ui: &mut Ui,
-        _scale: f32,
         snarl: &mut Snarl<DemoNode>,
     ) {
         match snarl[node] {
@@ -649,7 +629,25 @@ impl SnarlViewer<DemoNode> for DemoViewer {
             }
         }
     }
+
+    fn header_frame(
+        &mut self,
+        frame: egui::Frame,
+        node: NodeId,
+        _inputs: &[InPin],
+        _outputs: &[OutPin],
+        snarl: &Snarl<DemoNode>,
+    ) -> egui::Frame {
+        match snarl[node] {
+            DemoNode::Sink => frame.fill(egui::Color32::from_rgb(70, 70, 80)),
+            DemoNode::Number(_) => frame.fill(egui::Color32::from_rgb(70, 40, 40)),
+            DemoNode::String(_) => frame.fill(egui::Color32::from_rgb(40, 70, 40)),
+            DemoNode::ShowImage(_) => frame.fill(egui::Color32::from_rgb(40, 40, 70)),
+            DemoNode::ExprNode(_) => frame.fill(egui::Color32::from_rgb(70, 66, 40)),
+        }
+    }
 }
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct ExprNode {
     text: String,
@@ -661,7 +659,7 @@ struct ExprNode {
 impl ExprNode {
     fn new() -> Self {
         ExprNode {
-            text: format!("0"),
+            text: "0".to_string(),
             bindings: Vec::new(),
             values: Vec::new(),
             expr: Expr::Val(0.0),
@@ -924,19 +922,16 @@ impl Expr {
 
         let next_op = input.parse::<BinOp>()?;
 
-        match (op, next_op) {
-            (BinOp::Add | BinOp::Sub, BinOp::Mul | BinOp::Div) => {
-                let rhs = Self::parse_binop(rhs, next_op, input)?;
-                Ok(Expr::BinOp {
-                    lhs,
-                    op,
-                    rhs: Box::new(rhs),
-                })
-            }
-            _ => {
-                let lhs = Expr::BinOp { lhs, op, rhs };
-                Self::parse_binop(Box::new(lhs), next_op, input)
-            }
+        if let (BinOp::Add | BinOp::Sub, BinOp::Mul | BinOp::Div) = (op, next_op) {
+            let rhs = Self::parse_binop(rhs, next_op, input)?;
+            Ok(Self::BinOp {
+                lhs,
+                op,
+                rhs: Box::new(rhs),
+            })
+        } else {
+            let lhs = Self::BinOp { lhs, op, rhs };
+            Self::parse_binop(Box::new(lhs), next_op, input)
         }
     }
 }
@@ -944,44 +939,71 @@ impl Expr {
 pub struct DemoApp {
     snarl: Snarl<DemoNode>,
     style: SnarlStyle,
+    snarl_ui_id: Option<Id>,
+}
+
+const fn default_style() -> SnarlStyle {
+    SnarlStyle {
+        node_layout: Some(NodeLayout::FlippedSandwich),
+        pin_placement: Some(PinPlacement::Edge),
+        pin_size: Some(7.0),
+        node_frame: Some(egui::Frame {
+            inner_margin: egui::Margin::same(8),
+            outer_margin: egui::Margin {
+                left: 0,
+                right: 0,
+                top: 0,
+                bottom: 4,
+            },
+            corner_radius: egui::CornerRadius::same(8),
+            fill: egui::Color32::from_gray(30),
+            stroke: egui::Stroke::NONE,
+            shadow: egui::Shadow::NONE,
+        }),
+        bg_frame: Some(egui::Frame {
+            inner_margin: egui::Margin::same(2),
+            outer_margin: egui::Margin::ZERO,
+            corner_radius: egui::CornerRadius::ZERO,
+            fill: egui::Color32::from_gray(40),
+            stroke: egui::Stroke::NONE,
+            shadow: egui::Shadow::NONE,
+        }),
+        ..SnarlStyle::new()
+    }
 }
 
 impl DemoApp {
     pub fn new(cx: &CreationContext) -> Self {
-        let snarl = match cx.storage {
-            None => Snarl::new(),
-            Some(storage) => {
-                let snarl = storage
-                    .get_string("snarl")
-                    .and_then(|snarl| serde_json::from_str(&snarl).ok())
-                    .unwrap_or_else(Snarl::new);
+        egui_extras::install_image_loaders(&cx.egui_ctx);
 
-                snarl
-            }
-        };
+        cx.egui_ctx.style_mut(|style| style.animation_time *= 10.0);
+
+        let snarl = cx.storage.map_or_else(Snarl::new, |storage| {
+            storage
+                .get_string("snarl")
+                .and_then(|snarl| serde_json::from_str(&snarl).ok())
+                .unwrap_or_default()
+        });
         // let snarl = Snarl::new();
 
-        let style = match cx.storage {
-            None => SnarlStyle::new(),
-            Some(storage) => {
-                let style = storage
-                    .get_string("style")
-                    .and_then(|style| serde_json::from_str(&style).ok())
-                    .unwrap_or_else(SnarlStyle::new);
-
-                style
-            }
-        };
+        let style = cx.storage.map_or_else(default_style, |storage| {
+            storage
+                .get_string("style")
+                .and_then(|style| serde_json::from_str(&style).ok())
+                .unwrap_or_else(default_style)
+        });
         // let style = SnarlStyle::new();
 
-        DemoApp { snarl, style }
+        DemoApp {
+            snarl,
+            style,
+            snarl_ui_id: None,
+        }
     }
 }
 
 impl App for DemoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui_extras::install_image_loaders(ctx);
-
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             // The top panel is often a good place for a menu bar:
 
@@ -990,16 +1012,16 @@ impl App for DemoApp {
                 {
                     ui.menu_button("File", |ui| {
                         if ui.button("Quit").clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close)
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
                     ui.add_space(16.0);
                 }
 
-                egui::widgets::global_dark_light_mode_switch(ui);
+                egui::widgets::global_theme_preference_switch(ui);
 
                 if ui.button("Clear All").clicked() {
-                    self.snarl = Default::default();
+                    self.snarl = Snarl::default();
                 }
             });
         });
@@ -1010,9 +1032,44 @@ impl App for DemoApp {
             });
         });
 
+        if let Some(snarl_ui_id) = self.snarl_ui_id {
+            egui::SidePanel::right("selected-list").show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.strong("Selected nodes");
+
+                    let selected =
+                        Snarl::<DemoNode>::get_selected_nodes_at("snarl", snarl_ui_id, ui.ctx());
+                    let mut selected = selected
+                        .into_iter()
+                        .map(|id| (id, &self.snarl[id]))
+                        .collect::<Vec<_>>();
+
+                    selected.sort_by_key(|(id, _)| *id);
+
+                    let mut remove = None;
+
+                    for (id, node) in selected {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{id:?}"));
+                            ui.label(node.name());
+                            ui.add_space(ui.spacing().item_spacing.x);
+                            if ui.button("Remove").clicked() {
+                                remove = Some(id);
+                            }
+                        });
+                    }
+
+                    if let Some(id) = remove {
+                        self.snarl.remove_node(id);
+                    }
+                });
+            });
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.snarl
-                .show(&mut DemoViewer, &self.style, egui::Id::new("snarl"), ui);
+            self.snarl_ui_id = Some(ui.id());
+
+            self.snarl.show(&mut DemoViewer, &self.style, "snarl", ui);
         });
     }
 
@@ -1024,9 +1081,7 @@ impl App for DemoApp {
         storage.set_string("style", style);
     }
 }
-fn parse_game_configs() {
-    parse_items;
-}
+
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
@@ -1044,17 +1099,28 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+#[cfg(target_arch = "wasm32")]
+fn get_canvas_element() -> Option<web_sys::HtmlCanvasElement> {
+    use eframe::wasm_bindgen::JsCast;
+
+    let document = web_sys::window()?.document()?;
+    let canvas = document.get_element_by_id("egui_snarl_demo")?;
+    canvas.dyn_into::<web_sys::HtmlCanvasElement>().ok()
+}
+
 // When compiling to web using trunk:
 #[cfg(target_arch = "wasm32")]
 fn main() {
+    let canvas = get_canvas_element().expect("Failed to find canvas with id 'egui_snarl_demo'");
+
     let web_options = eframe::WebOptions::default();
 
     wasm_bindgen_futures::spawn_local(async {
         eframe::WebRunner::new()
             .start(
-                "egui_snarl_demo",
+                canvas,
                 web_options,
-                Box::new(|cx| Box::new(DemoApp::new(cx))),
+                Box::new(|cx| Ok(Box::new(DemoApp::new(cx)))),
             )
             .await
             .expect("failed to start eframe");
@@ -1063,5 +1129,5 @@ fn main() {
 
 fn format_float(v: f64) -> String {
     let v = (v * 1000.0).round() / 1000.0;
-    format!("{}", v)
+    format!("{v}")
 }

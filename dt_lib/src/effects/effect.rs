@@ -36,21 +36,18 @@ pub enum Effect {
     SpearEffect(SpearEffect),
     ItemEffect(ItemEffect),
     ToEndEffect(ToEndEffect),
+	BlockEffect(BlockEffect),
 }
 
 dyn_clone::clone_trait_object!(EffectTrait);
 #[enum_dispatch(Effect)]
 pub trait EffectTrait: DynClone + Debug + Send + Sync {
     fn update_stats(&mut self, unit: &mut Unit);
-    fn on_tick(&mut self) -> bool {
+    fn on_tick(&mut self, unit: &mut Unit) -> bool {
         false
     }
     fn on_battle_end(&mut self) -> bool {
         false
-    }
-    fn tick(&mut self, unit: &mut Unit) -> bool {
-        self.on_tick();
-        true
     }
     fn kill(&mut self, unit: &mut Unit) {}
     fn is_dead(&self) -> bool {
@@ -84,7 +81,7 @@ impl EffectTrait for MoreMoves {
         unit.modify.max_moves += *Modify::default().add(1);
         unit.modify.moves += *Modify::default().add(1);
     }
-    fn on_tick(&mut self) -> bool {
+    fn on_tick(&mut self, unit: &mut Unit) -> bool {
         self.info.lifetime -= 1;
         true
     }
@@ -136,7 +133,7 @@ impl EffectTrait for HealMagic {
         unit.modify.defence.hand_units += *Modify::default().add(defence_add);
         unit.modify.defence.ranged_units += *Modify::default().add(defence_add);
     }
-    fn on_tick(&mut self) -> bool {
+    fn on_tick(&mut self, unit: &mut Unit) -> bool {
         self.info.lifetime -= 1;
         true
     }
@@ -201,7 +198,7 @@ impl EffectTrait for DisableMagic {
         unit.modify.moves -= *Modify::default().add(add_moves);
         unit.modify.max_moves -= *Modify::default().add(add_moves);
     }
-    fn on_tick(&mut self) -> bool {
+    fn on_tick(&mut self, unit: &mut Unit) -> bool {
         self.info.lifetime -= 1;
         true
     }
@@ -216,7 +213,13 @@ impl EffectTrait for DisableMagic {
         if self.magic_power < 20 {
             return;
         }
-        let add_moves = 1 + (self.magic_power / 50) as i64;
+        let add_moves = match self.magic_power {
+			0..20 => 0,
+			20..45 => 1,
+			45..100 => 2,
+			100..256 => 3,
+			_ => 3 + (self.magic_power - 256) / 50 / 5
+		} as i64;
         unit.modify.moves += *Modify::default().add(add_moves);
         unit.modify.max_moves += *Modify::default().add(add_moves);
     }
@@ -261,7 +264,7 @@ impl EffectTrait for ElementalSupport {
         unit.modify.moves += *Modify::default().add(add_moves);
         unit.modify.max_moves += *Modify::default().add(add_moves);
     }
-    fn on_tick(&mut self) -> bool {
+    fn on_tick(&mut self, unit: &mut Unit) -> bool {
         self.info.lifetime -= 1;
         true
     }
@@ -334,7 +337,7 @@ impl EffectTrait for AttackMagic {
             unit.modify.defence.ranged_units -= *Modify::default().add(defence_add);
         }
     }
-    fn on_tick(&mut self) -> bool {
+    fn on_tick(&mut self, unit: &mut Unit) -> bool {
         self.info.lifetime -= 1;
         true
     }
@@ -377,12 +380,16 @@ pub struct Poison {
 }
 impl EffectTrait for Poison {
     fn update_stats(&mut self, unit: &mut Unit) {
-        unit.stats.hp -= POISON_PERCENT.calc(unit.stats.hp);
+        unit.stats.hp -= POISON_PERCENT.calc(unit.modified.max_hp);
     }
     fn on_battle_end(&mut self) -> bool {
         self.info.lifetime = 0;
         true
     }
+	fn on_tick(&mut self,unit: &mut Unit) -> bool {
+		unit.stats.hp -= POISON_PERCENT.calc(unit.modified.max_hp);
+		true
+	}
     fn is_dead(&self) -> bool {
         self.info.lifetime < 1
     }
@@ -410,15 +417,17 @@ pub struct Fire {
 }
 impl EffectTrait for Fire {
     fn update_stats(&mut self, unit: &mut Unit) {
-        let mut unitstats = unit.stats;
-        unitstats.hp -= (FIRE_PERCENT + Percent::new(self.additional_power as i16 / 5))
-            .calc(unitstats.hp)
+		unit.stats.hp -= (FIRE_PERCENT + Percent::new(self.additional_power as i16 / 5))
+            .calc(unit.modified.max_hp)
             * ((unit.info.unit_type == UnitType::Mecha) as i64 + 1);
         self.addition_speed =
-            FIRE_SLOWNESS_PERCENT.calc(unitstats.speed) + self.additional_power / 10;
-        unitstats.speed -= self.addition_speed;
+            FIRE_SLOWNESS_PERCENT.calc(unit.modified.speed) + self.additional_power / 10;
+		unit.modify.speed -= *Modify::default().add(self.addition_speed);
     }
-    fn on_tick(&mut self) -> bool {
+    fn on_tick(&mut self, unit: &mut Unit) -> bool {
+		unit.stats.hp -= (FIRE_PERCENT + Percent::new(self.additional_power as i16 / 5))
+            .calc(unit.modified.max_hp)
+            * ((unit.info.unit_type == UnitType::Mecha) as i64 + 1);
         self.info.lifetime -= 1;
         true
     }
@@ -427,7 +436,7 @@ impl EffectTrait for Fire {
         true
     }
     fn kill(&mut self, unit: &mut Unit) {
-        unit.stats.speed = unit.stats.speed - self.addition_speed;
+		unit.modify.speed += *Modify::default().add(self.addition_speed);
     }
     fn is_dead(&self) -> bool {
         self.info.lifetime < 1
@@ -467,7 +476,7 @@ impl EffectTrait for ArtilleryEffect {
     fn update_stats(&mut self, unit: &mut Unit) {
         unit.modify.speed += *Modify::default().add(30);
     }
-    fn on_tick(&mut self) -> bool {
+    fn on_tick(&mut self, unit: &mut Unit) -> bool {
         self.info.lifetime -= 1;
         true
     }
@@ -484,7 +493,7 @@ impl EffectTrait for ArtilleryEffect {
 pub struct RessurectedEffect {}
 impl EffectTrait for RessurectedEffect {
     fn update_stats(&mut self, unit: &mut Unit) {
-        unit.stats.hp += Percent::new(25);
+        unit.stats.hp += Percent::new(25).calc(unit.modified.max_hp);
     }
     fn get_kind(&self) -> EffectKind {
         EffectKind::Fire
@@ -510,13 +519,37 @@ impl EffectTrait for SpearEffect {
         unit.modify.defence.hand_units += *Modify::default().percent_add(SPEAR_PERCENT);
         unit.modify.defence.ranged_units += *Modify::default().percent_add(SPEAR_PERCENT);
     }
-    fn on_tick(&mut self) -> bool {
+    fn on_tick(&mut self, unit: &mut Unit) -> bool {
         self.info.lifetime -= 1;
         true
     }
     fn kill(&mut self, unit: &mut Unit) {
         unit.modify.defence.hand_units -= *Modify::default().percent_add(SPEAR_PERCENT);
         unit.modify.defence.ranged_units -= *Modify::default().percent_add(SPEAR_PERCENT);
+    }
+    fn is_dead(&self) -> bool {
+        self.info.lifetime < 1
+    }
+}
+
+const BLOCK_PERCENT: Percent = Percent::const_new(100);
+#[derive(Copy, Clone, Debug)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub struct BlockEffect {
+    pub info: EffectInfo,
+}
+impl EffectTrait for BlockEffect {
+    fn update_stats(&mut self, unit: &mut Unit) {
+        unit.modify.defence.hand_units += *Modify::default().percent_add(BLOCK_PERCENT);
+        unit.modify.defence.ranged_units += *Modify::default().percent_add(BLOCK_PERCENT);
+    }
+    fn on_tick(&mut self, unit: &mut Unit) -> bool {
+        self.info.lifetime -= 1;
+        true
+    }
+    fn kill(&mut self, unit: &mut Unit) {
+        unit.modify.defence.hand_units -= *Modify::default().percent_add(BLOCK_PERCENT);
+        unit.modify.defence.ranged_units -= *Modify::default().percent_add(BLOCK_PERCENT);
     }
     fn is_dead(&self) -> bool {
         self.info.lifetime < 1

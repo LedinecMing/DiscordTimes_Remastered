@@ -2,16 +2,14 @@ use crate::{
     battle::{
         army::{Army, TroopType, MAX_TROOPS},
         troop::Troop,
-    },
-    items::item::Item,
-    map::map::GameMap,
-    network::net::*,
-    units::unit::*,
+    }, bonuses::Bonus, items::item::Item, map::map::GameMap, network::net::*, units::unit::*
 };
 use alkahest::{alkahest, serialize, serialized_size};
 use itertools::Itertools;
 use renet::DefaultChannel;
 use std::cmp::{max_by, max_by_key, Ordering::*};
+
+use super::HitMap;
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub enum Field {
@@ -53,7 +51,7 @@ impl From<BattleUnitPos> for BattleUnitInfo {
 	fn from(value: BattleUnitPos) -> Self { BattleUnitInfo::Pos(value.pos) }
 }
 impl BattleUnitInfo {
-	pub fn pos(&self, hitmap: &Vec<Option<usize>>) -> Option<usize> {
+	pub fn pos(&self, hitmap: &HitMap) -> Option<usize> {
 		match self {
 			BattleUnitInfo::Pos(v) => Some(*v),
 			BattleUnitInfo::Index(v) => {
@@ -61,7 +59,7 @@ impl BattleUnitInfo {
 			}
 		}
 	}
-	pub fn index(&self, hitmap: &Vec<Option<usize>>) -> Option<usize> {
+	pub fn index(&self, hitmap: &HitMap) -> Option<usize> {
 		match self {
 			BattleUnitInfo::Pos(v) => {
 				hitmap.get(*v).into_iter().flatten().next().cloned()
@@ -69,7 +67,7 @@ impl BattleUnitInfo {
 			BattleUnitInfo::Index(v) => Some(*v)
 		}
 	}
-	pub fn to_index(&self, hitmap: &Vec<Option<usize>>, army: usize) -> Option<BattleUnit> {
+	pub fn to_index(&self, hitmap: &HitMap, army: usize) -> Option<BattleUnit> {
 		Some(match self {
 			BattleUnitInfo::Pos(v) => {
 				let Some(index) = hitmap.get(*v).unwrap_or(&None) else { return None; };
@@ -78,7 +76,7 @@ impl BattleUnitInfo {
 			BattleUnitInfo::Index(v) => BattleUnit { army, index: *v }
 		})
 	}
-	pub fn to_pos(&self, hitmap: &Vec<Option<usize>>, army: usize) -> BattleUnitPos {
+	pub fn to_pos(&self, hitmap: &HitMap, army: usize) -> BattleUnitPos {
 		match self {
 			BattleUnitInfo::Index(v) => BattleUnitPos {
 				army,
@@ -258,9 +256,9 @@ impl BattleInfo {
 		check_win(self, armys);
 	}
 	pub fn after_single_move(&mut self, armies: &mut Vec<Army>) {
+		self.recalc_hitmaps(armies);
 		check_win(self, &armies);
 		check_row_fall(self, armies);
-		self.recalc_hitmaps(armies);
 		self.active_unit = self.search_next_active(&armies);
 		if self.winner.is_none() {
 			if self.active_unit == None {
@@ -297,6 +295,7 @@ pub fn search_interactions(
             active_unit: BattleUnit,
             active_troops: &Vec<TroopType>,
             troops: &Vec<TroopType>,
+			hitmap: &HitMap,
             army: usize,
 			active_pos: usize,
             can_interact: &mut Vec<BattleUnitPos>,
@@ -316,7 +315,7 @@ pub fn search_interactions(
                         let active_troop = &active_troops[active_unit.index].get();
                         let active_unit_unit = &active_troop.unit;
 						let is_enemy = active_unit.army != army;
-                        if active_unit_unit.can_attack(unit, troop.pos, active_troop.pos, is_enemy) {
+                        if active_unit_unit.can_attack(unit, troop.pos, active_troop.pos, is_enemy, hitmap) {
                             Some(BattleUnitPos { army, pos })
                         } else {
                             None
@@ -330,6 +329,7 @@ pub fn search_interactions(
             active_unit,
             active_troops,
             troops1,
+			&army1.hitmap,
             battle.army1,
 			active_pos,
             &mut can_interact,
@@ -338,6 +338,7 @@ pub fn search_interactions(
             active_unit,
             active_troops,
             troops2,
+			&army2.hitmap,
             battle.army2,
 			active_pos,
             &mut can_interact,
@@ -348,8 +349,14 @@ pub fn search_interactions(
 }
 const MAX_MOVES: u64 = 25;
 pub fn restore_moves(troops: &mut Vec<TroopType>) {
-    for troop in troops {
-        let unit = &mut troop.get().unit;
+    for mut troop in troops.iter_mut()
+		.filter_map(|troop| {
+			let troop = troop.get();
+			if troop.is_dead() {
+				None
+			} else { Some(troop) }
+		}) {
+        let unit = &mut troop.unit;
         unit.tick();
         unit.stats.moves = unit.modified.max_moves;
         unit.recalc()
@@ -443,7 +450,7 @@ pub fn check_row_fall(battle: &mut BattleInfo, armys: &mut Vec<Army>) {
 
 fn unit_interaction(
     battle: &mut BattleInfo,
-    armys: &mut Vec<Army>,
+    armies: &mut Vec<Army>,
 	(army, info): (usize, BattleUnitInfo)
 ) -> Option<ActionResult> {
     let mut action_result = None;
@@ -451,45 +458,86 @@ fn unit_interaction(
     let Some(active_unit) = battle.active_unit else {
         return None;
     };
-	let Some(pos) = info.pos(&armys[army].hitmap) else { return None; };
-	let Some(target_index) = info.index(&armys[army].hitmap) else {
-		let active_army = &mut armys[active_unit.army];
-		let size = {
-			let troop = &mut active_army.troops[active_unit.index].get();
-			troop.pos = UnitPos::from_index(pos);
-			troop.unit.info.size
-		};
-		// move character
-		Army::recalc_hitmap_solo(&mut active_army.hitmap, size, UnitPos::from_index(pos), active_unit.index, 2); // columns
-        return Some(ActionResult::Move);
-    };
-	let active_army = &armys[active_unit.army];
-	let Some(mut troop) = active_army.troops.get(active_unit.index).and_then(|x| Some(x.get())) else { return None; };
-	let active_unit_pos = troop.pos;
-	let unit = &mut troop.unit;
+	let Some(pos) = info.pos(&armies[army].hitmap) else { return None; };
+	let Some(target_index) = info.index(&armies[army].hitmap) else {
+		if army == active_unit.army {
+			let active_army = &mut armies[active_unit.army];
+			let size = {
+				let troop = &mut active_army.troops[active_unit.index].get();
+				troop.unit.stats.moves -= 1;
+				troop.unit.modified.moves = troop.unit.modify.moves.apply(troop.unit.stats.moves);
+				troop.pos = UnitPos::from_index(pos);
+				troop.unit.info.size
+			};
+			// move character TODO FIX MAYBE
+			// Army::recalc_hitmap_solo(&mut active_army.hitmap, size, UnitPos::from_index(pos), active_unit.index, 2); // columns
+		 	return Some(ActionResult::Move);
+		} else { return None; }
+	};
 
     if active_unit.army == army && target_index == active_unit.index {
-		
+		let active_army = &mut armies[active_unit.army];
+		let Some(mut troop) = active_army.troops.get(active_unit.index).and_then(|x| Some(x.get())) else { return None; };
+		let active_unit_pos = troop.pos;
+		let unit = &mut troop.unit;
+		unit.get_bonus().on_move_skip(unit);
+		unit.stats.moves -= 1;
+		unit.modified.moves = unit.modify.moves.apply(unit.stats.moves);
     } else {
-        let target_troops = &armys[army].troops;
-        let the_troops = target_troops.get(target_index);
-        let Some(target_troop) = the_troops else {
-            return None;
-        };
-        let mut target_troop = target_troop.get();
-        let unit2 = &mut target_troop.unit;
-        let res = unit.attack(
-            unit2,
-            UnitPos::from_index(pos),
-            active_unit_pos,
-            &battle,
-			active_unit.army != army
-        );
-		if res.is_none() { return None; }
-        action_result = res;
+		let (action_result, size, target_is_dead) = {
+			let active_army = &armies[active_unit.army];
+			let Some(mut troop) = active_army.troops.get(active_unit.index).and_then(|x| Some(x.get())) else { return None; };
+			let active_unit_pos = troop.pos;
+			let unit = &mut troop.unit;
+			let target_army = &armies[army];
+			let target_troops = &target_army.troops;
+			let target_hitmap = &target_army.hitmap;
+			let the_troops = target_troops.get(target_index);
+			let Some(target_troop) = the_troops else {
+				return None;
+			};
+			let mut target_troop = target_troop.get();
+			let unit2 = &mut target_troop.unit;
+			let res = if unit.get_bonus() != Bonus::ManyTargets {
+				unit.attack(
+					unit2,
+					UnitPos::from_index(pos),
+					active_unit_pos,
+					&battle,
+					target_hitmap,
+					active_unit.army != army
+				)
+			} else {
+				let targets = [0, 2];
+				let targets: Vec<_> = targets.iter().filter_map(|diff| {
+					let new = pos + diff - 1;
+					if field_type(new, *MAX_TROOPS) != Field::Reserve {
+						if let Some(index) = target_army.hitmap[new] {
+							Some((new, index))
+						} else { None }
+					} else { None }
+				}).collect();
+				let target_amount = targets.len() + 1;
+				let mut damage = unit.modified.damage;
+				damage.hand /= target_amount as u64;
+				damage.ranged /= target_amount as u64;
+				damage.magic /= target_amount as u64;
+				unit2.being_attacked(&damage, unit, UnitPos::from_index(pos), target_hitmap, active_unit_pos, &battle);
+				for (target_pos, target_index) in targets {
+					let unit2 = &mut target_troops[target_index].get().unit;
+					unit2.being_attacked(&damage, unit, UnitPos::from_index(target_pos), target_hitmap, active_unit_pos, &battle);
+				}
+				Some(ActionResult::Ranged)
+			};
+			unit.stats.moves -= 1;
+			unit.modified.moves = unit.modify.moves.apply(unit.stats.moves);
+			if res.is_none() { return None; }
+			(res, unit2.info.size, unit2.is_dead())
+		};
+		if target_is_dead {
+			
+		}
     };
-    unit.stats.moves -= 1;
-	unit.modified.moves = unit.modify.moves.apply(unit.stats.moves);
     action_result
 }
 
@@ -773,5 +821,39 @@ mod tests {
 		}
 		use crate::battle::Field::*;
 		assert_eq!(fields, vec![Reserve, Back, Back, Back, Back, Reserve, Reserve, Front, Front, Front, Front, Reserve]);
+	}
+	#[test]
+	fn ini() {
+		let mut parser =ini_core::Parser::new("[4 Ополченец]
+GlobalIndex=4
+Name=Ополченец
+Descript=Ополченцем становится рекрут, которому дали в руки копье и научили ходить стоем.
+Cost=50
+CostMultipler=100
+CostGoldDiv=1
+StartExpirience=60
+LevelMultipler=140
+IconIndex=02
+Bonus=FlankStrike
+// развитие отряда
+NextUnit1=Стражник
+NextUnit1Level=1
+NextUnit2=Пехотинец
+NextUnit2Level=1
+// боевые характеристики
+Hits=50
+AttackBlow=25
+Initiative=9
+Manevres=1
+// поуровневые изменения характеристики
+d-Hits=5
+d-AttackBlow=5
+d-DefenceBlow=3
+
+").auto_trim(true);
+		for x in parser {
+			dbg!(x);
+		}
+		panic!();
 	}
 }

@@ -12,7 +12,26 @@ use dyn_clone::DynClone;
 use math_thingies::Percent;
 use std::{cmp::min, fmt::Debug};
 
-#[derive(Copy, Debug, Clone)]
+pub struct BonusInfo {
+	pub piercing: Option<Percent>,
+	pub true_damage: Option<usize>,
+	pub attacks_from_reserve: bool,
+	pub attacks_back: bool,
+	pub stats_on_first_move: Option<ModifyUnitStats>,
+	pub stats_in_garrison: Option<ModifyUnitStats>,
+	pub stats_on_block: Option<ModifyUnitStats>,
+	pub stats_on_kill: Option<ModifyUnitStats>,
+	pub kills_on_death: bool,
+	pub hand_defence: Option<Percent>,
+	pub ranged_defence: Option<Percent>,
+	pub magic_defence: Option<Percent>,
+	pub multiple_targets: bool,
+	pub flank_multiplier: f32,
+	pub trading_multiplier: f32,
+	pub poison: bool,
+	pub global_healing: Option<Percent>
+}
+#[derive(Copy, Debug, Clone, PartialEq, Eq)]
 #[repr(u32)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum Bonus {
@@ -27,7 +46,7 @@ pub enum Bonus {
     Block,
     PoisonAttack,
     FireAttack,
-    Invulrenable,
+    Invulnerable,
     GodAnger,
     GodStrike,
     Ghost,
@@ -50,6 +69,7 @@ impl Bonus {
         &self,
         damage: Power,
         receiver: &mut Unit,
+		receiver_hitmap: &Vec<Option<usize>>,
         sender: &mut Unit,
         receiver_pos: UnitPos,
         sender_pos: UnitPos,
@@ -68,13 +88,13 @@ impl Bonus {
                     hand: percent_70.calc(damage.hand),
                 }
             }
-            Self::Invulrenable => Power {
+            Self::Invulnerable => Power {
                 hand: min(1, damage.hand),
                 ranged: min(1, damage.ranged),
                 magic: damage.magic,
             },
             Self::Ghost => {
-                let mut corrected_damage_units = damage.magic;
+                let mut corrected_damage_units = damage.magic + damage.ranged + damage.hand;
                 if corrected_damage_units == 0 {
                     corrected_damage_units = 1;
                 }
@@ -101,7 +121,7 @@ impl Bonus {
                 damage
             }
             Self::DeadRessurect => {
-                let mut corrected_damage_units = damage.magic;
+                let mut corrected_damage_units = damage.magic + damage.hand + damage.ranged;
                 if corrected_damage_units == 0 {
                     corrected_damage_units = 1;
                 }
@@ -119,7 +139,9 @@ impl Bonus {
                 }
             }
             Self::Counterblow => {
-                sender.attack(receiver, receiver_pos, sender_pos, battle, true);
+                if sender.get_bonus() != Bonus::Counterblow {
+					receiver.attack(sender, sender_pos, receiver_pos, battle, receiver_hitmap, true);
+				}
                 damage
             }
             Self::Stealth => {
@@ -163,7 +185,9 @@ impl Bonus {
                         && matches!(sender.info.magic_info.and_then(|x| Some(x.0)), Some(MagicType::Elemental))
                     {
                         receiver.add_effect(Fire::new(sender.modified.damage.magic as i64));
-                    }
+                    } else if damage.magic > 1 {
+						receiver.add_effect(Fire::new(sender.modified.damage.magic as i64 / 2));
+					}
                 }
                 damage
             }
@@ -182,14 +206,10 @@ impl Bonus {
                     }
             }
             Self::FlankStrike => {
-                if damage.hand > 0 && (receiver_pos.0 as i64 - sender_pos.0 as i64).abs() > 1 {
+                if damage.hand > 0 && receiver_pos.0.abs_diff(sender_pos.0) > 1 {
                     Power {
                         hand: {
-                            sender
-                                .modified
-                                .damage
-                                .hand
-                                .saturating_sub(receiver.modified.defence.hand_units / 2)
+                            damage.hand * 2
                         },
                         ..Power::empty()
                     }
@@ -259,23 +279,14 @@ impl Bonus {
                     ..Default::default()
                 },
             }),
+			Self::SpearDefence => unit.add_effect(SpearEffect { info: EffectInfo { lifetime: 1 }}),
             _ => false,
         }
     }
     pub fn on_move_skip(&self, unit: &mut Unit) -> bool {
         match self {
             Self::Block => {
-                unit.add_effect(ItemEffect {
-                    info: EffectInfo { lifetime: 1 },
-                    modify: ModifyUnitStats {
-                        defence: ModifyDefence {
-                            hand_units: *Modify::default().percent_add(Percent::new(100)),
-                            ranged_units: *Modify::default().percent_add(Percent::new(100)),
-                            ..ModifyDefence::default()
-                        },
-                        ..ModifyUnitStats::default()
-                    },
-                });
+                unit.add_effect(BlockEffect { info: EffectInfo { lifetime: 1 } });
                 true
             }
             _ => false,
@@ -297,11 +308,14 @@ impl Bonus {
         match self {
             Self::Artillery => ("bonus_artillery", "bonus_artillery_desc"),
             Self::AncientVampiresGist => ("bonus_oldvampiresgist", "bonus_oldvampiresgist_desc"),
+			Self::VampiresGist => ("bonus_vampiresgist", "bonus_vampiresgist_desc"),
+			Self::SpearDefence => ("bonus_speardefense", "bonus_speardefense_desc"),
+			Self::ArmyMedic => ("bonus_armymedic", "bonus_armymedic_desc"),
             Self::Berserk => ("bonus_berserk", "bonus_berserk_desc"),
             Self::Block => ("bonus_block", "bonus_block_desc"),
             Self::Counterblow => ("bonus_counterblow", "bonus_counterblow_desc"),
             Self::DeadDodging => ("bonus_deaddodging", "bonus_deaddodging_desc"),
-            Self::DeadRessurect => ("bonus_deadressurect", "bonus_deadressurect"),
+            Self::DeadRessurect => ("bonus_deadressurect", "bonus_deadressurect_desc"),
             Self::DeathCurse => ("bonus_deathcurse", "bonus_deathcurse"),
             Self::DefencePiercing => ("bonus_defencepiercing", "bonus_defencepiercing_desc"),
             Self::Dodging => ("bonus_dodging", "bonus_dodging_desc"),
@@ -312,11 +326,13 @@ impl Bonus {
             Self::Ghost => ("bonus_ghost", "bonus_ghost_desc"),
             Self::GodAnger => ("bonus_godanger", "bonus_godanger_desc"),
             Self::GodStrike => ("bonus_godstrike", "bonus_godstrike_desc"),
-            Self::Invulrenable => ("bonus_invulrenable", "bonus_invulrenable_desc"),
+            Self::Invulnerable => ("bonus_invulrenable", "bonus_invulrenable_desc"),
             Self::ManyTargets => ("bonus_manytargets", "bonus_manytargets"),
             Self::Merchant => ("bonus_merchant", "bonus_merchant"),
             Self::PoisonAttack => ("bonus_poison", "bonus_poison_desc"),
-            _ => ("", ""),
+			Self::Stealth => ("bonus_stealth", "bonus_stealth_desc"),
+			Self::FlankStrike => ("bonus_flankstrike", "bonus_flankstrike_desc"),
+			Self::NoBonus | Self::Custom => ("", ""),
         }
     }
 }
@@ -334,7 +350,7 @@ impl From<&str> for Bonus {
         // Stealth, DeadRessurect,
         // SpearDefense,
         // OldVampirsGist
-        match value {
+        let bonus = match value {
             "DefencePiercing" | "ArmorIgnore" => Self::DefencePiercing,
             "Dodging" | "Evasive" => Self::Dodging,
             "Fast" | "FastGoing" | "HorseAttack" | "HorseAtack" => Self::Fast,
@@ -346,9 +362,9 @@ impl From<&str> for Bonus {
             }
             "Berserk" => Self::Berserk,
             "Block" => Self::Block,
-            "PoisonAttack" => Self::PoisonAttack,
-            "FireAttack" => Self::FireAttack,
-            "Invulrenable" | "Unvulnerabe" => Self::Invulrenable,
+            "PoisonAttack" | "Poison" => Self::PoisonAttack,
+            "FireAttack" | "Fire" => Self::FireAttack,
+            "Invulnerable" | "Unvulnerabe" => Self::Invulnerable,
             "GodAnger" => Self::GodAnger,
             "GodStrike" => Self::GodStrike,
             "Ghost" => Self::Ghost,
@@ -364,8 +380,16 @@ impl From<&str> for Bonus {
             "ArmyMedic" => Self::ArmyMedic,
             "FlankStrike" => Self::FlankStrike,
             "Custom" => Self::Custom,
-            "NoBonus" | _ => Self::NoBonus,
-        }
+            "NoBonus" | "" => Self::NoBonus,
+			_ => {
+				dbg!(value);
+				Self::NoBonus
+			}
+        };
+		if value.contains("Flank") {
+			dbg!(value, bonus);
+		}
+		bonus
     }
 }
 

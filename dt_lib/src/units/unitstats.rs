@@ -2,7 +2,7 @@ use super::unit::{Defence, Power, UnitStats};
 use alkahest::alkahest;
 use derive_more::{Add, AddAssign, Sub, SubAssign};
 use math_thingies::{add_opt, sub_opt, Percent};
-use num::{Num, NumCast};
+use num::{Num, NumCast, Zero};
 use std::{
     fmt::Debug,
     ops::{Add, AddAssign, Neg, Sub, SubAssign},
@@ -17,7 +17,7 @@ pub struct Modify<V: Num + NumCast> {
     pub percent_set: Option<Percent>,
 }
 impl<K: Num + NumCast + Add<Percent, Output = K> + Copy> Modify<K> {
-    pub fn apply<V: Num + NumCast + Add<Percent, Output = V> + Copy>(&self, v: V) -> V {
+    pub fn apply<V: Num + NumCast + Add<Percent, Output = V> + Ord + Copy>(&self, v: V) -> V {
         let mut v: K = <K as NumCast>::from(v).unwrap() + self.add.unwrap_or(K::zero());
         if let Some(percent_add) = &self.percent_add {
             v = v + *percent_add;
@@ -30,7 +30,7 @@ impl<K: Num + NumCast + Add<Percent, Output = K> + Copy> Modify<K> {
                 v = *set;
             }
         }
-        NumCast::from(v).unwrap_or(NumCast::from(0).unwrap())
+        NumCast::from(v).unwrap_or(<V as Zero>::zero()).max(<V as Zero>::zero())
     }
     pub fn set(&mut self, v: impl Into<Option<K>>) -> &mut Self {
         self.set = v.into();
@@ -119,7 +119,7 @@ impl ModifyDefence {
         n_defence.hand_percent = self.hand_percent.apply(defence.hand_percent);
         n_defence.ranged_percent = self.ranged_percent.apply(defence.ranged_percent);
         n_defence.magic_units = self.magic_units.apply(defence.magic_units);
-        n_defence.ranged_units = self.magic_units.apply(defence.magic_units);
+        n_defence.ranged_units = self.magic_units.apply(defence.ranged_units);
         n_defence.hand_units = self.hand_units.apply(defence.hand_units);
         n_defence
     }

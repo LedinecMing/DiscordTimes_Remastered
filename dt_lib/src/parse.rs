@@ -802,10 +802,10 @@ pub fn parse_items(path: Option<&str>, lang: &String) -> (&'static str, Vec<Stri
                         modify.max_hp.percent_add,
                         Percent::new(value.parse().unwrap()).into(),
                     );
-                    modify.hp.percent_add = add_opt(
-                        modify.hp.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    );
+                    // modify.hp.percent_add = add_opt(
+                    //     modify.hp.percent_add,
+                    //     Percent::new(value.parse().unwrap()).into(),
+                    // );
                 }
                 "p-attackblow" => {
                     modify.damage.hand.percent_add = add_opt(
@@ -866,10 +866,6 @@ pub fn parse_items(path: Option<&str>, lang: &String) -> (&'static str, Vec<Stri
                         modify.max_moves.percent_add,
                         Percent::new(value.parse().unwrap()).into(),
                     );
-                    modify.moves.percent_add = add_opt(
-                        modify.moves.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    );
                 }
                 "p-initiative" => {
                     modify.speed.percent_add = add_opt(
@@ -892,7 +888,6 @@ pub fn parse_items(path: Option<&str>, lang: &String) -> (&'static str, Vec<Stri
 
                 "f-hits" => {
                     modify.max_hp.set = value.parse::<i64>().ok();
-                    modify.hp.set = value.parse::<i64>().ok();
                 }
                 "f-attackblow" => modify.damage.hand.set = value.parse().ok(),
                 "f-attackshot" => modify.damage.ranged.set = value.parse().ok(),
@@ -902,7 +897,6 @@ pub fn parse_items(path: Option<&str>, lang: &String) -> (&'static str, Vec<Stri
                 "f-defencemagic" => modify.defence.magic_units.set = value.parse().ok(),
                 "f-manevres" => {
                     modify.max_moves.set = value.parse().ok();
-                    modify.moves.set = value.parse().ok();
                 }
                 "f-initiative" => modify.speed.set = value.parse().ok(),
                 "f-vampirizm" => modify.vamp.set = value.parse().ok(),

@@ -1,10 +1,11 @@
 use super::parse::read_file_as_string;
 use advini;
+use itertools::Itertools;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Locale {
-    map: HashMap<String, HashMap<String, String>>,
+    pub map: HashMap<String, HashMap<String, String>>,
     pub main_lang: String,
     pub additional_lang: String,
 }
@@ -19,6 +20,14 @@ impl Locale {
         self.main_lang = lang.0.clone();
         self.additional_lang = lang.1.clone();
     }
+	pub fn keys_lack(&mut self) -> Vec<String> {
+		let keys = self.map.get(&self.main_lang).and_then(|map| Some(map.keys()));
+		let keys_other = self.map.get(&self.additional_lang).and_then(|map| Some(map.keys()));
+		if let (Some(keys), Some(other_keys)) = (keys, keys_other) {
+			let other_keys: Vec<_> = other_keys.collect();
+			keys.filter(|key| !other_keys.contains(key)).cloned().collect()
+		} else { vec![] }
+	}
     pub fn get<K: AsRef<str> + ToString>(&self, id: K) -> String {
         let id = id.as_ref();
         self.map

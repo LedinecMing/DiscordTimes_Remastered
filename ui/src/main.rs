@@ -211,7 +211,7 @@ fn move_thing(battle: &mut BattleInfo, armys: &mut Vec<Army>) {
     check_row_fall(battle, armys);
     if battle.winner.is_none() {
         if battle.active_unit == None {
-            next_move(battle, armys);
+            battle.next_move_seq(armys);
             battle.active_unit = battle.search_next_active(armys);
         }
         battle.can_interact = search_interactions(battle, armys);
@@ -1861,7 +1861,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                             .stroke(10.);
                     }
                 } else if let Some(can_interact) = &battle.can_interact {
-                    if can_interact.contains(&BattleUnit { army, index }) {
+                    if can_interact.contains(&BattleUnitPos { army,  pos:  troop.pos.into() }) {
                         draw.rect((pos.0, pos.1), (92., 92.))
                             .color(Color::TRANSPARENT)
                             .stroke_color(if active_unit.army == army {

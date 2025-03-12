@@ -75,6 +75,7 @@ pub enum Outcoming {
 }
 #[derive(alkahest::Deserialize, alkahest::Serialize, Formula)]
 pub enum Incoming {
+	Disconnect,
 	GetState,
 	Action(BattleUnitPos),
 	SetItem((BattleUnitPos, (usize, Option<usize>))),
@@ -142,7 +143,7 @@ fn serialize_gamemap(armies: &Vec<Army>, battle: &BattleInfo) -> AWsMessage {
         &mut buf,
     );
 	assert!(deserialize::<Outcoming, Outcoming>(&buf).is_ok());
-	AWsMessage::Binary(buf)
+	AWsMessage::Binary(buf.into())
 }
 fn process_message(message: Result<AWsMessage, AError>, instance: &mut RoomInstance, army: usize) -> Result<AWsMessage, InstanceError> {
 	let message = match message {
@@ -158,6 +159,9 @@ fn process_message(message: Result<AWsMessage, AError>, instance: &mut RoomInsta
 	}
 	let action = deserialize::<Incoming, Incoming>(&message.into_data());
 	match action {
+		Ok(Incoming::Disconnect) => {
+			return Err(InstanceError::Fatal);
+		}
 		Ok(Incoming::GetState) => {
 			Ok(serialize_gamemap(&instance.armies, &instance.battle))
 		}
@@ -173,6 +177,7 @@ fn process_message(message: Result<AWsMessage, AError>, instance: &mut RoomInsta
 				let unit = &mut troop.get().unit;
 				if let Some(item_id) = item_id {
 					unit.swap_item(index, Some(Item { index: item_id }));
+					unit.restore();
 					true
 				} else { false }
 			} else {
@@ -195,7 +200,8 @@ fn process_message(message: Result<AWsMessage, AError>, instance: &mut RoomInsta
 			}
 			if let Some(unit_id) = unit_id {
 				let new_unit = UNITS.get(unit_id).cloned();
-				let Some(new_unit) = new_unit else { return Err(InstanceError::Str("fuck")) };
+				let Some(mut new_unit) = new_unit else { return Err(InstanceError::Str("fuck")) };
+				new_unit.restore();
 				let mut new_troop = Troop::new(new_unit);
 				new_troop.pos = UnitPos::from_index(pos);
 				armies[army].troops.push(new_troop.into());
@@ -215,7 +221,7 @@ fn process_message(message: Result<AWsMessage, AError>, instance: &mut RoomInsta
 			}
 			let mut buf = vec![];
 			serialize_to_vec::<Outcoming, Outcoming>(Outcoming::Status(instance.acceptance), &mut buf);
-			Ok(AWsMessage::Binary(buf))
+			Ok(AWsMessage::Binary(buf.into()))
 		},
 		Err(_) => { Err(InstanceError::Str(r#"shit happens ¯\_(ツ)_/¯"#)) }
 	}
@@ -282,29 +288,29 @@ async fn handle_socket(
 		socket.send(buf).await;
 		if let Some(Some((Some(sock), None))) = hotel.lock().await.0.get_mut(&room_code) {
 			dbg!("Second player");
-			socket.send(AWsMessage::Text("Room full".to_owned())).await.expect("Wtf?");
-			sock.send(AWsMessage::Text("Room full".to_owned())).await;
+			socket.send(AWsMessage::Text("Room full".into())).await.expect("Wtf?");
+			sock.send(AWsMessage::Text("Room full".into())).await;
 			let mut buf = vec![];
 			serialize_to_vec::<Outcoming, Outcoming>(Outcoming::Id(1), &mut buf);
-			socket.send(AWsMessage::Binary(buf)).await;
+			socket.send(AWsMessage::Binary(buf.into())).await;
 		} else {
 			dbg!("First player");
 			let mut buf = vec![];
 			serialize_to_vec::<Outcoming, Outcoming>(Outcoming::Id(0), &mut buf);
-			socket.send(AWsMessage::Binary(buf)).await;
-			socket.send(AWsMessage::Text("Wait for another player".to_owned())).await.expect("Wtf?");
+			socket.send(AWsMessage::Binary(buf.into())).await;
+			socket.send(AWsMessage::Text("Wait for another player".into())).await.expect("Wtf?");
 		}
 	}
 	dbg!("Creating room");
     let mut room = {
         let mut hotel = hotel.lock().await;
-        match hotel.put_socket(room_code, socket).await {
+        match hotel.put_socket(room_code.clone(), socket).await {
             Ok(None) => {
 				return;
 			},
             Ok(Some(room)) => room,
             Err((mut socket, e)) => {
-                socket.send(AWsMessage::Text(e.to_string())).await.unwrap();
+                socket.send(AWsMessage::Text(e.into())).await.unwrap();
                 socket.close().await.unwrap();
                 return;
             }
@@ -337,4 +343,6 @@ async fn handle_socket(
 		.forward(room.1.sink.fanout(room.0.sink))
     .await
 		.ok();
+	hotel.lock().await.0.remove(&room_code);
+	println!("Room destructed: {room_code}");
 }

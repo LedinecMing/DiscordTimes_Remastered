@@ -1,8 +1,7 @@
-
 use crate::{
     battle::{
         army::{MAX_LINES, MAX_TROOPS},
-        battlefield::{field_type, BattleInfo, Field},
+        battlefield::{field_type, BattleInfo, Field}, HitMap,
     },
     parse::LOCALE, units::unitstats::Modify,
 };
@@ -22,8 +21,7 @@ use alkahest::alkahest;
 use derive_more::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 use math_thingies::Percent;
 use std::{
-    fmt::{Debug, Display, Formatter},
-    sync::RwLock,
+    fmt::{Debug, Display, Formatter}, ops::{Div, Mul}, sync::RwLock
 };
 
 #[derive(Copy, Clone, Debug, Add, Sub, Default, Sections)]
@@ -248,6 +246,9 @@ impl UnitPos {
         let max_troops = *MAX_TROOPS / MAX_LINES;
         Self(index % max_troops, index / max_troops)
     }
+	pub fn whole(&self) -> usize {
+		self.0 + self.1 * *MAX_TROOPS / MAX_LINES
+	}
 }
 impl Into<(usize, usize)> for UnitPos {
     fn into(self) -> (usize, usize) {
@@ -390,7 +391,7 @@ fn magic_curse(
     }
     if !target.has_effect_kind(EffectKind::MageCurse) {
         target.add_effect(AttackMagic::new(
-            target.correct_damage(&damage, Some(magic_type)).magic,
+            target.correct_damage(&damage, Some(magic_type), None).magic,
         ));
         Some(ActionResult::Debuff)
     } else {
@@ -401,7 +402,7 @@ fn magic_curse(
 fn elemental_curse(me: &mut Unit, target: &mut Unit, damage: Power, magic_type: MagicType) -> Option<ActionResult> {
     if !target.has_effect_kind(EffectKind::MageCurse) {
         target.add_effect(DisableMagic::new(
-            target.correct_damage(&damage, Some(magic_type)).magic,
+            target.correct_damage(&damage, Some(magic_type), None).magic,
         ));
         Some(ActionResult::Debuff)
     } else {
@@ -417,6 +418,7 @@ fn magic_attack(
     target_pos: UnitPos,
     my_pos: UnitPos,
     battle: &BattleInfo,
+	hitmap: &HitMap,
 ) -> Option<ActionResult> {
     match (target.info.unit_type, magic_type) {
         (UnitType::Undead, Life) => {
@@ -429,7 +431,7 @@ fn magic_attack(
 	} else {
         damage.hand = 0;
         damage.ranged = 0;
-        let res = target.being_attacked(&damage, me, target_pos, my_pos, battle);
+        let res = target.being_attacked(&damage, me, target_pos, hitmap, my_pos, battle);
 		Some(ActionResult::Melee)
     }
 }
@@ -441,13 +443,14 @@ fn elemental_attack(
     target_pos: UnitPos,
     my_pos: UnitPos,
     battle: &BattleInfo,
-	magic_type: MagicType
+	magic_type: MagicType,
+	hitmap: &HitMap,
 ) -> Option<ActionResult> {
     let mut damage = damage;
     if !elemental_curse(me, target, damage, magic_type).is_some() {
         damage.hand = 0;
         damage.ranged = 0;
-        target.being_attacked(&damage, me, target_pos, my_pos, battle);
+        target.being_attacked(&damage, me, target_pos, hitmap, my_pos, battle);
     }
     Some(ActionResult::Debuff)
 }
@@ -487,7 +490,7 @@ impl Unit {
         army.recalc();
         army
     }
-    pub fn can_attack(&self, target: &Unit, target_pos: UnitPos, my_pos: UnitPos, is_enemy: bool) -> bool {
+    pub fn can_attack(&self, target: &Unit, target_pos: UnitPos, my_pos: UnitPos, is_enemy: bool, target_hitmap: &Vec<Option<usize>>) -> bool {
         let effected = self.modified;
         let my_field = field_type(my_pos.into(), *MAX_TROOPS);
         let is_in_back = my_field == Field::Back;
@@ -501,7 +504,7 @@ impl Unit {
          * C(`B`(`A`|D)) | `C`(`A^B`)
          */
         let can_attack = (is_enemy
-            && (!me_in_reserve || self.bonus.can_attack_from_reserve())
+            && (!me_in_reserve || self.get_bonus().can_attack_from_reserve())
             && !enemy_in_reserve)
             || (!is_enemy && (both_not_in_reserve || both_in_reserve));
 		if !can_attack { return false; }
@@ -511,7 +514,8 @@ impl Unit {
             && is_enemy
         {
             true
-        } else if damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy {
+        } else if damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy && (target_pos.0.abs_diff(my_pos.0) < 2 || ((my_pos.whole() - 1)..(target_pos.whole())).all(|pos| target_hitmap[pos].is_none() || field_type(pos, *MAX_TROOPS) != Field::Front)) {
+			// This checks that receiver is in front and there are no obstacles between me and him.
             true
         } else {
             match self.info.magic_info {
@@ -588,8 +592,10 @@ impl Unit {
         target_pos: UnitPos,
         my_pos: UnitPos,
         battle: &BattleInfo,
+		target_hitmap: &Vec<Option<usize>>,
 		is_enemy: bool
     ) -> Option<ActionResult> {
+		
         let effected = self.modified;
         let my_field = field_type(my_pos.into(), *MAX_TROOPS);
         let is_in_back = my_field == Field::Back;
@@ -605,20 +611,20 @@ impl Unit {
             || (!is_enemy && (both_not_in_reserve || both_in_reserve));
         return if !a {
             None
-        } else if damage.ranged > 0
+		} else if damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy && (target_pos.0.abs_diff(my_pos.0) < 2 || ((my_pos.whole() - 1)..(target_pos.whole())).all(|pos| target_hitmap[pos].is_none() || field_type(pos, *MAX_TROOPS) != Field::Front)) {
+            damage.ranged = 0;
+            damage.magic = 0;
+            let _ = target.being_attacked(&damage, self, target_pos, target_hitmap, my_pos, battle);
+            Some(ActionResult::Melee)
+        }  else if damage.ranged > 0
             && (target_pos.1 == my_pos.1 && abs(target_pos.0 as i64 - my_pos.0 as i64) < 2
                 || my_field == Field::Back)
             && is_enemy
         {
             damage.hand = 0;
             damage.magic = 0;
-            let _ = target.being_attacked(&damage, self, target_pos, my_pos, battle);
+            let _ = target.being_attacked(&damage, self, target_pos, target_hitmap, my_pos, battle);
             Some(ActionResult::Ranged)
-        } else if damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy {
-            damage.ranged = 0;
-            damage.magic = 0;
-            let _ = target.being_attacked(&damage, self, target_pos, my_pos, battle);
-            Some(ActionResult::Melee)
         } else {
 			let Some((magic_type, direction)) = self.info.magic_info else { return None; };
             match (direction, magic_type, is_enemy) {
@@ -631,7 +637,7 @@ impl Unit {
                         if is_in_back {
                             magic_attack(
                                 self, target, damage, magic_type, my_pos, target_pos,
-                                battle,
+                                battle, target_hitmap
                             )
                         } else {
                             None
@@ -643,7 +649,7 @@ impl Unit {
                     (Elemental, true) => {
                         if is_in_back {
                             elemental_attack(
-                                self, target, damage, target_pos, my_pos, battle, magic_type
+                                self, target, damage, target_pos, my_pos, battle, magic_type, target_hitmap
                             )
                         } else {
                             None
@@ -656,10 +662,10 @@ impl Unit {
                         match magic_type {
                             Death | Life => magic_attack(
                                 self, target, damage, magic_type, my_pos, target_pos,
-                                battle,
+                                battle, target_hitmap
                             ),
                             Elemental => elemental_attack(
-                                self, target, damage, target_pos, my_pos, battle, magic_type
+                                self, target, damage, target_pos, my_pos, battle, magic_type, target_hitmap
                             ),
                         }
                     } else {
@@ -673,7 +679,7 @@ impl Unit {
                 (StrikeOnly, _, true) => {
                     damage.hand = 0;
                     damage.ranged = 0;
-                    target.being_attacked(&damage, self, my_pos, target_pos, battle);
+                    target.being_attacked(&damage, self, my_pos, target_hitmap, target_pos, battle);
                     Some(ActionResult::Debuff)
                 }
                 (BlessOnly, _, false) => match magic_type {
@@ -687,7 +693,10 @@ impl Unit {
             }
         }
 	}
-
+	pub fn restore(&mut self) {
+		self.stats.hp = self.modified.max_hp;
+		self.stats.moves = self.modified.max_moves;
+	}
     pub fn heal(&mut self, amount: u64) -> bool {
         let effected = self.modified;
         let amount = amount as i64;
@@ -800,16 +809,22 @@ impl Unit {
         damage: &Power,
         sender: &mut Unit,
         my_pos: UnitPos,
+		my_hitmap: &HitMap,
         attacker_pos: UnitPos,
         battle: &BattleInfo,
     ) -> u64 {
-        let corrected_damage = self.correct_damage(damage, sender.info.magic_info.and_then(|x| Some(x.0)));
+		let is_flank_attack = my_pos.0.abs_diff(attacker_pos.0) > 1;
+		let flank_info = if is_flank_attack {
+			Some(1.)
+		} else { None };
+        let corrected_damage = self.correct_damage(damage, sender.info.magic_info.and_then(|x| Some(x.0)), flank_info);
         let unit_bonus = sender.get_bonus();
         let corrected_damage =
             unit_bonus.on_attacking(corrected_damage, self, sender, my_pos, attacker_pos);
         let corrected_damage = self.get_bonus().on_attacked(
             corrected_damage,
             self,
+			my_hitmap,
             sender,
             my_pos,
             attacker_pos,
@@ -819,9 +834,16 @@ impl Unit {
             (corrected_damage.magic + corrected_damage.ranged + corrected_damage.hand).max(1);
 		self.stats.hp = self.stats.hp.abs_sub(&(corrected_damage_units as i64));
         self.modified.hp = self.modify.hp.apply(self.stats.hp);
+		match self.info.unit_type {
+			UnitType::Undead | UnitType::Mecha => {},
+			_ => {
+				sender.heal(sender.modified.vamp.calc(corrected_damage_units)); // apply vampirizm
+			}
+		}
         corrected_damage_units
     }
-    pub fn correct_damage(&self, damage: &Power, magic_type: Option<MagicType>) -> Power {
+    pub fn correct_damage(&self, damage: &Power, magic_type: Option<MagicType>, flank_modifier: Option<f32>) -> Power {
+		let mut damage = damage.clone();
         let defence: Defence = self.modified.defence;
         let percent_100 = Percent::new(100);
         let mut magic: u64 = 0;
@@ -835,20 +857,26 @@ impl Unit {
             magic =
                 (percent_100 - magic_def).calc(damage.magic.saturating_sub(defence.magic_units));
         }
-
+		let hand_defence = if let Some(flank_mod) = flank_modifier {
+			damage.hand = (damage.hand as f32).mul(flank_mod).ceil() as u64;
+			(defence.hand_units as f32).div(2.).ceil() as u64
+		} else { defence.hand_units };
         Power {
             ranged: (percent_100 - defence.ranged_percent)
                 .calc(damage.ranged.saturating_sub(defence.ranged_units)),
             magic,
             hand: (percent_100 - defence.hand_percent)
-                .calc(damage.hand.saturating_sub(defence.hand_units)),
+                .calc(damage.hand.saturating_sub(hand_defence)),
         }
     }
     pub fn tick(&mut self) -> bool {
-		let removed: Vec<_> = self.effects.extract_if(|ef| ef.on_tick() && ef.is_dead()).collect();
+		let mut effects = self.effects.clone();
+		let removed: Vec<_> = effects.extract_if(|ef| ef.on_tick(self) && ef.is_dead()).collect();
+		self.effects = effects;
         for mut effect in removed {
 			effect.kill(self);
 		}
+		self.heal(self.modified.regen.calc(self.modified.max_hp as u64)); // apply regeneration
         self.get_bonus().on_tick(self);
         self.recalc();
         true
@@ -999,6 +1027,7 @@ pub fn display_unit(unit: &Unit) -> Vec<String>{
 	strings.push(format!("{}: {}/{}", locale.get("unitstats_moves"), stats.moves, stats.max_moves));
 	let bonus = get_bonus_info(unit.get_bonus());
 	strings.push(bonus.0);
+	strings.push(bonus.1);
 	strings
 }
 impl Display for Unit {
@@ -1156,7 +1185,7 @@ pub fn calclate_unit_power(unit: &Unit) -> f32 {
         Bonus::DeadRessurect => (1., 1., 1.25),
         Bonus::FireAttack | Bonus::PoisonAttack => (1., 1.3, 1.),
         Bonus::Ghost => (1., 1.5, 2.),
-        Bonus::Invulrenable => (1., 1., 2.),
+        Bonus::Invulnerable => (1., 1., 2.),
         Bonus::DefencePiercing => (1., 1. + attack_points, 1.),
         Bonus::FastDead => (1., 2., 1.),
         Bonus::FlankStrike => (1., 1.5, 1.),
