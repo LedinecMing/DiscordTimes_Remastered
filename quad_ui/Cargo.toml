@@ -12,7 +12,15 @@ tokio = { version = "*", features = ["sync", "rt", "rt-multi-thread", "process",
 futures-util = "*"
 once_cell = "1.19.0"
 [package.metadata.android]
-assets = "../dt/"
+res = "../dt/android_pack/android/res/"
+icon = "@mipmap/ic_launcher"
+assets = "../dt/android_pack/"
 build_targets = [ "armv7-linux-androideabi", "aarch64-linux-android", "i686-linux-android", "x86_64-linux-android" ]
+# package_name = "ledinecming.dt_remastered"
+
+label = "Discord Times PVP"
 [package.metadata.android.activity_attributes]
 "android:exported" = "true"
+"android:screenOrientation" = "userLandscape"
+[[package.metadata.android.permission]]
+name = "android.permission.INTERNET"

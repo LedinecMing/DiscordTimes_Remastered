@@ -48,8 +48,8 @@ impl Connection {
 		self.incoming_events.try_next().ok().flatten()
 	}
 }
-pub async fn connect(room: String, id: String) -> Connection {
-    let mut request = "ws://localhost:3000/ws".into_client_request().unwrap();
+pub async fn connect(ip: String, room: String, id: String) -> Result<Connection, tungstenite::Error>{
+    let mut request = format!("ws://{ip}/ws").into_client_request().unwrap();
     {
         let headers = request.headers_mut();
         headers.insert("room-code", room.parse().unwrap());
@@ -63,8 +63,7 @@ pub async fn connect(room: String, id: String) -> Connection {
 
     // Connect to an echo server
     let (ws_stream, _) = connect_async(request)
-        .await
-        .expect("failed to connect to the server");
+        .await?;
 
     let (write, read) = ws_stream.split();
 
@@ -107,11 +106,11 @@ pub async fn connect(room: String, id: String) -> Connection {
         }
     });
 	dbg!("connection established");
-    Connection {
+    Ok(Connection {
         incoming_events: ie_rx,
         events_sender: oe_tx,
 		handle
-    }
+    })
 }
 #[cfg(test)]
 mod tests {

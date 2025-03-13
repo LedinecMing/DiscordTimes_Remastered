@@ -1,5 +1,6 @@
 mod hotel;
 
+use std::sync::RwLock;
 use std::fmt::Debug;
 use crate::hotel::*;
 use alkahest::{deserialize, serialize, serialize_to_vec, serialized_size, Formula};
@@ -52,7 +53,7 @@ use dt_lib::{
         tile::*,
     },
     network::net::*,
-    parse::{parse_items, parse_objects, parse_settings, parse_story, parse_units},
+    parse::{parse_items, parse_objects, parse_settings, parse_story, parse_units, StupidReader},
     time::time::Data as TimeData,
     units::{
         unit::{ActionResult, Unit, UnitPos},
@@ -127,10 +128,21 @@ fn gen_army(army_num: usize, units: &Vec<Unit>) -> Army {
     //}
     army
 }
-static UNITS: LazyLock<Vec<Unit>> = LazyLock::new(|| parse_units(None).unwrap().0);
-fn setup() -> State {
-    let settings = parse_settings();
-    let _ = parse_items(None, &settings.locale);
+static UNITS: LazyLock<RwLock<Vec<Unit>>> = LazyLock::new(|| RwLock::new(vec![]));
+macro_rules! units {
+    () => {
+		&UNITS.read().unwrap()
+    };
+}
+macro_rules! units_mut {
+    () => {
+        &mut UNITS.write().unwrap()
+    };
+}
+async fn setup() -> State {
+	units_mut!().append(&mut parse_units::<StupidReader>(None).await.unwrap().0);
+    let settings = parse_settings::<StupidReader>().await;
+    let _ = parse_items::<StupidReader>(None, &settings.locale).await;
     State {
         hotel: Arc::new(Mutex::new(Hotel::new())),
     }
@@ -199,7 +211,7 @@ fn process_message(message: Result<AWsMessage, AError>, instance: &mut RoomInsta
 				armies[army].troops.remove(index);
 			}
 			if let Some(unit_id) = unit_id {
-				let new_unit = UNITS.get(unit_id).cloned();
+				let new_unit = units!().get(unit_id).cloned();
 				let Some(mut new_unit) = new_unit else { return Err(InstanceError::Str("fuck")) };
 				new_unit.restore();
 				let mut new_troop = Troop::new(new_unit);
@@ -242,7 +254,7 @@ fn process_move(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // Create a hotel with a room
-    let state = setup();
+    let state = setup().await;
     let hotel = state.hotel;
 
     // Start the server
@@ -274,7 +286,7 @@ async fn ws_handler(
         .unwrap()
         .to_owned();
     ws.on_upgrade(move |socket| {
-        handle_socket(socket, room_code, (hotel, RoomInstance::new(&UNITS)))
+        handle_socket(socket, room_code, (hotel, RoomInstance::new(units!())))
     })
 }
 

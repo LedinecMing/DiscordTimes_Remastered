@@ -10,7 +10,7 @@ notan
 #*
 /dt_launcher/launcher/
 
-!*/assets/*
+!*/dt/assets/*
 !*/map/*
 !*/MapExample.ini
 !*/Rus_Locale.ini

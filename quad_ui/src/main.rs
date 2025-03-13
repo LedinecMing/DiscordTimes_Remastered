@@ -1,8 +1,8 @@
 use ahash::RandomState;
 use dt_lib::{
     battle::{army::*, battlefield::*, troop::Troop}, effects::*, hwid, items::item::*, locale::{find_all_matches_in_string, parse_locale, Locale}, map::{
-        convert::{convert_dtm_map, parse_dtm_map}, event::{execute_event, Event as GameEvent, Execute}, map::*, object::ObjectInfo, tile::*
-    }, network::GameServer, parse::{collect_errors, parse_items, parse_objects, parse_settings, parse_story, parse_units}, time::time::Data as TimeData, units::{
+        convert::{convert_dtm_map, parse_dtm_map, parse_dtm_map_by_bytes, parse_dtm_vec}, event::{execute_event, Event as GameEvent, Execute}, map::*, object::ObjectInfo, tile::*
+    }, network::GameServer, parse::{collect_errors, parse_items, parse_objects, parse_settings, parse_story, parse_units, FileAccess}, time::time::Data as TimeData, units::{
         unit::{display_unit, ActionResult, Unit, UnitPos},
         unitstats::ModifyUnitStats,
     }
@@ -15,12 +15,22 @@ use macroquad::{
     }
 };
 use dt_client::*;
-use miniquad::window::screen_size;
+use miniquad::{log, window::screen_size};
 use once_cell::sync::Lazy;
 use tokio::{runtime::Runtime, task::futures};
 use std::{
     collections::HashMap, fmt::Display, future, num::Saturating, ops::{Index, Not}, sync::{Mutex, RwLock}
 };
+
+struct QuadFiles;
+impl FileAccess for QuadFiles {
+	async fn read(path: &str) -> Vec<u8> {
+		load_file(path).await.unwrap()
+	}
+	async fn read_as_string(path: &str) -> String {
+		load_string(path).await.unwrap()
+	}
+}
 #[derive(Debug)]
 struct Assets {
     inner: HashMap<String, Texture2D, RandomState>,
@@ -93,6 +103,9 @@ async fn load_assets(req_assets_list: &[(&str, Vec<String>)], fonts: HashMap<&'s
             asset_names.push(asset.clone());
         }
     }
+	if error_collector.len() > 0 {
+		panic!("{}", error_collector.join("\n"));
+	}
     let Ok(assets) = assets
         .into_iter()
         .map(|v| v.ok_or(()))
@@ -104,11 +117,11 @@ async fn load_assets(req_assets_list: &[(&str, Vec<String>)], fonts: HashMap<&'s
     Assets::new(asset_names.into_iter().zip(assets).collect(), fonts)
 }
 async fn game_init() -> State {
-    let settings = parse_settings();
+    let settings = parse_settings::<QuadFiles>().await;
     {
         let locale = &mut LOCALE.write().unwrap();
         locale.set_lang((&settings.locale, &settings.additional_locale));
-        parse_locale(&[&settings.locale, &settings.additional_locale], locale);
+        parse_locale::<QuadFiles>(&[&settings.locale, &settings.additional_locale], locale).await;
 		dbg!(locale.keys_lack());
     }
 	let benguiat = load_ttf_font("Benguiat Rus Regular.ttf").await.expect("shit happened");
@@ -119,9 +132,9 @@ async fn game_init() -> State {
 	fonts.insert("z003", z003);
 	fonts.insert("gothic", gothic);
     let assets = {
-        let req_assets_items = parse_items(None, &settings.locale);
+        let req_assets_items = parse_items::<QuadFiles>(None, &settings.locale).await;
 		assert!(ITEMS.read().unwrap().len()>0);
-        let res = parse_units(None);
+        let res = parse_units::<QuadFiles>(None).await;
         if let Err(err) = res {
             error!("{}", err);
             panic!("{}", err);
@@ -130,13 +143,13 @@ async fn game_init() -> State {
             panic!("Unit parsing error")
         };
         units_mut!().append(&mut units);
-        let (mut objects, req_assets_objects) = parse_objects();
+        let (mut objects, req_assets_objects) = parse_objects::<QuadFiles>().await;
         objects_mut!().append(&mut objects);
         dbg!(units!().len(), objects!().len());
-        let req_assets_tiles = (
-            "assets/Terrain",
-            TILES.iter().map(|tile| tile.sprite().to_string()).chain(["grass_tileset.png".to_string()]).collect(),
-        );
+        // let req_assets_tiles = (
+        //     "assets/Terrain",
+        //     TILES.iter().map(|tile| tile.sprite().to_string()).chain(["grass_tileset.png".to_string()]).collect(),
+        //);
 	    let req_assets_windows = ("assets/Window",
             ["front.png",
             "backyard.png",
@@ -150,7 +163,6 @@ async fn game_init() -> State {
             "buttonblue.png",
             "cursor.png",
             "Menu.png",
-			"label.png",
             "gold.png",
             "red.png"].map(|x| x.to_owned()).to_vec(),
         );
@@ -173,13 +185,14 @@ async fn game_init() -> State {
             req_assets_objects,
             req_assets_items,
             req_assets_units,
-            req_assets_tiles,
+            //req_assets_tiles,
 			req_assets_windows,
 			req_assets_stats_list
         ];
         load_assets(&req_assets_list, fonts).await
     };
-	let (mut gamemap, events) = (convert_dtm_map(parse_dtm_map(std::path::Path::new("./Maps_Rus/Проклятое озеро.DTm")).unwrap()), vec![]);
+	let bytes = load_file("Maps_Rus/cursedlake.DTm").await.unwrap();
+	let (mut gamemap, events) = (convert_dtm_map(parse_dtm_vec(bytes).unwrap()), vec![]);
     //let (mut gamemap, events) = parse_story(
     //     units!(),
     //     objects!(),
@@ -590,7 +603,7 @@ async fn main() {
 	let bg = root_ui().style_builder().background(state.assets.get(&"Menu.png".to_owned()).get_texture_data()).build();
 	let button = root_ui().style_builder().font_size(32).text_color(WHITE).background(state.assets.get(&"button.png".to_owned()).get_texture_data()).with_font(state.assets.get_font("benguiat")).unwrap().build();
 	let group = root_ui().style_builder().font_size(32).text_color(WHITE).background(state.assets.get(&"button.png".to_owned()).get_texture_data()).with_font(state.assets.get_font("benguiat")).unwrap().build();
-	let label = root_ui().style_builder().text_color(BLACK).text_color_hovered(DARKBLUE).font_size(32).background(state.assets.get("label.png").get_texture_data()).with_font(state.assets.get_font("benguiat")).unwrap().build();
+	let label = root_ui().style_builder().text_color(BLACK).text_color_hovered(DARKBLUE).font_size(32).with_font(state.assets.get_font("benguiat")).unwrap().build();
 	let main_skin = Skin {
 		label_style: label,
 		button_style: button.clone(),
@@ -598,11 +611,6 @@ async fn main() {
 		editbox_style: button.clone(),
 		group_style: group,
 		..root_ui().default_skin()
-	};
-	let window = root_ui().style_builder().background(state.assets.get(&"label.png".to_owned()).get_texture_data()).build();
-	let window_bg = Skin {
-		window_style: window,
-		..main_skin.clone()
 	};
 	let mut input = String::new();
 	root_ui().push_skin(&main_skin);
@@ -692,7 +700,7 @@ async fn main() {
 					(Some(my_army), go_back)
 				} else { (None, false) };
 				//let pos = state.ui.camera.world_to_screen( vec2(CARD_SIZE * (*MAX_TROOPS/2) as f32, 0.));
-				let pos = CARD_SIZE * (*MAX_TROOPS / 2) as f32;
+				let pos = CARD_SIZE * (*MAX_TROOPS/2) as f32 / 1920. * screen_width();
 				Window::new(hash!(), vec2(pos, 000.), vec2(1920. - pos, screen_height()))
 					.titlebar(false)
 					.close_button(true)
@@ -759,7 +767,12 @@ async fn main() {
 						}
 					});
 				if connecting {
-					let conn = state.rt.block_on(connect(input.clone(), hwid::get_id().unwrap()));
+					let ip = if cfg!(target_os = "android") {
+						"localhost:3000"
+					} else { "localhost:3000" }.to_string();
+					let conn = state.rt.block_on(connect(ip, input.clone(), hwid::get_id().unwrap()));
+					debug!("{:?}", conn);
+					let conn = conn.unwrap();
 					//root_ui().pop_skin();
 					state.game.variant = GameVariant::Online(Online {conn, status: ConnectionStatus::NotFull, army: 0 });
 				}
@@ -784,7 +797,7 @@ async fn main() {
 					continue;
 				}
 				//let pos = state.ui.camera.world_to_screen( vec2(CARD_SIZE * (*MAX_TROOPS/2) as f32, 0.));
-				let pos = CARD_SIZE * (*MAX_TROOPS/2) as f32;
+				let pos = CARD_SIZE * (*MAX_TROOPS/2) as f32 / 1920. * screen_width();
 				Window::new(hash!(), vec2(pos, 000.), vec2(1920. - pos, screen_height()))
 					.titlebar(false)
 					.ui(&mut *root_ui(), |ui| {

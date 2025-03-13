@@ -5,8 +5,8 @@
 //! which is intended to uniquely represent this entity.
 
 use thiserror::Error;
+use sysinfo;
 
-/// Possible failure cases for [get_id()].
 #[derive(Debug, Error)]
 pub enum HwIdError {
     /// Could not detect a hardware id. This might be caused
@@ -86,6 +86,10 @@ mod hwid {
 
 #[cfg(target_os = "linux")]
 mod hwid {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    use itertools::Itertools;
+
     use super::*;
 
     /// Get the hardware ID of this machine. The HWID is
@@ -104,8 +108,24 @@ mod hwid {
         }
         Err(HwIdError::NotFound)
     }
+	pub fn get_id1() -> Result<std::string::String, HwIdError> {
+		let comps = sysinfo::Components::new_with_refreshed_list();
+		let id =  comps.list().iter().map(|comp| comp.label()).join("\n");
+		let mut hasher = DefaultHasher::new();
+		id.hash(&mut hasher);
+		Ok(dbg!(hasher.finish().to_string()))
+	}
 }
+#[cfg(target_os="android")]
+mod hwid {
+	use std::hash;
 
+	use super::*;
+	pub fn get_id() -> Result<std::string::String, HwIdError> {
+		// TODO
+		Ok("mobila".to_string())
+	}
+}
 #[cfg(target_os = "freebsd")]
 #[cfg(target_os = "dragonfly")]
 #[cfg(target_os = "openbsd")]

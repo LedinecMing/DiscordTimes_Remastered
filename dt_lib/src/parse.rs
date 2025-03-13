@@ -155,19 +155,10 @@ use tracing_mutex::stdsync::TracingMutex as Mutex;
 
 //#[cfg(target_arch = "wasm32")]
 //use wasm_bindgen_futures::spawn_local;
-#[cfg(not(target_arch = "wasm32"))]
-pub fn read_file_as_string(path: String) -> String {
-    let res = String::from_utf8(std::fs::read(dbg!(path.clone())).unwrap()).unwrap();
-    return res;
+pub fn read_file(path: &str) -> Vec<u8> {
+	std::fs::read(path.clone()).unwrap()
 }
-#[cfg(target_arch = "wasm32")]
-pub fn read_file_as_string(path: String) -> String {
-    use std::{
-        sync::{Arc, Mutex},
-        task,
-    };
-    String::new()
-}
+
 trait CollectInplace {
     type Output;
     fn collect(self) -> Self::Output;
@@ -249,9 +240,9 @@ pub fn match_magictype(
     }
 }
 
-pub fn parse_units(path: Option<&str>) -> Result<(Vec<Unit>, (&'static str, Vec<String>)), String> {
+pub async fn parse_units<Reader: FileAccess>(path: Option<&str>) -> Result<(Vec<Unit>, (&'static str, Vec<String>)), String> {
     let mut units = vec![];
-    let sections = parse_for_sections(path.unwrap_or("Units.ini"));
+    let sections = parse_for_sections::<Reader>(path.unwrap_or("Units.ini")).await;
     let mut error_collector: Vec<String> = Vec::new();
     let mut req_assets = Vec::new();
     let mut upgrades: HashMap<usize, Vec<String>> = HashMap::new();
@@ -547,8 +538,8 @@ pub static mut SETTINGS: Settings = Settings {
 pub static LOCALE: Lazy<RwLock<Locale>> =
     Lazy::new(|| RwLock::new(Locale::new("Rus".into(), "Eng".into())));
 
-pub fn parse_settings() -> Settings {
-    let sections = parse_for_sections("Settings.ini");
+pub async fn parse_settings<Reader: FileAccess>() -> Settings {
+    let sections = parse_for_sections::<Reader>("Settings.ini").await;
     let mut max_troops: usize = 0;
     let mut locale = String::new();
     let mut additional_locale = String::new();
@@ -594,9 +585,21 @@ pub fn parse_settings() -> Settings {
     settings
 }
 
-fn parse_for_props(path: &str) -> HashMap<String, String> {
+pub trait FileAccess {
+	async fn read(path: &str) -> Vec<u8>;
+	async fn read_as_string(path: &str) -> String {
+		String::from_utf8(Self::read(path).await).unwrap()
+	}
+}
+pub struct StupidReader;
+impl FileAccess for StupidReader {
+	async fn read(path: &str) -> Vec<u8> {
+		read_file(path)
+	}
+}
+async fn parse_for_props<Reader: FileAccess>(path: &str) -> HashMap<String, String> {
     let mut props = HashMap::new();
-    let ini_doc = read_file_as_string(path.into());
+    let ini_doc = Reader::read_as_string(path).await;
     let parser = Parser::new(&*ini_doc).auto_trim(true);
     for item in parser {
         match item {
@@ -610,15 +613,15 @@ fn parse_for_props(path: &str) -> HashMap<String, String> {
     }
     props
 }
-fn parse_for_sections(path: &str) -> Vec<(String, HashMap<String, String>)> {
-    let ini_doc = read_file_as_string(path.into());
+async fn parse_for_sections<Reader: FileAccess>(path: &str) -> Vec<(String, HashMap<String, String>)> {
+    let ini_doc = Reader::read_as_string(path).await;
     advini::parse_for_sections(&ini_doc)
 }
 type Objects = Vec<ObjectInfo>;
-pub fn parse_objects() -> (Objects, (&'static str, Vec<String>)) {
+pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec<String>)) {
     let mut objects = Vec::new();
     let mut req_assets = Vec::new();
-    let sections = parse_for_sections("Objects.ini");
+    let sections = parse_for_sections::<Reader>("Objects.ini").await;
     for (sec, prop) in sections.iter() {
         let mut category = "".into();
         let mut obj_type = None;
@@ -709,12 +712,12 @@ fn match_magic_variants(
  * p-{stat} - добавление процента
  * f-{stat} - установить
  */
-pub fn parse_items(path: Option<&str>, lang: &String) -> (&'static str, Vec<String>) {
+pub async fn parse_items<Reader: FileAccess>(path: Option<&str>, lang: &String) -> (&'static str, Vec<String>) {
     let mut error_collector: Vec<String> = Vec::new();
     let mut items = vec![];
     let mut req_assets = Vec::new();
 
-    let secs = parse_for_sections(path.unwrap_or("Rus_Artefacts.ini"));
+    let secs = parse_for_sections::<Reader>(path.unwrap_or("Rus_Artefacts.ini")).await;
     for (sec, props) in secs {
         let mut cost: Option<i64> = None;
         let mut description = None;
@@ -969,16 +972,16 @@ fn str_bool(v: String) -> bool {
     }
 }
 
-fn parse_events(path: String, locale: &mut Locale) -> Vec<Event> {
+async fn parse_events<Reader: FileAccess>(path: String, locale: &mut Locale) -> Vec<Event> {
     let mut events = Vec::new();
-    for (sec, props) in parse_for_sections_localised(&*path, locale) {
+    for (sec, props) in parse_for_sections_localised::<Reader>(&*path, locale).await {
         let event = <Event as Sections>::from_section(props).unwrap();
         events.push(event.0);
     }
     events
 }
 
-fn parse_mapdata(
+async fn parse_mapdata<Reader: FileAccess>(
     path: String,
     units: &Vec<Unit>,
     locale: &mut Locale,
@@ -995,7 +998,7 @@ fn parse_mapdata(
     let mut armys = Vec::new();
     let mut buildings = Vec::new();
 
-    for (sec, props) in parse_for_sections(&*path) {
+    for (sec, props) in parse_for_sections::<Reader>(&*path).await {
         match &*sec {
             "Tilemaps" => {
                 for prop in props {
@@ -1217,7 +1220,7 @@ fn parse_mapdata(
     )
 }
 
-pub fn parse_story(
+pub async fn parse_story<Reader: FileAccess>(
     units: &Vec<Unit>,
     objects: &Objects,
     lang: &String,
@@ -1245,13 +1248,13 @@ pub fn parse_story(
     // Eventsandlights
     let mut events_path = None;
 
-    for (sec, props) in parse_for_sections(&format!("{map_path}")) {
+    for (sec, props) in parse_for_sections::<Reader>(&format!("{map_path}")).await {
         for prop in props {
             let prop = (prop.0, process_locale(prop.1, &mut locale));
             match &*prop.0 {
                 "filepath" => match &*sec {
                     "Locale" => {
-                        parse_map_locale(
+                        parse_map_locale::<Reader>(
                             &*format!("{}/{}", map_dir, prop.1),
                             &[&locale.main_lang.clone(), &locale.additional_lang.clone()],
                             &mut locale,
@@ -1280,13 +1283,13 @@ pub fn parse_story(
     if !err_coll.is_empty() {
         panic!("{}", err_coll.join("\n"));
     }
-    let mapdata = parse_mapdata(
+    let mapdata = parse_mapdata::<Reader>(
         format!("{map_dir}{}", mapdata_path.unwrap()),
         units,
         &mut locale,
         objects,
-    );
-    let events = parse_events(format!("{map_dir}{}", events_path.unwrap()), &mut locale);
+    ).await;
+    let events = parse_events::<Reader>(format!("{map_dir}{}", events_path.unwrap()), &mut locale).await;
 
     let gamemap = GameMap {
         armys: mapdata.3,

@@ -376,6 +376,12 @@ pub fn parse_dtm_map(path: &Path) -> Result<MapData, ()> {
     };
     parse_dtm_map_by_bytes(buf)
 }
+pub fn parse_dtm_vec(vec: Vec<u8>) -> Result<MapData, ()> {
+    let buf: bytes::Bytes = {;
+        Bytes::copy_from_slice(&vec)
+    };
+    parse_dtm_map_by_bytes(buf)
+}
 pub fn parse_dtm_map_by_bytes(mut buf: Bytes) -> Result<MapData, ()> {
     let mut header_buf_start = buf.copy_to_bytes(8);
     buf.advance(4);

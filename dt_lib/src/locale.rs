@@ -1,4 +1,5 @@
-use super::parse::read_file_as_string;
+use crate::parse::FileAccess;
+
 use advini;
 use itertools::Itertools;
 use std::collections::HashMap;
@@ -121,10 +122,10 @@ pub fn register_locale(
     map_locale.insert(locale_name.to_string(), end_string, &lang);
 }
 
-pub fn parse_locale(languages: &[&String], locale: &mut Locale) {
+pub async fn parse_locale<Reader: FileAccess>(languages: &[&String], locale: &mut Locale) {
     for language in languages {
         parse_locale_doc(
-            read_file_as_string(format!("{}_Locale.ini", language)),
+            Reader::read_as_string(&format!("{}_Locale.ini", language)).await,
             &language,
             locale,
         );
@@ -136,11 +137,11 @@ pub fn parse_locale_doc(ini_doc: String, language: &String, locale: &mut Locale)
         locale.insert(k, value, &language);
     }
 }
-pub fn parse_for_sections_localised(
+pub async fn parse_for_sections_localised<Reader: FileAccess>(
     path: &str,
     locale: &mut Locale,
 ) -> Vec<(String, HashMap<String, String>)> {
-    let ini_doc = read_file_as_string(path.into());
+    let ini_doc = Reader::read_as_string(path).await;
     advini::parse_for_sections_with(
         &ini_doc,
         |(prop, v, s)| (prop.to_lowercase(), process_locale(v, s)),
@@ -148,8 +149,8 @@ pub fn parse_for_sections_localised(
     )
 }
 
-pub fn parse_map_locale(path: &str, languages: &[&String], locale: &mut Locale) {
-    for (sec, props) in advini::parse_for_sections(&read_file_as_string(path.into())) {
+pub async fn parse_map_locale<Reader: FileAccess>(path: &str, languages: &[&String], locale: &mut Locale) {
+    for (sec, props) in advini::parse_for_sections(&Reader::read_as_string(path).await) {
         if !languages.contains(&&sec) {
             continue;
         }
