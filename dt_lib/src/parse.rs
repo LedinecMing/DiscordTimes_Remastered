@@ -13,7 +13,7 @@ CostMultipler=[{число}; standard = 100] — коррекция силы
 
 CostGoldDiv=[1-9] — делитель стоимости найма
 
-Nature=[{отсутствие строки}/Undead/Elemental/Rogue/Animal/Hero/People] | Нормальный/Нежить/Элементаль/Разбойники/Животные/Герой/Люди — тип персонажа
+Nature=[{отсутствие строки}/Undead/Elemental/Rogue/Animal/Hero/People/Mecha] | Нормальный/Нежить/Элементаль/Разбойники/Животные/Герой/Люди/Mech — тип персонажа
 
 Magic=[{отсутствие строки}/LifeMagic/ElementalMagic/DeathMagic] | Нет/Жизни/Стихий/Смерти — магия
 
@@ -144,12 +144,7 @@ use ini_core::{Item as IniItem, Parser};
 use math_thingies::Percent;
 use once_cell::sync::Lazy;
 use std::{
-    any::type_name,
-    collections::HashMap,
-    fmt::{Debug, Display},
-    io::Read,
-    ops::Add,
-    str::FromStr, sync::RwLock,
+    any::type_name, collections::HashMap, default, fmt::{Debug, Display}, io::Read, net::{IpAddr, Ipv4Addr}, ops::Add, str::FromStr, sync::RwLock
 };
 use tracing_mutex::stdsync::TracingMutex as Mutex;
 
@@ -517,23 +512,38 @@ pub async fn parse_units<Reader: FileAccess>(path: Option<&str>) -> Result<(Vec<
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Settings {
     pub max_troops: usize,
     pub locale: String,
     pub additional_locale: String,
     pub fullscreen: bool,
     pub init_size: (u32, u32),
+	pub ip: IpAddr,
     pub port: u64,
 }
+impl Default for Settings {
+	fn default() -> Self {
+		Self {	
+			max_troops: 12,
+			locale: String::new(),
+			additional_locale: String::new(),
+			fullscreen: true,
+			init_size: (1600, 1200),
+			ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+			port: 0,
+		}
+	}
+}
 
-pub static mut SETTINGS: Settings = Settings {
-    max_troops: 12,
-    locale: String::new(),
-    additional_locale: String::new(),
-    fullscreen: true,
-    init_size: (1600, 1200),
-    port: 0,
+pub static mut SETTINGS: Settings = Settings {	
+	max_troops: 12,
+	locale: String::new(),
+	additional_locale: String::new(),
+	fullscreen: true,
+	init_size: (1600, 1200),
+	ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+	port: 0,
 };
 pub static LOCALE: Lazy<RwLock<Locale>> =
     Lazy::new(|| RwLock::new(Locale::new("Rus".into(), "Eng".into())));
@@ -546,6 +556,7 @@ pub async fn parse_settings<Reader: FileAccess>() -> Settings {
     let mut fullscreen = false;
     let mut init_size = None;
     let mut port = 0;
+	let mut ip = IpAddr::V4(Ipv4Addr::new(127,0,0,1));
     for (sec, prop) in sections.iter() {
         for (k, value) in prop.iter() {
             match &**k {
@@ -567,6 +578,9 @@ pub async fn parse_settings<Reader: FileAccess>() -> Settings {
                 "port" => {
                     port = value.parse::<u64>().unwrap();
                 }
+				"ip" => {
+					ip = value.parse().unwrap()
+				}
                 _ => {}
             }
         }
@@ -577,6 +591,7 @@ pub async fn parse_settings<Reader: FileAccess>() -> Settings {
         additional_locale,
         fullscreen,
         init_size: init_size.unwrap(),
+		ip,
         port,
     };
     unsafe {
@@ -689,21 +704,15 @@ pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec
     )
 }
 fn match_magic_variants(
-    error_collector: &mut Vec<String>,
     magic_type: String,
-) -> Option<MagicVariants> {
+) -> MagicVariants {
     match &*magic_type {
-        "LifeMagic" => Some(MagicVariants::Life),
-        "ElementalMagic" => Some(MagicVariants::Elemental),
-        "DeathMagic" => Some(MagicVariants::Death),
-        "NoMagic" | "" => None,
+        "LifeMagic" => MagicVariants::Life,
+        "ElementalMagic" => MagicVariants::Elemental,
+        "DeathMagic" => MagicVariants::Death,
+        "NoMagic" | "" => MagicVariants::Any,
         _ => {
-            collect_errors(
-                MATCH_ERR,
-                error_collector,
-                &*format!("Invalid magic variant: {}", magic_type),
-            );
-            None
+            MagicVariants::Any
         }
     }
 }
@@ -726,7 +735,7 @@ pub async fn parse_items<Reader: FileAccess>(path: Option<&str>, lang: &String) 
         let mut modify = ModifyUnitStats::default();
         let direction = MagicDirection::ToAll;
         let mut icon = None;
-        let mut magic = None;
+        let mut magic = MagicVariants::Any;
         let mut index: Option<u64> = None;
         let mut bonus = None;
         let itemtype_name = "";
@@ -742,18 +751,12 @@ pub async fn parse_items<Reader: FileAccess>(path: Option<&str>, lang: &String) 
                 }
                 "cost" => cost = handle_parse(value, &mut error_collector, "cost"),
                 "magic" => {
-                    magic = match_magic_variants(&mut error_collector, value.into());
-                    itemtype = match itemtype_name {
-                        "Staff" => Some(ArtifactType::Weapon(WeaponType::Magic(
-                            magic.expect("Item type is Stuff but no Magic field provided"),
-                        ))),
-                        _ => itemtype,
-                    };
+                    magic = match_magic_variants(value.into());
                 }
                 "type" => {
                     let itemtype_name = value;
                     itemtype = match value {
-                        "Staff" => ArtifactType::Weapon(WeaponType::Magic(MagicVariants::Any)),
+                        "Staff" => ArtifactType::Weapon(WeaponType::Magic),
                         "ShotWeapon" => ArtifactType::Weapon(WeaponType::Ranged),
                         "BlowWeapon" => ArtifactType::Weapon(WeaponType::Hand),
                         "Ring" => ArtifactType::Ring,
@@ -762,14 +765,14 @@ pub async fn parse_items<Reader: FileAccess>(path: Option<&str>, lang: &String) 
                         "Shield" => ArtifactType::Shield,
                         "Amulet" => ArtifactType::Amulet,
                         "Item" => ArtifactType::Item,
-                        "Potion" => ArtifactType::Amulet,
+                        "Potion" => ArtifactType::Potion,
                         _ => panic!("Wrong Item Type - {}!", value),
                     }
                     .into()
                 }
                 "d-hits" => {
                     modify.max_hp.add = add_opt(modify.max_hp.add, value.parse::<i64>().ok());
-                    modify.hp.add = add_opt(modify.hp.add, value.parse::<i64>().ok());
+                    //modify.hp.add = add_opt(modify.hp.add, value.parse::<i64>().ok());
                 }
                 "d-attackblow" => {
                     modify.damage.hand.add = add_opt(modify.damage.hand.add, value.parse().ok())
@@ -794,7 +797,7 @@ pub async fn parse_items<Reader: FileAccess>(path: Option<&str>, lang: &String) 
                 }
                 "d-manevres" => {
                     modify.max_moves.add = add_opt(modify.max_moves.add, value.parse().ok());
-                    modify.moves.add = add_opt(modify.moves.add, value.parse().ok());
+                    //modify.moves.add = add_opt(modify.moves.add, value.parse().ok());
                 }
                 "d-initiative" => modify.speed.add = add_opt(modify.speed.add, value.parse().ok()),
                 "d-vampirizm" => modify.vamp.add = add_opt(modify.vamp.add, value.parse().ok()),
@@ -921,6 +924,7 @@ pub async fn parse_items<Reader: FileAccess>(path: Option<&str>, lang: &String) 
                         0
                     }
                 },
+				magic_req: magic,
                 icon: icon.expect("No icon key").into(),
                 sells: cost.unwrap() > 0,
                 bonus,

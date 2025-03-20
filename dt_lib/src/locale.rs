@@ -95,7 +95,7 @@ pub fn find_all_matches_in_string(
         })
         .collect()
 }
-pub fn process_locale(locale: impl ToString, map_locale: &mut Locale) -> String {
+pub fn process_locale(locale: impl ToString, map_locale: &Locale) -> String {
     let mut locale = locale.to_string();
     let is_identifier = |ch: char| {
         ch.is_ascii_alphabetic() || ch.is_ascii_digit() || ch.is_rus_alphabet() || ch == '_'
@@ -134,7 +134,7 @@ pub async fn parse_locale<Reader: FileAccess>(languages: &[&String], locale: &mu
 pub fn parse_locale_doc(ini_doc: String, language: &String, locale: &mut Locale) {
     let props = advini::parse_for_props(&ini_doc);
     for (k, value) in props {
-        locale.insert(k, value, &language);
+		register_locale(k, value, language.clone(), locale);
     }
 }
 pub async fn parse_for_sections_localised<Reader: FileAccess>(

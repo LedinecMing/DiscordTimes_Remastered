@@ -79,7 +79,6 @@ impl Default for MoreMoves {
 impl EffectTrait for MoreMoves {
     fn update_stats(&mut self, unit: &mut Unit) {
         unit.modify.max_moves += *Modify::default().add(1);
-        unit.modify.moves += *Modify::default().add(1);
     }
     fn on_tick(&mut self, unit: &mut Unit) -> bool {
         self.info.lifetime -= 1;
@@ -87,7 +86,6 @@ impl EffectTrait for MoreMoves {
     }
     fn kill(&mut self, unit: &mut Unit) {
         unit.modify.max_moves -= *Modify::default().add(1);
-        unit.modify.moves -= *Modify::default().add(1);
     }
     fn is_dead(&self) -> bool {
         self.info.lifetime < 1
@@ -99,11 +97,13 @@ impl EffectTrait for MoreMoves {
 pub struct HealMagic {
     pub info: EffectInfo,
     pub magic_power: u64,
+	pub magic_type: MagicType
 }
 impl HealMagic {
-    pub fn new(magic_power: u64) -> Self {
+    pub fn new(magic_power: u64, magic_type: MagicType) -> Self {
         let mut magic = Self::default();
         magic.magic_power = magic_power;
+		magic.magic_type = magic_type;
         magic
     }
 }
@@ -112,6 +112,7 @@ impl Default for HealMagic {
         Self {
             info: EffectInfo { lifetime: 1 },
             magic_power: 15,
+			magic_type: MagicType::Life
         }
     }
 }
@@ -120,18 +121,29 @@ impl EffectTrait for HealMagic {
         let unitstats = unit.stats;
         let damage = unitstats.damage;
         let defence = unitstats.defence;
-        let damage_add = (self.magic_power / 5) as i64;
-        let defence_add = (self.magic_power / 10) as i64;
-
+		let magic = self.magic_power as i64;
+        let mut add_attack = (self.magic_power / 5) as i64;
+        let mut add_defence = (self.magic_power / 10) as i64;
+		match self.magic_type {
+			MagicType::Death => {
+				add_attack = 1 + magic / 6;
+				add_defence = magic / 12;
+			},
+			MagicType::Life => {
+				add_attack = magic / 8;
+				add_defence = 1 + magic / 4;
+			},
+			_ => {}
+		}
         if damage.hand > 0 {
-            unit.modify.damage.hand += *Modify::default().add(damage_add);
+            unit.modify.damage.hand += *Modify::default().add(add_attack);
         }
         if damage.ranged > 0 {
-            unit.modify.damage.ranged += *Modify::default().add(damage_add);
+            unit.modify.damage.ranged += *Modify::default().add(add_attack);
         }
 
-        unit.modify.defence.hand_units += *Modify::default().add(defence_add);
-        unit.modify.defence.ranged_units += *Modify::default().add(defence_add);
+        unit.modify.defence.hand_units += *Modify::default().add(add_defence);
+        unit.modify.defence.ranged_units += *Modify::default().add(add_defence);
     }
     fn on_tick(&mut self, unit: &mut Unit) -> bool {
         self.info.lifetime -= 1;
@@ -141,18 +153,29 @@ impl EffectTrait for HealMagic {
         let unitstats = unit.stats;
         let damage = unitstats.damage;
         let defence = unitstats.defence;
-        let damage_add = (self.magic_power / 5) as i64;
-        let defence_add = (self.magic_power / 10) as i64;
-
+        let magic = self.magic_power as i64;
+        let mut add_attack = (self.magic_power / 5) as i64;
+        let mut add_defence = (self.magic_power / 10) as i64;
+		match self.magic_type {
+			MagicType::Death => {
+				add_attack = 1 + magic / 6;
+				add_defence = magic / 12;
+			},
+			MagicType::Life => {
+				add_attack = magic / 8;
+				add_defence = 1 + magic / 4;
+			},
+			_ => {}
+		}
         if damage.hand > 0 {
-            unit.modify.damage.hand -= *Modify::default().add(damage_add);
+            unit.modify.damage.hand -= *Modify::default().add(add_attack);
         }
         if damage.ranged > 0 {
-            unit.modify.damage.ranged -= *Modify::default().add(damage_add);
+            unit.modify.damage.ranged -= *Modify::default().add(add_attack);
         }
 
-        unit.modify.defence.hand_units -= *Modify::default().add(defence_add);
-        unit.modify.defence.ranged_units -= *Modify::default().add(defence_add);
+        unit.modify.defence.hand_units -= *Modify::default().add(add_defence);
+        unit.modify.defence.ranged_units -= *Modify::default().add(add_defence);
     }
     fn is_dead(&self) -> bool {
         self.info.lifetime < 1
@@ -195,7 +218,7 @@ impl EffectTrait for DisableMagic {
 			100..256 => 3,
 			_ => 3 + (self.magic_power - 256) / 50 / 5
 		} as i64;
-        unit.modify.moves -= *Modify::default().add(add_moves);
+        unit.stats.moves -= add_moves;
         unit.modify.max_moves -= *Modify::default().add(add_moves);
     }
     fn on_tick(&mut self, unit: &mut Unit) -> bool {
@@ -220,7 +243,7 @@ impl EffectTrait for DisableMagic {
 			100..256 => 3,
 			_ => 3 + (self.magic_power - 256) / 50 / 5
 		} as i64;
-        unit.modify.moves += *Modify::default().add(add_moves);
+        unit.stats.moves += add_moves;
         unit.modify.max_moves += *Modify::default().add(add_moves);
     }
     fn get_kind(&self) -> EffectKind {
@@ -261,7 +284,7 @@ impl EffectTrait for ElementalSupport {
 			100..=255 => 3,
 			_ => self.magic_power as i64 / 64
 		};
-        unit.modify.moves += *Modify::default().add(add_moves);
+        unit.stats.moves += add_moves;
         unit.modify.max_moves += *Modify::default().add(add_moves);
     }
     fn on_tick(&mut self, unit: &mut Unit) -> bool {
@@ -283,7 +306,7 @@ impl EffectTrait for ElementalSupport {
 			100..=255 => 3,
 			_ => self.magic_power as i64 / 64
 		};
-        unit.modify.moves -= *Modify::default().add(add_moves);
+        unit.stats.moves -= add_moves;
         unit.modify.max_moves -= *Modify::default().add(add_moves);
     }
     fn is_dead(&self) -> bool {
@@ -322,20 +345,29 @@ impl EffectTrait for AttackMagic {
         let stats = unit.stats;
         let damage = stats.damage;
         let defence = stats.defence;
-        let damage_add = 1 + (self.magic_power / 10) as i64;
-        let defence_add = 1 + (self.magic_power / 5) as i64;
+		let magic = self.magic_power as i64;
+        let mut minus_attack = 1 + (magic / 10);
+        let mut minus_defence = 1 + (magic / 5);
+		match self.magic_type {
+			MagicType::Death => {
+				minus_defence = magic / 10;
+				minus_attack = 1 + magic / 5;
+			},
+			MagicType::Life => {
+				minus_defence = 1 + magic / 3;
+				minus_attack = magic / 10;
+			},
+			_ => {}
+		}
         if damage.hand > 0 {
-            unit.modify.damage.hand -= *Modify::default().add(damage_add);
+            unit.modify.damage.hand -= *Modify::default().add(minus_attack);
         }
         if damage.ranged > 0 {
-            unit.modify.damage.ranged -= *Modify::default().add(damage_add);
+            unit.modify.damage.ranged -= *Modify::default().add(minus_attack);
         }
-        if defence.hand_units > 0 {
-            unit.modify.defence.hand_units -= *Modify::default().add(defence_add);
-        }
-        if defence.ranged_units > 0 {
-            unit.modify.defence.ranged_units -= *Modify::default().add(defence_add);
-        }
+
+		unit.modify.defence.hand_units -= *Modify::default().add(minus_defence);
+        unit.modify.defence.ranged_units -= *Modify::default().add(minus_defence);
     }
     fn on_tick(&mut self, unit: &mut Unit) -> bool {
         self.info.lifetime -= 1;
@@ -349,20 +381,29 @@ impl EffectTrait for AttackMagic {
         let stats = unit.stats;
         let damage = stats.damage;
         let defence = stats.defence;
-        let damage_add = 1 + (self.magic_power / 10) as i64;
-        let defence_add = 1 + (self.magic_power / 5) as i64;
+		let magic = self.magic_power as i64;
+        let mut minus_attack = 1 + (magic / 10);
+        let mut minus_defence = 1 + (magic / 5);
+		match self.magic_type {
+			MagicType::Death => {
+				minus_defence = magic / 10;
+				minus_attack = 1 + magic / 5;
+			},
+			MagicType::Life => {
+				minus_defence = 1 + magic / 3;
+				minus_attack = magic / 10;
+			},
+			_ => {}
+		}
         if damage.hand > 0 {
-            unit.modify.damage.hand += *Modify::default().add(damage_add);
+            unit.modify.damage.hand += *Modify::default().add(minus_attack);
         }
         if damage.ranged > 0 {
-            unit.modify.damage.ranged += *Modify::default().add(damage_add);
+            unit.modify.damage.ranged += *Modify::default().add(minus_attack);
         }
-        if defence.hand_units > 0 {
-            unit.modify.defence.hand_units += *Modify::default().add(defence_add);
-        }
-        if defence.ranged_units > 0 {
-            unit.modify.defence.ranged_units += *Modify::default().add(defence_add);
-        }
+		
+        unit.modify.defence.hand_units += *Modify::default().add(minus_defence);
+        unit.modify.defence.ranged_units += *Modify::default().add(minus_defence);
     }
     fn is_dead(&self) -> bool {
         self.info.lifetime < 1
@@ -380,7 +421,7 @@ pub struct Poison {
 }
 impl EffectTrait for Poison {
     fn update_stats(&mut self, unit: &mut Unit) {
-        unit.stats.hp -= POISON_PERCENT.calc(unit.modified.max_hp);
+		
     }
     fn on_battle_end(&mut self) -> bool {
         self.info.lifetime = 0;
@@ -401,7 +442,7 @@ impl EffectTrait for Poison {
 impl Default for Poison {
     fn default() -> Self {
         Self {
-            info: EffectInfo { lifetime: -1 },
+            info: EffectInfo { lifetime: 1 },
         }
     }
 }
@@ -417,9 +458,6 @@ pub struct Fire {
 }
 impl EffectTrait for Fire {
     fn update_stats(&mut self, unit: &mut Unit) {
-		unit.stats.hp -= (FIRE_PERCENT + Percent::new(self.additional_power as i16 / 5))
-            .calc(unit.modified.max_hp)
-            * ((unit.info.unit_type == UnitType::Mecha) as i64 + 1);
         self.addition_speed =
             FIRE_SLOWNESS_PERCENT.calc(unit.modified.speed) + self.additional_power / 10;
 		unit.modify.speed -= *Modify::default().add(self.addition_speed);

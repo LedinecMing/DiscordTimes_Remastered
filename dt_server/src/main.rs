@@ -1,9 +1,11 @@
 mod hotel;
 
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{atomic::AtomicU16, RwLock};
 use std::fmt::Debug;
 use crate::hotel::*;
 use alkahest::{deserialize, serialize, serialize_to_vec, serialized_size, Formula};
+use axum::body::Bytes;
 use axum::{
     extract::{
         ws::{Message as AWsMessage, WebSocket, WebSocketUpgrade},
@@ -16,6 +18,8 @@ use futures::{
     future::{self, ready}, stream::{self, SplitSink, SplitStream}, SinkExt, StreamExt
 };
 use serde::{Deserialize, Serialize};
+use tokio::task::JoinSet;
+use tokio::time::{interval, sleep};
 use std::{
     cell::LazyCell, collections::HashSet, error::Error, net::SocketAddr, ops::Bound, sync::{Arc, LazyLock}, task::Context, time::Duration
 };
@@ -30,8 +34,11 @@ struct WsSocket {
     sink: SplitSink<WebSocket, AWsMessage>,
 }
 impl WsSocket {
-	async fn send(&mut self, message: AWsMessage) {
-		self.sink.send(message).await;
+	async fn send(&mut self, message: AWsMessage) -> Result<(), AError> {
+		self.sink.send(message).await
+	}
+	async fn req_one(&mut self) -> Option<Result<AWsMessage, AError>> {
+		self.stream.next().await
 	}
 }
 impl From<WebSocket> for WsSocket {
@@ -139,9 +146,11 @@ macro_rules! units_mut {
         &mut UNITS.write().unwrap()
     };
 }
+static PORT: AtomicU64 = AtomicU64::new(3000);
 async fn setup() -> State {
 	units_mut!().append(&mut parse_units::<StupidReader>(None).await.unwrap().0);
     let settings = parse_settings::<StupidReader>().await;
+	PORT.store(settings.port, Ordering::Relaxed);
     let _ = parse_items::<StupidReader>(None, &settings.locale).await;
     State {
         hotel: Arc::new(Mutex::new(Hotel::new())),
@@ -185,16 +194,7 @@ fn process_message(message: Result<AWsMessage, AError>, instance: &mut RoomInsta
 				return Err(InstanceError::Str("pashalka"));
 			}
 			let army = pos.army;
-			let send = if let Some(troop) = instance.armies[army].get_troop(pos.pos) {
-				let unit = &mut troop.get().unit;
-				if let Some(item_id) = item_id {
-					unit.swap_item(index, Some(Item { index: item_id }));
-					unit.restore();
-					true
-				} else { false }
-			} else {
-				false
-			};
+			let send = instance.armies[army].set_item_unit_at(item_id, pos, index);
 			if send {
 				Ok(serialize_gamemap(&instance.armies, &instance.battle))
 			} else  { Err(InstanceError::Str("pashalka")) }
@@ -202,25 +202,10 @@ fn process_message(message: Result<AWsMessage, AError>, instance: &mut RoomInsta
 		Ok(Incoming::SetUnit((pos, unit_id))) => {
 			let army = pos.army;
 			let RoomInstance { armies, battle, .. } = instance;
-			let pos: usize = pos.pos;
-			let index = armies[army].hitmap[pos];
 			if instance.acceptance == [true, true] {
 				return Err(InstanceError::Str("pashalka"));
 			}
-			if let Some(index) = index {
-				armies[army].troops.remove(index);
-			}
-			if let Some(unit_id) = unit_id {
-				let new_unit = units!().get(unit_id).cloned();
-				let Some(mut new_unit) = new_unit else { return Err(InstanceError::Str("fuck")) };
-				new_unit.restore();
-				let mut new_troop = Troop::new(new_unit);
-				new_troop.pos = UnitPos::from_index(pos);
-				armies[army].troops.push(new_troop.into());
-			} else {
-				
-			}
-			armies[army].recalc_army_hitmap();
+			armies[army].set_unit_at(unit_id, pos);
 			Ok(serialize_gamemap(&armies, &battle))
 		},
 		Ok(Incoming::Status(status)) => {
@@ -260,16 +245,46 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Start the server
     let app = Router::new()
         .route("/ws", axum::routing::any(ws_handler))
-        .with_state(hotel);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
+        .with_state(Arc::clone(&hotel));
+	let port= dbg!(PORT.load(Ordering::Acquire));
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     let server = tokio::spawn(async {
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .await
-        .unwrap();
+			.await
+			.unwrap();
     });
+	let hotel: Arc<_> = Arc::clone(&hotel);
+	tokio::spawn(async move {
+		loop {
+			sleep(Duration::from_secs(5)).await;
+			let mut hotel = hotel.lock().await;
+			let values = hotel.0.iter_mut();
+			let mut futures = unicycle::FuturesUnordered::new();
+			for (key, value) in values {
+				futures.push( async move {
+					(key.clone(), match value {
+						Some((Some(ws), None)) => {
+							let sent = ws.send(AWsMessage::Ping(Bytes::new())).await;
+							sent.is_err() || ws.req_one().await.is_none_or(|x| x.is_err())
+						},
+						_ => { false }
+					})
+				});
+			}
+			let to_remove: Vec<_> = futures.filter_map(|x| async move {
+				x.1.then(|| x.0)
+			}).collect().await;
+			if to_remove.len() > 0 {
+				println!("Removed dead rooms: {}", &to_remove.join(" ||| "));
+			}
+			for key in to_remove {
+				hotel.0.remove(&key);
+			}
+		}
+	});
     server.await.unwrap();
     Ok(())
 }
@@ -301,19 +316,25 @@ async fn handle_socket(
 		if let Some(Some((Some(sock), None))) = hotel.lock().await.0.get_mut(&room_code) {
 			dbg!("Second player");
 			socket.send(AWsMessage::Text("Room full".into())).await.expect("Wtf?");
-			sock.send(AWsMessage::Text("Room full".into())).await;
-			let mut buf = vec![];
-			serialize_to_vec::<Outcoming, Outcoming>(Outcoming::Id(1), &mut buf);
-			socket.send(AWsMessage::Binary(buf.into())).await;
+			if sock.send(AWsMessage::Text("Room full".into())).await.is_ok() {
+				let mut buf = vec![];
+				serialize_to_vec::<Outcoming, Outcoming>(Outcoming::Id(1), &mut buf);
+				socket.send(AWsMessage::Binary(buf.into())).await;
+			} else {
+				return;
+			}
 		} else {
 			dbg!("First player");
 			let mut buf = vec![];
 			serialize_to_vec::<Outcoming, Outcoming>(Outcoming::Id(0), &mut buf);
-			socket.send(AWsMessage::Binary(buf.into())).await;
-			socket.send(AWsMessage::Text("Wait for another player".into())).await.expect("Wtf?");
+			if socket.send(AWsMessage::Binary(buf.into())).await.is_ok() {
+				socket.send(AWsMessage::Text("Wait for another player".into())).await.expect("Wtf?");
+			} else {
+				return;
+			}
 		}
 	}
-	dbg!("Creating room");
+	println!("Creating room {}", room_code);
     let mut room = {
         let mut hotel = hotel.lock().await;
         match hotel.put_socket(room_code.clone(), socket).await {
@@ -333,7 +354,7 @@ async fn handle_socket(
 		room.0.send(buf.clone()).await;
 		room.1.send(buf).await;
 	}
-	dbg!("Room established");
+	println!("Room established {}", &room_code);
     fn stream_with_id<T: Debug, E: Debug>(
         stream: impl StreamExt<Item = Result<T, E>>,
         id: usize,

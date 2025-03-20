@@ -381,21 +381,21 @@ impl<T: Ini> Ini for Vec<T> {
 pub type Section = HashMap<String, String>;
 pub type SectionError = &'static str;
 
-pub fn parse_for_props(ini_doc: &str) -> HashMap<String, String> {
-    let mut props: HashMap<String, String> = HashMap::new();
+pub fn parse_for_props(ini_doc: &str) -> Vec<(String, String)> {
+    let mut props: Vec<(String, String)> = Vec::new();
     let parser = Parser::new(ini_doc).auto_trim(true);
     let mut last_prop = "".to_string();
     for item in parser {
         match item {
             Item::Section(_) => {}
             Item::Property(k, v) => {
-                props.insert(k.to_lowercase().into(), v.into());
+                props.push((k.to_lowercase().into(), v.into()));
                 last_prop = k.into();
             }
             Item::Blank | Item::Comment(_) => {}
             Item::Action(v) => {
-                if let Some(old) = props.get_mut(&last_prop) {
-                    old.push_str(v);
+                if let Some(old) = props.last_mut() {
+                    old.1.push_str(v);
                 };
             }
             Item::Error(err) => panic!("{}", err),

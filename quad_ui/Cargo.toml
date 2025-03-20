@@ -17,7 +17,7 @@ icon = "@mipmap/ic_launcher"
 assets = "../dt/android_pack/"
 build_targets = [ "armv7-linux-androideabi", "aarch64-linux-android", "i686-linux-android", "x86_64-linux-android" ]
 # package_name = "ledinecming.dt_remastered"
-
+fullscreen = true
 label = "Discord Times PVP"
 [package.metadata.android.activity_attributes]
 "android:exported" = "true"

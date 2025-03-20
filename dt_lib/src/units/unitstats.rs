@@ -1,10 +1,12 @@
-use super::unit::{Defence, Power, UnitStats};
+use crate::{locale::process_locale, parse::LOCALE};
+
+use super::unit::{Defence, MagicType, Power, UnitStats};
 use alkahest::alkahest;
 use derive_more::{Add, AddAssign, Sub, SubAssign};
 use math_thingies::{add_opt, sub_opt, Percent};
 use num::{Num, NumCast, Zero};
 use std::{
-    fmt::Debug,
+    fmt::{Debug, Display},
     ops::{Add, AddAssign, Neg, Sub, SubAssign},
 };
 
@@ -14,21 +16,18 @@ pub struct Modify<V: Num + NumCast> {
     pub set: Option<V>,
     pub add: Option<V>,
     pub percent_add: Option<Percent>,
-    pub percent_set: Option<Percent>,
 }
 impl<K: Num + NumCast + Add<Percent, Output = K> + Copy> Modify<K> {
     pub fn apply<V: Num + NumCast + Add<Percent, Output = V> + Ord + Copy>(&self, v: V) -> V {
-        let mut v: K = <K as NumCast>::from(v).unwrap() + self.add.unwrap_or(K::zero());
-        if let Some(percent_add) = &self.percent_add {
-            v = v + *percent_add;
-        }
-        if let Some(percent_set) = &self.percent_set {
-            v = percent_set.calc(v);
-        }
-        if let Some(set) = &self.set {
+		let mut v = <K as NumCast>::from(v).unwrap();
+		if let Some(set) = &self.set {
             if !set.is_zero() {
                 v = *set;
             }
+        }
+        let mut v: K = v + self.add.unwrap_or(K::zero());
+        if let Some(percent_add) = &self.percent_add {
+            v = v + *percent_add;
         }
         NumCast::from(v).unwrap_or(<V as Zero>::zero()).max(<V as Zero>::zero())
     }
@@ -44,19 +43,37 @@ impl<K: Num + NumCast + Add<Percent, Output = K> + Copy> Modify<K> {
         self.percent_add = v.into();
         self
     }
-    pub fn percent_set(&mut self, v: impl Into<Option<Percent>>) -> &mut Self {
-        self.percent_set = v.into();
-        self
-    }
+}
+impl<V: Num + NumCast + Copy + Display + PartialOrd> Display for Modify<V> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let mut stats = vec![];
+		if let Some(add) = self.add {
+			let sign = if add >= V::zero() {
+				"+"
+			} else { "-" };
+			stats.push(format!("{sign}{add}"));
+		}
+		if let Some(add) = self.percent_add {
+			let r = add.get();
+			let sign = if add >= 0 {
+				"+"
+			} else { "-" };
+			stats.push(format!("{sign}{}%", add.get()));
+		}
+		if let Some(add) = self.set {
+			stats.push(format!("={}", add));
+		}
+		f.write_str(&stats.join("/"));
+		std::fmt::Result::Ok(())
+	}
 }
 impl<V: Num + NumCast + Copy> Add<Modify<V>> for Modify<V> {
     type Output = Self;
     fn add(self, _rhs: Self) -> Self::Output {
         Self {
-            set: add_opt(self.set, _rhs.set),
+            set: _rhs.set,
             add: add_opt(self.add, _rhs.add),
             percent_add: add_opt(self.percent_add, _rhs.percent_add),
-            percent_set: add_opt(self.percent_set, _rhs.percent_set),
         }
     }
 }
@@ -64,27 +81,24 @@ impl<V: Num + NumCast + Copy + Neg<Output = V>> Sub<Modify<V>> for Modify<V> {
     type Output = Self;
     fn sub(self, _rhs: Self) -> Self::Output {
         Self {
-            set: sub_opt(self.set, _rhs.set),
+            set: Some(V::zero()),
             add: sub_opt(self.add, _rhs.add),
             percent_add: sub_opt(self.percent_add, _rhs.percent_add),
-            percent_set: sub_opt(self.percent_set, _rhs.percent_set),
         }
     }
 }
 impl<V: Num + NumCast + Copy> AddAssign<Modify<V>> for Modify<V> {
     fn add_assign(&mut self, _rhs: Self) {
-        self.set = add_opt(self.set, _rhs.set);
+        self.set = _rhs.set;
         self.add = add_opt(self.add, _rhs.add);
         self.percent_add = add_opt(self.percent_add, _rhs.percent_add);
-        self.percent_set = add_opt(self.percent_set, _rhs.percent_set);
     }
 }
 impl<V: Num + NumCast + Copy + Neg<Output = V>> SubAssign<Modify<V>> for Modify<V> {
     fn sub_assign(&mut self, _rhs: Self) {
-        self.set = sub_opt(self.set, _rhs.set);
+        self.set = Some(V::zero());
         self.add = sub_opt(self.add, _rhs.add);
         self.percent_add = sub_opt(self.percent_add, _rhs.percent_add);
-        self.percent_set = sub_opt(self.percent_set, _rhs.percent_set);
     }
 }
 impl<V: Num + NumCast> Default for Modify<V> {
@@ -93,7 +107,6 @@ impl<V: Num + NumCast> Default for Modify<V> {
             set: None,
             add: None,
             percent_add: None,
-            percent_set: None,
         }
     }
 }
@@ -119,7 +132,7 @@ impl ModifyDefence {
         n_defence.hand_percent = self.hand_percent.apply(defence.hand_percent);
         n_defence.ranged_percent = self.ranged_percent.apply(defence.ranged_percent);
         n_defence.magic_units = self.magic_units.apply(defence.magic_units);
-        n_defence.ranged_units = self.magic_units.apply(defence.ranged_units);
+        n_defence.ranged_units = self.ranged_units.apply(defence.ranged_units);
         n_defence.hand_units = self.hand_units.apply(defence.hand_units);
         n_defence
     }
@@ -156,11 +169,24 @@ impl Default for ModifyPower {
     }
 }
 impl ModifyPower {
-    pub fn apply(&self, power: &Power) -> Power {
+    pub fn apply(&self, power: &Power, magic_type: Option<MagicType>) -> Power {
         let mut n_power = Power::empty();
-        n_power.magic = self.magic.apply(power.magic);
-        n_power.ranged = self.ranged.apply(power.ranged);
-        n_power.hand = self.hand.apply(power.hand);
+		let expected_min = match magic_type {
+			Some(MagicType::Death) => 25,
+			Some(_) => 15,
+			_ => 0
+
+		};
+		let min = if power.magic >= expected_min {
+			expected_min
+		} else { power.magic };
+        n_power.magic = self.magic.apply(power.magic).max(min);
+		if power.ranged > 0 {
+			n_power.ranged = self.ranged.apply(power.ranged);
+		}
+		if power.hand > 0 {
+			n_power.hand = self.hand.apply(power.hand);
+		}
         n_power
     }
 }
@@ -168,24 +194,71 @@ impl ModifyPower {
 #[derive(Copy, Clone, Debug, Add, Sub, AddAssign, SubAssign)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ModifyUnitStats {
-    pub hp: Modify<i64>,
     pub max_hp: Modify<i64>,
     pub damage: ModifyPower,
     pub defence: ModifyDefence,
-    pub moves: Modify<i64>,
     pub max_moves: Modify<i64>,
     pub speed: Modify<i64>,
     pub vamp: Modify<i16>,
     pub regen: Modify<i16>,
 }
 impl ModifyUnitStats {
-    pub fn apply(&self, stats: &UnitStats) -> UnitStats {
+	pub fn display_string(&self) -> Vec<String> {
+		let locale = LOCALE.read().unwrap();
+		let mut strings = vec![];
+		if self.max_hp != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_hp"), self.max_hp.to_string()));
+		}
+		
+		if self.damage.hand != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_attack_hand"), self.damage.hand.to_string()));
+		}
+		if self.damage.ranged != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_attack_ranged"), self.damage.ranged.to_string()));
+		}
+		if self.damage.magic != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_attack_magic"), self.damage.magic.to_string()));
+		}
+		
+		if self.defence.hand_units != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_defence_hand"), self.defence.hand_units.to_string()));
+		}
+		if self.defence.ranged_units != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_defence_ranged"), self.defence.ranged_units.to_string()));
+		}
+		if self.defence.magic_units != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_defence_magic"), self.defence.magic_units.to_string()));
+		}
+		if self.defence.death_magic != Modify::default() {
+			strings.push(format!("{}: {}", process_locale("$unitstats_defence_magic_death", &locale), self.defence.death_magic.to_string()));
+		}
+		if self.defence.life_magic != Modify::default() {
+			strings.push(format!("{}: {}", process_locale("$unitstats_defence_magic_life", &locale), self.defence.life_magic.to_string()));
+		}
+		if self.defence.elemental_magic != Modify::default() {
+			strings.push(format!("{}: {}", process_locale("$unitstats_defence_magic_elemental", &locale), self.defence.elemental_magic.to_string()));
+		}
+		if self.max_moves != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_moves"), self.max_moves.to_string()));
+		}
+		if self.speed != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_speed"), self.speed.to_string()));
+		}
+		if self.vamp != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_vamp"), self.vamp.to_string()));
+		}
+		if self.regen != Modify::default() {
+			strings.push(format!("{}: {}", locale.get("unitstats_regen"), self.regen.to_string()));
+		}
+		strings
+	}
+    pub fn apply(&self, stats: &UnitStats, magic_type: Option<MagicType>) -> UnitStats {
         let mut n_stats = UnitStats::empty();
-        n_stats.hp = self.hp.apply(stats.hp);
+        //n_stats.hp = self.hp.apply(stats.hp)
         n_stats.max_hp = self.max_hp.apply(stats.max_hp);
-        n_stats.damage = self.damage.apply(&stats.damage);
+        n_stats.damage = self.damage.apply(&stats.damage, magic_type);
         n_stats.defence = self.defence.apply(&stats.defence);
-        n_stats.moves = self.moves.apply(stats.moves);
+        //n_stats.moves = self.moves.apply(stats.moves);
         n_stats.max_moves = self.max_moves.apply(stats.max_moves);
         n_stats.speed = self.speed.apply(stats.speed);
         n_stats.vamp = self.vamp.apply(stats.vamp);
@@ -197,11 +270,9 @@ impl ModifyUnitStats {
 impl Default for ModifyUnitStats {
     fn default() -> Self {
         Self {
-            hp: Modify::default(),
             max_hp: Modify::default(),
             damage: ModifyPower::default(),
             defence: ModifyDefence::default(),
-            moves: Modify::default(),
             max_moves: Modify::default(),
             speed: Modify::default(),
             vamp: Modify::default(),

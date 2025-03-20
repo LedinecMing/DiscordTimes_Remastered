@@ -1,3 +1,6 @@
+use crate::effects::{self, EffectInfo};
+use crate::parse::LOCALE;
+use crate::units::unit::UnitType;
 use crate::units::unitstats::ModifyUnitStats;
 
 use crate::{
@@ -24,12 +27,13 @@ pub enum ArtifactType {
     Ring,
     Amulet,
     Item,
+	Potion
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum WeaponType {
     Hand,
     Ranged,
-    Magic(MagicVariants),
+    Magic,
 }
 #[derive(Clone, Debug)]
 pub struct ItemInfo {
@@ -39,14 +43,24 @@ pub struct ItemInfo {
     pub icon: String,
     pub sells: bool,
     pub itemtype: ArtifactType,
+	pub magic_req: MagicVariants,
     pub bonus: Option<Bonus>,
     pub modify: ModifyUnitStats,
 }
 impl ItemInfo {
 	pub fn can_equip(&self, unit: &Unit) -> bool {
 		let info = self;
+		if unit.info.unit_type == UnitType::Mecha {
+			return false;
+		}
+		if !magic_relates(unit.info.magic_info.and_then(|x| Some(x.0)), self.magic_req) {
+			return false;
+		}
         match &info.itemtype {
             ArtifactType::Item => false,
+			ArtifactType::Potion => {
+				true
+			},
             ArtifactType::Amulet
             | ArtifactType::Armor
             | ArtifactType::Shield
@@ -64,8 +78,8 @@ impl ItemInfo {
                 (match weapon_type {
                     WeaponType::Hand => damage.hand > 0,
                     WeaponType::Ranged => damage.ranged > 0,
-                    WeaponType::Magic(magic_dir) => {
-                        damage.magic > 0 && magic_relates(unit.info.magic_info.and_then(|x| Some(x.0)), magic_dir.clone())
+                    WeaponType::Magic => {
+                        damage.magic > 0
                     }
                 }) && {
                     unit.inventory
@@ -88,6 +102,23 @@ impl ItemInfo {
             }
         }
     }
+	pub fn display_strings(&self) -> Vec<String> {
+		let locale = LOCALE.read().unwrap();
+		let mut strings = vec![];
+		strings.push(self.name.clone());
+		strings.push(self.description.clone());
+		strings.push(format!("{:?}", self.itemtype));
+		strings.push(format!("Sells: {}", self.sells));
+		strings.push(format!("Magic: {:?}", self.magic_req));
+		strings.append(&mut self.modify.display_string());
+		strings.push(format!("Cost: {}", self.cost));
+		if let Some(bonus) = self.bonus {
+			let (name, desc) = bonus.locale_id();
+			strings.push(locale.get(name));
+			strings.push(locale.get(desc));
+		}
+		strings
+	}
 }
 pub static ITEMS: Lazy<RwLock<Vec<ItemInfo>>> = Lazy::new(|| RwLock::new(Vec::new()));
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,7 +146,7 @@ impl Item {
         info.can_equip(unit)
     }
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MagicVariants {
     Any,
     Death,

@@ -81,7 +81,7 @@ impl Bonus {
             | Self::DeadDodging
             | Self::Dodging
             | Self::Garrison => {
-                let percent_70 = Percent::new(70);
+                let percent_70 = Percent::new(66);
                 Power {
                     magic: percent_70.calc(damage.magic),
                     ranged: percent_70.calc(damage.ranged),
@@ -94,11 +94,11 @@ impl Bonus {
                 magic: damage.magic,
             },
             Self::Ghost => {
-                let mut corrected_damage_units = damage.magic + damage.ranged + damage.hand;
+                let mut corrected_damage_units = damage.magic + damage.ranged.min(1) + damage.hand.min(1);
                 if corrected_damage_units == 0 {
                     corrected_damage_units = 1;
                 }
-                if (receiver.modified.hp - corrected_damage_units as i64) < 1 {
+                if (receiver.stats.hp - corrected_damage_units as i64) < 1 {
                     if sender.modified.defence.death_magic.get()
                         <= 30 * (sender.modified.max_moves as i16)
                     {
@@ -107,7 +107,8 @@ impl Bonus {
                 }
                 Power {
                     magic: damage.magic,
-                    ..Power::empty()
+                    ranged: damage.ranged.min(1),
+					hand: damage.hand.min(1)
                 }
             }
             Self::DeathCurse => {
@@ -316,7 +317,7 @@ impl Bonus {
             Self::Counterblow => ("bonus_counterblow", "bonus_counterblow_desc"),
             Self::DeadDodging => ("bonus_deaddodging", "bonus_deaddodging_desc"),
             Self::DeadRessurect => ("bonus_deadressurect", "bonus_deadressurect_desc"),
-            Self::DeathCurse => ("bonus_deathcurse", "bonus_deathcurse"),
+            Self::DeathCurse => ("bonus_deathcurse", "bonus_deathcurse_desc"),
             Self::DefencePiercing => ("bonus_defencepiercing", "bonus_defencepiercing_desc"),
             Self::Dodging => ("bonus_dodging", "bonus_dodging_desc"),
             Self::Fast => ("bonus_fastgoing", "bonus_fastgoing_desc"),
@@ -326,8 +327,8 @@ impl Bonus {
             Self::Ghost => ("bonus_ghost", "bonus_ghost_desc"),
             Self::GodAnger => ("bonus_godanger", "bonus_godanger_desc"),
             Self::GodStrike => ("bonus_godstrike", "bonus_godstrike_desc"),
-            Self::Invulnerable => ("bonus_invulrenable", "bonus_invulrenable_desc"),
-            Self::ManyTargets => ("bonus_manytargets", "bonus_manytargets"),
+            Self::Invulnerable => ("bonus_invulnerable", "bonus_invulnerable_desc"),
+            Self::ManyTargets => ("bonus_manytargets", "bonus_manytargets_desc"),
             Self::Merchant => ("bonus_merchant", "bonus_merchant"),
             Self::PoisonAttack => ("bonus_poison", "bonus_poison_desc"),
 			Self::Stealth => ("bonus_stealth", "bonus_stealth_desc"),
@@ -386,9 +387,6 @@ impl From<&str> for Bonus {
 				Self::NoBonus
 			}
         };
-		if value.contains("Flank") {
-			dbg!(value, bonus);
-		}
 		bonus
     }
 }

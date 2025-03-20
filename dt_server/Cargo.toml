@@ -19,3 +19,4 @@ tokio = { version = "*", features = ["full"] }
 tokio-stream = "0.1.16"
 tokio-tungstenite = "0.24.0"
 alkahest = { git = "https://github.com/zakarumych/alkahest.git", rev = "99a5b68", features=["derive"] }
+unicycle = "0.10.2"
