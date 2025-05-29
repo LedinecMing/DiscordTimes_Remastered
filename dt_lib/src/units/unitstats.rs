@@ -111,7 +111,7 @@ impl<V: Num + NumCast> Default for Modify<V> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Add, Sub, AddAssign, SubAssign)]
+#[derive(Copy, Clone, Debug, Add, Sub, AddAssign, SubAssign, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ModifyDefence {
     pub death_magic: Modify<i16>,
@@ -152,7 +152,7 @@ impl Default for ModifyDefence {
     }
 }
 
-#[derive(Copy, Clone, Debug, Add, Sub, AddAssign, SubAssign)]
+#[derive(Copy, Clone, Debug, Add, Sub, AddAssign, SubAssign, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ModifyPower {
     pub magic: Modify<i64>,
@@ -191,7 +191,7 @@ impl ModifyPower {
     }
 }
 
-#[derive(Copy, Clone, Debug, Add, Sub, AddAssign, SubAssign)]
+#[derive(Copy, Clone, Debug, Add, Sub, AddAssign, SubAssign, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ModifyUnitStats {
     pub max_hp: Modify<i64>,

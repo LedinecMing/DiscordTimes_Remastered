@@ -17,7 +17,7 @@ pub enum ObjectType {
     MapDeco,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ObjectInfo {
     pub name: String,
     pub path: String,
@@ -27,7 +27,7 @@ pub struct ObjectInfo {
     pub size: (u8, u8),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Village {
     pub max_gold: u64,
@@ -43,7 +43,7 @@ impl Ini for Village {
         [self.max_gold.vomit(), self.max_mana.vomit()].join(",")
     }
 }
-#[derive(Clone, Debug, Ini)]
+#[derive(Clone, Debug, Ini, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum BuildingVariant {
     Town,
@@ -61,7 +61,7 @@ pub enum BuildingVariant {
     StoneBridge,
     WoodenBridge,
 }
-#[derive(Clone, Debug, Sections)]
+#[derive(Clone, Debug, Sections, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct MapBuildingdata {
     pub name: String,
@@ -104,7 +104,7 @@ pub struct MapBuildingdata {
     pub group: usize,
 }
 const RECRUIT_COST: f64 = 2.0;
-#[derive(Clone, Debug, Sections)]
+#[derive(Clone, Debug, Sections, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Market {
     pub itemcost_range: (u64, u64),
@@ -157,7 +157,7 @@ impl Market {
         self.items[item_num].get_info().cost
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct RecruitUnit {
     pub unit: usize,
@@ -178,7 +178,7 @@ impl RecruitUnit {
         Self { unit, count }
     }
 }
-#[derive(Clone, Debug, Sections)]
+#[derive(Clone, Debug, PartialEq, Sections)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Recruitment {
     pub units: Vec<RecruitUnit>,

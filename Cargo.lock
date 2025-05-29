@@ -591,24 +591,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "audir-sles"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea47348666a8edb7ad80cbee3940eb2bccf70df0e6ce09009abe1a836cb779f5"
-
-[[package]]
-name = "audrey"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58b92a84e89497e3cd25d3672cd5d1c288abaac02c18ff21283f17d118b889b8"
-dependencies = [
- "dasp_frame",
- "dasp_sample",
- "hound",
- "lewton",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1353,21 +1335,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dasp_frame"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a3937f5fe2135702897535c8d4a5553f8b116f76c1529088797f2eee7c5cd6"
-dependencies = [
- "dasp_sample",
-]
-
-[[package]]
-name = "dasp_sample"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
-
-[[package]]
 name = "data-encoding"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1581,6 +1548,7 @@ dependencies = [
  "struct-field-names-as-array",
  "sysinfo",
  "thiserror 2.0.12",
+ "tokio",
  "tracing-mutex",
  "winreg",
  "zerocopy 0.8.23",
@@ -2243,9 +2211,6 @@ name = "glam"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e05e7e6723e3455f4818c7b26e855439f7546cf617ef669d1adedb8669e5cb9"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "glow"
@@ -2515,12 +2480,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hound"
-version = "3.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
-
-[[package]]
 name = "http"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2581,7 +2540,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "smallvec 1.14.0",
+ "smallvec",
  "tokio",
 ]
 
@@ -2668,7 +2627,7 @@ dependencies = [
  "icu_normalizer_data",
  "icu_properties",
  "icu_provider",
- "smallvec 1.14.0",
+ "smallvec",
  "utf16_iter",
  "utf8_iter",
  "write16",
@@ -2743,7 +2702,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "686f825264d630750a544639377bae737628043f20d38bbc029e8f29ea968a7e"
 dependencies = [
  "idna_adapter",
- "smallvec 1.14.0",
+ "smallvec",
  "utf8_iter",
 ]
 
@@ -2931,17 +2890,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
-name = "lewton"
-version = "0.9.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d542c1a317036c45c2aa1cf10cc9d403ca91eb2d333ef1a4917e5cb10628bd0"
-dependencies = [
- "byteorder",
- "ogg",
- "smallvec 0.6.14",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.171"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3091,68 +3039,15 @@ dependencies = [
 [[package]]
 name = "macroquad"
 version = "0.4.13"
-dependencies = [
- "backtrace",
- "fontdue",
- "glam 0.27.0",
- "image",
- "log",
- "macroquad-particles",
- "macroquad-platformer",
- "macroquad-profiler",
- "macroquad-tiled",
- "macroquad_macro 0.1.8",
- "miniquad",
- "quad-rand",
- "quad-snd",
-]
-
-[[package]]
-name = "macroquad"
-version = "0.4.13"
 source = "git+https://github.com/not-fl3/macroquad.git#e314bb32bf8fe95443f26d1519107402cfae0f8a"
 dependencies = [
  "fontdue",
  "glam 0.27.0",
  "image",
- "macroquad_macro 0.1.8 (git+https://github.com/not-fl3/macroquad.git)",
+ "macroquad_macro",
  "miniquad",
  "quad-rand",
 ]
-
-[[package]]
-name = "macroquad-particles"
-version = "0.2.2"
-dependencies = [
- "macroquad 0.4.13",
- "nanoserde",
-]
-
-[[package]]
-name = "macroquad-platformer"
-version = "0.2.0"
-dependencies = [
- "macroquad 0.4.13",
-]
-
-[[package]]
-name = "macroquad-profiler"
-version = "0.2.0"
-dependencies = [
- "macroquad 0.4.13",
-]
-
-[[package]]
-name = "macroquad-tiled"
-version = "0.2.1"
-dependencies = [
- "macroquad 0.4.13",
- "nanoserde",
-]
-
-[[package]]
-name = "macroquad_macro"
-version = "0.1.8"
 
 [[package]]
 name = "macroquad_macro"
@@ -3193,12 +3088,6 @@ dependencies = [
  "boolinator",
  "num",
 ]
-
-[[package]]
-name = "maybe-uninit"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
 
 [[package]]
 name = "memchr"
@@ -3307,21 +3196,6 @@ dependencies = [
  "wasi 0.11.0+wasi-snapshot-preview1",
  "windows-sys 0.52.0",
 ]
-
-[[package]]
-name = "nanoserde"
-version = "0.1.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5de9cf844ab1e25a0353525bd74cb889843a6215fa4a0d156fd446f4857a1b99"
-dependencies = [
- "nanoserde-derive",
-]
-
-[[package]]
-name = "nanoserde-derive"
-version = "0.1.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e943b2c21337b7e3ec6678500687cdc741b7639ad457f234693352075c082204"
 
 [[package]]
 name = "ndk"
@@ -4010,15 +3884,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a74f2cda724d43a0a63140af89836d4e7db6138ef67c9f96d3a0f0150d05000"
 
 [[package]]
-name = "ogg"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13e571c3517af9e1729d4c63571a27edd660ade0667973bfc74a67c660c2b651"
-dependencies = [
- "byteorder",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4092,7 +3957,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "redox_syscall 0.5.10",
- "smallvec 1.14.0",
+ "smallvec",
  "windows-targets 0.52.6",
 ]
 
@@ -4273,32 +4138,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "quad-alsa-sys"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c66c2f04a6946293477973d85adc251d502da51c57b08cd9c997f0cfd8dcd4b5"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "quad-rand"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a651516ddc9168ebd67b24afd085a718be02f8858fe406591b013d101ce2f40"
-
-[[package]]
-name = "quad-snd"
-version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cba0c4943fc67147fbe9d1eb731fb9e678bfc9d926507eebbbfe0103e154e5b0"
-dependencies = [
- "audir-sles",
- "audrey",
- "libc",
- "quad-alsa-sys",
- "winapi",
-]
 
 [[package]]
 name = "quad_ui"
@@ -4308,7 +4151,7 @@ dependencies = [
  "dt_client",
  "dt_lib",
  "futures-util",
- "macroquad 0.4.13 (git+https://github.com/not-fl3/macroquad.git)",
+ "macroquad",
  "once_cell",
  "tokio",
 ]
@@ -4766,15 +4609,6 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "0.6.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b97fcaeba89edba30f044a10c6a3cc39df9c3f17d7cd829dd1446cab35f890e0"
-dependencies = [
- "maybe-uninit",
-]
-
-[[package]]
-name = "smallvec"
 version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fcf8323ef1faaee30a44a340193b1ac6814fd9b7b4e88e9d4519a3e4abe1cfd"
@@ -5132,9 +4966,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.44.0"
+version = "1.44.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9975ea0f48b5aa3972bf2d888c238182458437cc2a19374b81b25cdf1023fb3a"
+checksum = "e6b88822cbe49de4185e3a4cbf8321dd487cf5fe0c5c65695fef6346371e9c48"
 dependencies = [
  "backtrace",
  "bytes",
@@ -5563,7 +5397,7 @@ dependencies = [
  "downcast-rs",
  "rustix 0.38.44",
  "scoped-tls",
- "smallvec 1.14.0",
+ "smallvec",
  "wayland-sys 0.31.6",
 ]
 
@@ -5603,7 +5437,7 @@ checksum = "8691f134d584a33a6606d9d717b95c4fa20065605f798a3f350d78dced02a902"
 dependencies = [
  "nix 0.24.3",
  "once_cell",
- "smallvec 1.14.0",
+ "smallvec",
  "wayland-sys 0.29.5",
 ]
 

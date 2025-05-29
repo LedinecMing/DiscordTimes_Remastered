@@ -3,7 +3,7 @@ use ahash::RandomState;
 use dt_lib::{
     battle::{army::*, battlefield::*, troop::Troop}, effects::*, hwid, items::item::*, locale::{find_all_matches_in_string, parse_locale, Locale}, map::{
         convert::{convert_dtm_map, parse_dtm_map, parse_dtm_map_by_bytes, parse_dtm_vec}, event::{execute_event, Event as GameEvent, Execute}, map::*, object::ObjectInfo, tile::*
-    }, network::GameServer, parse::{collect_errors, parse_items, parse_objects, parse_settings, parse_story, parse_units, FileAccess, SETTINGS}, time::time::Data as TimeData, units::{
+    }, network::{server::Executor, GameServer}, parse::{collect_errors, parse_items, parse_objects, parse_settings, parse_story, parse_units, FileAccess, SETTINGS}, time::time::Data as TimeData, units::{
         unit::{calclate_unit_power, display_unit, ActionResult, Unit, UnitPos},
         unitstats::ModifyUnitStats,
     }
@@ -81,6 +81,7 @@ macro_rules! objects_mut {
 struct State {
     pub assets: Assets,
     pub game: Game,
+	pub game_local: Option<Executor>,
     pub ui: Ui,
 	pub rt: Runtime
 }
@@ -185,18 +186,34 @@ async fn game_init() -> State {
 			"raise-zombie.png",
 			"poison-bottle.png"
 		].map(|x| x.to_owned()).to_vec());
+		let req_assets_terrain_list = ("assets/Terrain", [
+			"Badground.png",
+			"DeepSwamp.png",
+			"DeepWater.png",
+			"Desert.png",
+			"Detail.png",
+			"Dust.png",
+			"FlameLand.png",
+			"Land.png",
+			"LowLand.png",
+			"Plain.png",
+			"Road.png",
+			"Rock.png",
+			"Shallow.png",
+			"Snow.png","Swamp.png",
+			"Water.png"].map(|x| x.to_owned()).to_vec());
         let req_assets_list = [
             req_assets_objects,
             req_assets_items,
             req_assets_units,
-            //req_assets_tiles,
+            req_assets_terrain_list,
 			req_assets_windows,
 			req_assets_stats_list
         ];
         load_assets(&req_assets_list, fonts).await
     };
-	let bytes = load_file("Maps_Rus/cursedlake.DTm").await.unwrap();
-	let (mut gamemap, events) = (convert_dtm_map(parse_dtm_vec(bytes).unwrap()), vec![]);
+	let bytes = load_file("Maps_Rus/Stinger-Paramount_War_HARD.dtm").await.unwrap();
+	let (mut gamemap, events) = convert_dtm_map(parse_dtm_vec(bytes).unwrap());
     //let (mut gamemap, events) = parse_story(
     //     units!(),
     //     objects!(),
@@ -231,6 +248,7 @@ async fn game_init() -> State {
             battle: Some(battle),
             variant: GameVariant::Single(Scenario {events} ),
         },
+		game_local: None,
     }
 }
 #[derive(Debug)]
@@ -269,8 +287,8 @@ fn populate_array(img: Image, array: &mut [u8]) {
     let mut index: usize = 0;
     for pixel in img.get_image_data() {
         for value in pixel.iter() {
-                array[index] = *value;
-                index += 1;
+            array[index] = *value;
+            index += 1;
         }
     }
 }
@@ -560,25 +578,36 @@ fn draw_map(assets: &Assets, camera: &mut Camera2D, game: &mut Game) -> Option<M
 			if is_key_down(KeyCode::F) {
 				continue
 			}
-			if tileset_index != 0 {
-				draw_texture_ex(
-					assets.get(&"grass_tileset.png".to_string()),
-					i as f32 * SIZE.0,
-					j as f32 * SIZE.1,
-					WHITE,
-					DrawTextureParams {
-						source: Rect::new(
-							(tileset_index % 4) as f32 * 256.,
-							(tileset_index / 4) as f32 * 242.,
-							256., 242.
-						).into(),
-						..Default::default()
-					}
-				)
-			}
+			// if tileset_index != 0 {
+			// 	draw_texture_ex(
+			// 		assets.get(&"grass_tileset.png".to_string()),
+			// 		i as f32 * SIZE.0,
+			// 		j as f32 * SIZE.1,
+			// 		WHITE,
+			// 		DrawTextureParams {
+			// 			source: Rect::new(
+			// 				(tileset_index % 4) as f32 * 256.,
+			// 				(tileset_index / 4) as f32 * 242.,
+			// 				256., 242.
+			// 			).into(),
+			// 			..Default::default()
+			// 		}
+			// 	)
+			//}
 			//draw_text(&*format!("{};{}", i, j), i as f32 * 256., j as f32 * 242., 30., BLACK);
         }
     }
+	for hit in &gamemap.hitmap.inner {
+		if let Some(army) = hit.army {
+			let (i, j) = gamemap.armys[army].pos;
+			draw_texture(
+				assets.get(&"Army.png".to_string()),
+				i as f32 * SIZE.0,
+				j as f32 * SIZE.1,
+				WHITE,
+			);
+		}
+	}
 	if is_key_down(KeyCode::Enter) {
 		*battle = Some(BattleInfo::new(&mut gamemap.armys, 0, 1));
 		return Some(Menu::Battle);
@@ -697,14 +726,14 @@ async fn main() {
 					.ui(&mut *root_ui(), |ui| {
 						let mut locale = LOCALE.write().unwrap();
 						ui.label(Some((50., 50.).into()), &locale.get("menu_game_name"));
-						// if ui.button(Some((50., 100.).into()), locale.get("menu_start_title")) {
+						// if ui.button(Some((250., 100.).into()), locale.get("menu_start_title")) {
 						// 	state.ui.main = Menu::Map(Camera2D::from_display_rect(Rect::new(
 						// 		0.,
 						// 		0.,
 						// 		256. * 50.,
 						// 		242. * 30.,
 						// 	)));
-						//}
+						// }
 						// if ui.button(Some((50., 150.).into()), "Atlas") {
 						// 	state.ui.main = Menu::Atlas;
 						// }

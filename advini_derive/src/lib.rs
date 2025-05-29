@@ -125,6 +125,7 @@ fn add_trait_bounds(mut generics: Generics) -> Generics {
     for param in &mut generics.params {
         if let GenericParam::Type(ref mut type_param) = *param {
             type_param.bounds.push(parse_quote!(advini::Ini));
+			// type_param.bounds.push(parse_quote!(PartialEq));
         }
     }
     generics
@@ -352,29 +353,31 @@ fn to_section_body(fields: &Vec<FieldInfo>, _ident: &Ident) -> TokenStream {
         let name = to_litstr(&f.aliases.0);
         let ident = &f.aliases.0;
         let ty = &f.ty;
-        if f.ty.to_token_stream().to_string().starts_with("Option") {
+		if let Some(default) = &f.default {
 			if f.inline {
-				quote_spanned!( Span::call_site() =>
-								if self.#ident.is_some() {
-									section.extend(<#ty as advini::Sections>::to_section(&self.#ident));
-								}
-				)
+				quote_spanned!( Span::call_site() => {
+					if self.#ident != #default {
+						section.extend(<#ty as advini::Sections>::to_section(&self.#ident));
+					}
+				})
 			} else {
-				quote_spanned!( Span::call_site() =>
-								if let Some(val) = &self.#ident {
-									section.insert(#name.into(), val.vomit());
-								}
+				quote_spanned!( Span::call_site() => {
+					if self.#ident != #default {
+						section.insert(#name.into(), self.#ident.vomit());
+					}
+				})
+			}
+		} else {
+			if f.inline {
+				quote_spanned!( Span::call_site() => {
+					section.extend(<#ty as advini::Sections>::to_section(&self.#ident));
+				})
+			} else {
+				quote!(
+					section.insert(#name.into(), self.#ident.vomit());
 				)
 			}
-        } else if f.inline {
-            quote_spanned!( Span::call_site() =>
-                section.extend(<#ty as advini::Sections>::to_section(&self.#ident));
-            )
-        } else {
-            quote!(
-                section.insert(#name.into(), self.#ident.vomit());
-            )
-        }
+		}
     });
     quote!(
         let mut section = std::collections::HashMap::new();

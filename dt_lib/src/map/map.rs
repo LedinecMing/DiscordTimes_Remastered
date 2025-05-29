@@ -52,7 +52,7 @@ impl<T> IndexMut<(usize, usize)> for TileMap<T> {
 &mut self.inner[index.1 + index.0 * self.size]
 	}
 }
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct HitboxTile {
     pub passable: bool,
@@ -78,7 +78,7 @@ impl Default for HitboxTile {
     }
 }
 
-#[derive(Clone, Debug, Default, Sections)]
+#[derive(Clone, Debug, Default, Sections, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct FractionsRelations {
     #[default_value = "Relations::default()"]
@@ -99,7 +99,7 @@ impl FractionsRelations {
 }
 pub const MAP_SIZE: usize = 50;
 
-#[derive(Clone, Debug, Default, advini::Ini)]
+#[derive(Clone, Debug, Default, advini::Ini, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum ScenarioVariant {
     #[default]
@@ -107,7 +107,7 @@ pub enum ScenarioVariant {
     Start(String),
     Series(String),
 }
-#[derive(Clone, Debug, Default, Sections)]
+#[derive(Clone, Debug, Default, Sections, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct NextMapSettings {
     #[default_value = "true"]
@@ -123,7 +123,7 @@ pub struct NextMapSettings {
     #[default_value = "true"]
     pub save_all_troops: bool,
 }
-#[derive(Clone, Debug, Default, Sections)]
+#[derive(Clone, Debug, Default, Sections, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct StartStats {
     #[default_value = "\"New map\""]
@@ -193,7 +193,7 @@ impl GameMap {
 		}
         self.recalc_armies_hitboxes();
         for (i, building) in self.buildings.iter().enumerate() {
-            let size = objects[building.id].size;
+            let size = objects.get(building.id).unwrap_or(&objects[0]).size;
             for x in 0..size.0 {
                 for y in 0..size.1 {
                     let hitbox =

@@ -1,10 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use clap::*;
-use dt_lib::map::convert::{
-    parse_dtm_map, ArmyTroopsData, BuildingData, EventData, GarrisonUnit, HeroInfoData, PatrolData,
-    ToBool,
-};
+use dt_lib::map::{convert::{
+    if_not_zero, parse_dtm_map, ArmyTroopsData, BuildingData, EventData, FromDtm, GarrisonUnit, HeroInfoData, PatrolData, ToBool
+}, event::Event};
 use zerocopy::FromZeros;
 #[derive(Parser)]
 struct Args {
@@ -26,11 +25,6 @@ struct Args {
     /// To show map
     #[arg(short, default_value_t = false)]
     map: bool,
-}
-fn if_not_zero<T: FromZeros + PartialEq>(obj: T, f: impl Fn(T)) {
-    if obj != T::new_zeroed() {
-        f(obj);
-    }
 }
 fn main() {
     let args = Args::parse();
@@ -345,7 +339,9 @@ fn main() {
         if_not_zero(empty7, |empty7| println!("Empty7/ is: {:?}", empty7));
     }
     if args.events {
-        dbg!(data.events);
+		for event in data.events {
+			println!("{:?}", event);
+		}
     }
     if args.texts {
         for text in data.text {

@@ -1101,45 +1101,27 @@ async fn parse_mapdata<Reader: FileAccess>(
                 ));
             }
             x if x.starts_with("Building") => {
-                let mut id: Option<usize> = None;
-                let mut name = String::new();
-                let mut object_name = None;
-                let mut desc = String::new();
-                let mut building_type = None;
+                let id = props.get("id").and_then(|x| x.parse().ok()).unwrap_or(0);
+                let name = props.get("name").cloned().unwrap_or_else(|| String::new());
+                let object_name = props.get("object").cloned().unwrap_or_else(|| String::new());
+                let desc = props.get("desc").cloned().unwrap_or_else(|| String::new());
+                let building_type = props.get("type").cloned().unwrap_or_else(|| String::new());
                 let mut event = Vec::new();
                 let mut units = Vec::new();
                 let mut recruitment = None;
                 let cost_modify = 1.;
                 let mut market = None;
-                let mut items = Vec::new();
-                let mut itemcost_range = Some((0u64, 1000u64));
-                let max_items = 10;
+                let items = props.get("items").and_then(|x| Some(split_and_parse::<usize>(x.to_string()).iter().map(|index| Item { index: *index }).collect())).unwrap_or(vec![]);
+                let itemcost_range = props.get("itemcost_range").and_then(|x| parse_duo_tuple::<u64>(&x).ok()).unwrap_or((0u64, 1000u64));
+                let max_items = props.get("id").and_then(|x| x.parse().ok()).unwrap_or(10);
                 let control = Control::PC;
-                let mut pos = None;
-                let mut defense = Some(0);
-                let mut income = 0;
-                let mut owner = None;
+                let pos = props.get("pos").and_then(|x| parse_duo_tuple::<usize>(&x).ok()).unwrap_or((0, 0));
+                let defense = props.get("defense").and_then(|x| x.parse().ok()).unwrap_or(0);
+                let gold_income = props.get("income").and_then(|x| x.parse().ok()).unwrap_or(0);
+                let owner = props.get("owner").and_then(|x| x.parse().ok());
                 for prop in props {
                     let prop = (prop.0, process_locale(prop.1, locale));
                     match &*prop.0 {
-                        "name" => name = prop.1,
-                        "desc" => desc = prop.1,
-                        "id" => id = Some(prop.1.parse().unwrap()),
-                        "type" => building_type = Some(prop.1),
-                        "owner" => owner = Some(prop.1.parse().unwrap()),
-                        "items" => items = split_and_parse::<usize>(prop.1).iter().map(|index| Item { index: *index }).collect(),
-                        "defense" => defense = prop.1.parse().ok(),
-                        "object" => object_name = prop.1.into(),
-                        "itemcost_range" => {
-                            itemcost_range = {
-                                let mut points = prop
-                                    .1
-                                    .split(|ch: char| !ch.is_ascii_digit())
-                                    .map(|string| string.parse().unwrap());
-                                Some((points.next().unwrap(), points.next().unwrap()))
-                            }
-                        }
-                        "income" => income = prop.1.parse().unwrap(),
                         "recruit" => {
                             units = prop
                                 .1
@@ -1154,22 +1136,13 @@ async fn parse_mapdata<Reader: FileAccess>(
                                 })
                                 .collect();
                         }
-                        "pos" => {
-                            pos = {
-                                let mut points = prop
-                                    .1
-                                    .split(|ch: char| !ch.is_ascii_digit())
-                                    .map(|string| string.parse().unwrap());
-                                Some((points.next().unwrap(), points.next().unwrap()))
-                            }
-                        }
                         "events" => event = split_and_parse::<usize>(prop.1),
                         _ => {}
                     }
                 }
                 if !items.is_empty() {
                     market = Market {
-                        itemcost_range: itemcost_range.unwrap(),
+                        itemcost_range,
                         items,
                         max_items,
                     }
@@ -1179,7 +1152,7 @@ async fn parse_mapdata<Reader: FileAccess>(
                     recruitment = Recruitment { cost_modify, units }.into();
                 }
                 buildings.push((
-                    id.unwrap(),
+                    id,
                     MapBuildingdata {
 						owner_name: String::new(),
                         spells_to_learn: Vec::new(),
@@ -1190,16 +1163,16 @@ async fn parse_mapdata<Reader: FileAccess>(
                         relations: Relations::default(),
                         id: objects
                             .into_iter()
-                            .position(|obj| &obj.name == object_name.as_ref().unwrap())
+                            .position(|obj| obj.name == object_name)
                             .unwrap(),
-                        name,
+						name,
                         desc,
                         events: event,
                         market,
                         recruitment,
-                        pos: pos.unwrap(),
-                        additional_defense: defense.unwrap(),
-                        gold_income: income,
+                        pos,
+                        additional_defense: defense,
+                        gold_income,
                         owner,
                     },
                 ));

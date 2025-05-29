@@ -43,7 +43,7 @@ pub enum ServerMessage {
     State((Option<BattleInfo>, GameMap)),
     ChangeMenu(usize),
     Message(String),
-}
+} 
 #[derive(Debug)]
 pub struct ClientConnection {
     pub client: Box<RenetClient>,
@@ -418,35 +418,35 @@ impl GameServer {
             gamemap.time.minutes += 10;
 
             for i in 0..gameevents.len() {
-                if let Some(executions) = execute_event(i, gamemap, gameevents, units, false) {
-                    for exec in executions {
-                        match exec {
-                            Execute::Wait(t, player) => {}
-                            Execute::Execute(event, player) => {
-                                execute_event(event.event, gamemap, gameevents, units, true);
-                            }
-                            Execute::StartBattle(army, player) => {
-                                if battle.is_none() {
-                                    let battle_new = BattleInfo::new(&mut gamemap.armys, army, 0);
-                                    *battle = Some(battle_new);
-                                    self.try_to_send_message(
-                                        gamemap,
-                                        player,
-                                        ServerMessage::ChangeMenu(Menu::ConnectBattle as usize),
-                                    );
-                                }
-                            }
-                            Execute::Message(text, player) => {
-                                self.try_to_send_message(
-                                    gamemap,
-                                    player,
-                                    ServerMessage::Message(text),
-                                );
-                            }
-                        }
-                    }
-                    break;
-                };
+                // if let Some(executions) = execute_event(i, gamemap, gameevents, units, false) {
+                //     for exec in executions {
+				// 		let player = exec.1;
+                //         match exec.0 {
+                //             Execute::Wait(t) => {}
+                //             Execute::Execute(event) => {
+                //                 execute_event(event.event, gamemap, gameevents, units, true);
+                //             }
+                //             Execute::StartBattle(army) => {
+                //                 if battle.is_none() {
+                //                     let battle_new = BattleInfo::new(&mut gamemap.armys, army, 0);
+                //                     *battle = Some(battle_new);
+                //                     self.try_to_send_message(
+                //                         gamemap,
+                //                         player,
+                //                         ServerMessage::ChangeMenu(Menu::ConnectBattle as usize),
+                //                     );
+                //                 }
+                //             }
+                //             Execute::Message(text) => {
+                //                 self.try_to_send_message(
+                //                     gamemap,
+                //                     player,
+                //                     ServerMessage::Message(text.text),
+                //                 );
+                //             }
+                //         }
+                //     }
+                break;
             }
         }
         if moved {

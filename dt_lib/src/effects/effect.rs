@@ -21,7 +21,7 @@ pub enum EffectKind {
 }
 
 #[enum_dispatch]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum Effect {
     MoreMoves(MoreMoves),
@@ -58,13 +58,13 @@ pub trait EffectTrait: DynClone + Debug + Send + Sync {
     }
 }
 
-#[derive(PartialEq, Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct EffectInfo {
     pub lifetime: i32,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct MoreMoves {
     pub info: EffectInfo,
@@ -92,7 +92,7 @@ impl EffectTrait for MoreMoves {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct HealMagic {
     pub info: EffectInfo,
@@ -185,7 +185,7 @@ impl EffectTrait for HealMagic {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct DisableMagic {
     pub info: EffectInfo,
@@ -251,7 +251,7 @@ impl EffectTrait for DisableMagic {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ElementalSupport {
     pub info: EffectInfo,
@@ -317,7 +317,7 @@ impl EffectTrait for ElementalSupport {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct AttackMagic {
     pub info: EffectInfo,
@@ -414,7 +414,7 @@ impl EffectTrait for AttackMagic {
 }
 
 const POISON_PERCENT: Percent = Percent::const_new(15);
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Poison {
     pub info: EffectInfo,
@@ -449,7 +449,7 @@ impl Default for Poison {
 
 const FIRE_PERCENT: Percent = Percent::const_new(10);
 const FIRE_SLOWNESS_PERCENT: Percent = Percent::const_new(10);
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Fire {
     pub info: EffectInfo,
@@ -505,7 +505,7 @@ impl Default for Fire {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ArtilleryEffect {
     pub info: EffectInfo,
@@ -526,7 +526,7 @@ impl EffectTrait for ArtilleryEffect {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct RessurectedEffect {}
 impl EffectTrait for RessurectedEffect {
@@ -547,7 +547,7 @@ impl RessurectedEffect {
 }
 
 const SPEAR_PERCENT: Percent = Percent::const_new(200);
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct SpearEffect {
     pub info: EffectInfo,
@@ -571,7 +571,7 @@ impl EffectTrait for SpearEffect {
 }
 
 const BLOCK_PERCENT: Percent = Percent::const_new(100);
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct BlockEffect {
     pub info: EffectInfo,
@@ -594,7 +594,7 @@ impl EffectTrait for BlockEffect {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ItemEffect {
     pub info: EffectInfo,
@@ -612,7 +612,7 @@ impl EffectTrait for ItemEffect {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ToEndEffect {
     pub info: EffectInfo,

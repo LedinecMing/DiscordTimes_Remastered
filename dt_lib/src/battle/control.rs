@@ -2,8 +2,8 @@ use advini::{Ini, IniParseError};
 use alkahest::*;
 use math_thingies::Percent;
 
-use crate::time::time::Time;
-#[derive(Clone, Debug)]
+use crate::{map::event::{Execute, Executions}, time::time::Time};
+#[derive(Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Relations {
     pub player: u8,
@@ -43,7 +43,7 @@ impl Default for Relations {
         }
     }
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Default)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum Control {
     #[default]
@@ -63,19 +63,26 @@ impl Ini for Control {
                     Ok(v) => Ok(v),
                     Err(err) => Err(err),
                 }?;
-                Ok((Control::Player(v), chars))
+                Ok((Control::Player(v - 1), chars))
             }
         }
     }
     fn vomit(&self) -> String {
         match self {
             Control::PC => 0_u8.vomit(),
-            Control::Player(n) => (0_u8, *n).vomit(),
+            Control::Player(n) => (*n + 1).vomit(),
         }
     }
 }
-
-#[derive(Clone, Debug, Default)]
+pub type Players = Vec<Player>;
+#[derive(Clone, Debug, PartialEq, Default)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)] 
+pub struct Player {
+	pub army: usize,
+	pub questbook: Option<Vec<(String, String)>>,
+	pub execution_queue: Vec<Execute>,
+}
+#[derive(Clone, Debug, PartialEq, Default)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct PC_ControlSetings {
     pub xp_like_player: bool,
@@ -98,19 +105,20 @@ pub struct PC_ControlSetings {
     pub patrol_radius: Option<u64>,
     pub relations: Relations,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     Army(usize),
     Building(usize),
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Plan {
     ToTax,
     ToMarket,
     ToTalk,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct PC_ControlState {
     current_target: Option<Target>,
     plan: Option<Plan>,
 }
+

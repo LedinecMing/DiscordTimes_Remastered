@@ -6,6 +6,8 @@ description = "A library of discord times components."
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.10.1"
+[dev-dependencies]
+tokio = { version = "1.44.2", features = ["macros", "rt"] }
 [dependencies] 
 dyn-clone = "1.0.6" 
 derive_more = {version="0.99.16"} 

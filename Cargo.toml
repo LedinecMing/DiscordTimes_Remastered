@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["quad_ui"]
-members = ["quad_ui" ,"ini_core", "advini", "advini_derive", "math_thingies", "notan_ui", "ui", "dt_lib", "dt_launcher", "dt_server", "dtm_info", "dt_client", "macroquad"]
+members = ["quad_ui" ,"ini_core", "advini", "advini_derive", "math_thingies", "notan_ui", "ui", "dt_lib", "dt_launcher", "dt_server", "dtm_info", "dt_client"]
 resolver = "2"
 
 [patch.crates-io] 

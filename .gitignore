@@ -10,6 +10,7 @@ notan
 #*
 /dt_launcher/launcher/
 macroquad
+Cargo.lock
 !*/dt/*.ttf
 !*/dt/android_pack/android/**
 !*/dt/assets/**

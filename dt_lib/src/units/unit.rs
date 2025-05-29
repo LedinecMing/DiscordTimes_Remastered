@@ -24,7 +24,7 @@ use std::{
     fmt::{Debug, Display, Formatter}, ops::{Div, Mul}, sync::RwLock
 };
 
-#[derive(Copy, Clone, Debug, Add, Sub, Default, Sections)]
+#[derive(Copy, Clone, Debug, Add, Sub, Default, Sections, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Defence {
     pub death_magic: Percent,
@@ -72,7 +72,7 @@ impl Defence {
     }
 }
 
-#[derive(Copy, Clone, Debug, Add, Sub, Default, Sections)]
+#[derive(Copy, Clone, Debug, Add, Sub, Default, Sections, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Power {
     pub magic: u64,
@@ -96,7 +96,7 @@ impl Power {
     }
 }
 
-#[derive(Copy, Clone, Debug, Add, Sub, Default, Sections)]
+#[derive(Copy, Clone, Debug, Add, Sub, Default, Sections, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct UnitStats {
     pub hp: i64,
@@ -146,7 +146,7 @@ pub enum MagicType {
     Elemental,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct LevelUpInfo {
     pub stats: ModifyUnitStats,
@@ -163,7 +163,7 @@ impl LevelUpInfo {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct UnitInfo {
     pub name: String,
@@ -196,7 +196,7 @@ impl UnitInfo {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct UnitInventory {
     pub items: Vec<Option<Item>>,
@@ -207,7 +207,7 @@ impl UnitInventory {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct UnitLvl {
     pub lvl: u64,
@@ -273,7 +273,7 @@ pub enum UnitType {
 }
 /// Used for parsing
 pub static UNITS: Lazy<RwLock<Vec<Unit>>> = Lazy::new(|| RwLock::new(vec![]));
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Unit {
     pub stats: UnitStats,
@@ -480,7 +480,7 @@ fn is_path_empty(hitmap: &HitMap, my_pos: UnitPos, target_pos: UnitPos) -> bool 
 		.all(|x| hitmap[x].is_none() || field_type(x, *MAX_TROOPS) == Field::Reserve)
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ActionResult {
     Buff,
     Debuff,
@@ -919,7 +919,7 @@ impl Unit {
     }
     pub fn tick(&mut self) -> bool {
 		let mut effects = self.effects.clone();
-		let removed: Vec<_> = effects.extract_if(|ef| ef.on_tick(self) && ef.is_dead()).collect();
+		let removed: Vec<_> = effects.extract_if(.., |ef| ef.on_tick(self) && ef.is_dead()).collect();
 		self.effects = effects;
         for mut effect in removed {
 			effect.kill(self);
