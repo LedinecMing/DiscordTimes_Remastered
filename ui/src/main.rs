@@ -8,7 +8,11 @@ use dt_lib::{
     items::item::*,
     locale::{parse_locale, Locale},
     map::{
-        convert::{convert_dtm_map, parse_dtm_map}, event::{execute_event, Event as GameEvent, Execute}, map::*, object::ObjectInfo, tile::*
+        convert::{convert_dtm_map, parse_dtm_map},
+        event::{execute_event, Event as GameEvent, Execute},
+        map::*,
+        object::ObjectInfo,
+        tile::*,
     },
     network::net::*,
     parse::{parse_items, parse_objects, parse_settings, parse_story, parse_units},
@@ -123,7 +127,7 @@ fn get_menu_value_num(state: &State, id: &'static str) -> Option<i64> {
 
 fn set_menu_value_str(state: &mut State, id: &'static str, new: String) {
     match state.menu_data.get_mut(id) {
-       Some(value) => match value {
+        Some(value) => match value {
             Value::Str(string) => {
                 *string = new;
             }
@@ -649,7 +653,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                                         .position(|obj| obj.path == "Tree0.png")
                                         .unwrap(),
                                 );
-								 let decomap = vec![];
+                                let decomap = vec![];
                                 state.gamemap.tilemap = tilemap.0;
                                 state.gamemap.decomap = decomap;
                                 let (objects, gamemap) = (&state.objects, &mut state.gamemap);
@@ -1212,7 +1216,6 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
         .build()
     }
 
-
     const VIEW: usize = 20;
     fn draw_gamemap<Form: PosForm<State>>(
         drawing: &mut Form,
@@ -1233,19 +1236,21 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
         //         .lock()
         //         .unwrap(),
         // )
-	 	//.position(0., 0.);
-		//.size(52., 42.);
-		
-		let terrain = assets.get("assets/Terrain").unwrap();
-		for i in 0..(gamemap.tilemap.size) {
-			for j in 0..(gamemap.tilemap.size) {
-				let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
-				let asset = terrain.get(TILES[gamemap.tilemap[(i, j)]].sprite()).unwrap();
-				draw.image(&*asset.lock().unwrap())
-					.position(pos.0, pos.1)
-					.size(SIZE.0, SIZE.1);
-			}
-		}
+        //.position(0., 0.);
+        //.size(52., 42.);
+
+        let terrain = assets.get("assets/Terrain").unwrap();
+        for i in 0..(gamemap.tilemap.size) {
+            for j in 0..(gamemap.tilemap.size) {
+                let pos = Position(i as f32 * SIZE.0, j as f32 * SIZE.1);
+                let asset = terrain
+                    .get(TILES[gamemap.tilemap[(i, j)]].sprite())
+                    .unwrap();
+                draw.image(&*asset.lock().unwrap())
+                    .position(pos.0, pos.1)
+                    .size(SIZE.0, SIZE.1);
+            }
+        }
         let pos = gamemap.armys[0].pos;
         for i in 0..(gamemap.tilemap.size) {
             //((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
@@ -1273,24 +1278,29 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                 }
             }
         }
-		for army in &gamemap.armys {
-			let pos = Position(army.pos.0 as f32 * SIZE.0, army.pos.1 as f32 * SIZE.1);
-			draw.image(&army_pic.get("Army.png").unwrap().lock().unwrap())
-                        .position(pos.0, pos.1)
-                        .size(SIZE.0, SIZE.1 * 2.);
-		}
+        for army in &gamemap.armys {
+            let pos = Position(army.pos.0 as f32 * SIZE.0, army.pos.1 as f32 * SIZE.1);
+            draw.image(&army_pic.get("Army.png").unwrap().lock().unwrap())
+                .position(pos.0, pos.1)
+                .size(SIZE.0, SIZE.1 * 2.);
+        }
         for i in 0..0 {
             //i in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
             for j in 0..0 {
                 //j in ((pos.0 - VIEW / 2).clamp(0, MAP_SIZE))..((pos.0 + VIEW/2).clamp(0, MAP_SIZE)) {
-                let asset = terrain.get(TILES[gamemap.tilemap[(i, j)]].sprite()).unwrap();
+                let asset = terrain
+                    .get(TILES[gamemap.tilemap[(i, j)]].sprite())
+                    .unwrap();
                 let texture = asset.lock().unwrap();
                 const ALPHA: f32 = 0.2;
                 const W_SIZE_QUARTER: f32 = SIZE.0 / 4.;
                 const H_SIZE_QUARTER: f32 = SIZE.1 / 4.;
                 const QUARTER_TILE: f32 = 106. / 4.;
                 const THREE_QUARTERS: f32 = QUARTER_TILE * 3.;
-                let pos = Position((i + gamemap.armys[0].pos.0) as f32 * SIZE.0, (j + gamemap.armys[0].pos.1) as f32 * SIZE.1);
+                let pos = Position(
+                    (i + gamemap.armys[0].pos.0) as f32 * SIZE.0,
+                    (j + gamemap.armys[0].pos.1) as f32 * SIZE.1,
+                );
                 (0..4).for_each(|i| {
                     let (quarter_size, crop_start, cropped_size, quarter_pos) = match i {
                         0 => (
@@ -1331,7 +1341,10 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                 .expect(&*format!("{}", &objects[index].path));
             let texture = asset.lock().unwrap();
             let size = objects[index].size;
-            let pos = Position((i + gamemap.armys[0].pos.0) as f32 * SIZE.0, (j + gamemap.armys[0].pos.1) as f32 * SIZE.1);
+            let pos = Position(
+                (i + gamemap.armys[0].pos.0) as f32 * SIZE.0,
+                (j + gamemap.armys[0].pos.1) as f32 * SIZE.1,
+            );
             draw.image(&texture)
                 .position(pos.0, pos.1) // - (size.1 as f32 - 1.) * SIZE.1)
                 .size(SIZE.0 * size.0 as f32, SIZE.1 * size.1 as f32);
@@ -1861,7 +1874,10 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                             .stroke(10.);
                     }
                 } else if let Some(can_interact) = &battle.can_interact {
-                    if can_interact.contains(&BattleUnitPos { army,  pos:  troop.pos.into() }) {
+                    if can_interact.contains(&BattleUnitPos {
+                        army,
+                        pos: troop.pos.into(),
+                    }) {
                         draw.rect((pos.0, pos.1), (92., 92.))
                             .color(Color::TRANSPARENT)
                             .stroke_color(if active_unit.army == army {
@@ -1873,7 +1889,7 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
                     }
                 }
             }
-        } 
+        }
     }
     type AssetsMap = HashMap<&'static str, HashMap<String, Asset<Texture>>>;
     fn handle_action_result(
@@ -1940,8 +1956,15 @@ fn gen_forms(size: (f32, f32)) -> Result<(), String> {
         let gamemap = &state.gamemap;
         let index = active_unit.index;
 
-        active_unit.index = if active_unit.army == battle.army1 { 0 } else { 1 };
-        let active_index: usize = gamemap.armys[active_unit.army].troops[index].get().pos.into();
+        active_unit.index = if active_unit.army == battle.army1 {
+            0
+        } else {
+            1
+        };
+        let active_index: usize = gamemap.armys[active_unit.army].troops[index]
+            .get()
+            .pos
+            .into();
         active_unit.army = active_index;
         state
             .animations
@@ -2408,10 +2431,7 @@ fn gen_tilemap() -> (TileMap<usize>, (u32, u32)) {
         // Hills
         .add(GenTile::new(4));
     let mut w = world.generate(0, 0).unwrap();
-    (
-        TileMap::new(w.into_iter().flatten()),
-        seeds,
-    )
+    (TileMap::new(w.into_iter().flatten()), seeds)
 }
 fn gen_decomap(seeds: (u32, u32), first_tree_index: usize) -> Tilemap<Option<usize>> {
     let noise = PerlinNoise::new();
@@ -2596,21 +2616,31 @@ fn setup(app: &mut App, app_assets: &mut Assets, gfx: &mut Graphics) -> State {
     //     &settings.locale,
     //     &settings.additional_locale,
     // );
-	let (mut gamemap, gameevents) = (convert_dtm_map(parse_dtm_map(std::path::Path::new("./Maps_Rus/Проклятое озеро.DTm")).unwrap()), vec![]);
+    let (mut gamemap, gameevents) = (
+        convert_dtm_map(
+            parse_dtm_map(std::path::Path::new("./Maps_Rus/Проклятое озеро.DTm")).unwrap(),
+        ),
+        vec![],
+    );
     gamemap.calc_hitboxes(&objects);
 
     let terrain = assets.get("assets/Terrain").unwrap();
     let mut draw: Draw = gfx.create_draw();
     for i in 0..(gamemap.tilemap.size) {
         for j in 0..(gamemap.tilemap.size) {
-            let asset = terrain.get(TILES[gamemap.tilemap[(i, j)]].sprite()).unwrap();
+            let asset = terrain
+                .get(TILES[gamemap.tilemap[(i, j)]].sprite())
+                .unwrap();
             draw.image(&*asset.lock().unwrap())
                 .position(i as f32 * SIZE.0, j as f32 * SIZE.1)
                 .size(SIZE.0, SIZE.1);
         }
     }
     let texture = gfx
-        .create_render_texture((gamemap.tilemap.size) as u32 * 52, (gamemap.tilemap.size) as u32 * 40)
+        .create_render_texture(
+            (gamemap.tilemap.size) as u32 * 52,
+            (gamemap.tilemap.size) as u32 * 40,
+        )
         .build()
         .unwrap();
     gfx.render_to(&texture, &draw);

@@ -36,5 +36,5 @@ pub static TILES: [Tile; 16] = [
     Tile::new(1, "Rock.png", false),
     Tile::new(1, "Dust.png", false),
     Tile::new(2, "Snow.png", false),
-	Tile::new(2, "Snow.png", false),
+    Tile::new(2, "Snow.png", false),
 ];

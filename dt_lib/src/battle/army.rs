@@ -20,7 +20,10 @@ use once_cell::sync::Lazy;
 use pathfinding::directed::astar::astar;
 use zerocopy::Usize;
 
-use super::{control::{Control, PC_ControlSetings}, troop_inactive, BattleUnitPos};
+use super::{
+    control::{Control, PC_ControlSetings},
+    troop_inactive, BattleUnitPos,
+};
 #[derive(Clone, Debug, Default, Sections)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ArmyStats {
@@ -71,7 +74,7 @@ pub struct Army {
     pub defeated: bool,
     //#[default_value = "Control::PC"]
     pub control: Control,
-	pub pc_settings: Option<PC_ControlSetings>,
+    pub pc_settings: Option<PC_ControlSetings>,
     //#[unused]
     pub path: Vec<(usize, usize)>,
 }
@@ -89,11 +92,11 @@ impl Army {
         control: Control,
     ) -> Self {
         let hitmap: HitMap = (0..*MAX_TROOPS).map(|_| None::<usize>).collect();
-		if inventory.len() < 4 {
-			inventory.extend([None].iter().cycle().take(4-inventory.len()));
-		}
+        if inventory.len() < 4 {
+            inventory.extend([None].iter().cycle().take(4 - inventory.len()));
+        }
         let mut army = Army {
-			pc_settings: None,
+            pc_settings: None,
             troops: Vec::new(),
             building: None,
             hitmap,
@@ -110,23 +113,29 @@ impl Army {
         }
         army
     }
-	pub fn recalc_hitmap_solo(hitmap: &mut HitMap, size: (usize, usize), pos: UnitPos, num: usize, columns: usize) {
+    pub fn recalc_hitmap_solo(
+        hitmap: &mut HitMap,
+        size: (usize, usize),
+        pos: UnitPos,
+        num: usize,
+        columns: usize,
+    ) {
         for j in 0..size.1 {
             for i in 0..size.0 {
                 hitmap[(j + pos.1) * columns + (i + pos.0)] = Some(num);
             }
         }
-	}
+    }
     pub fn recalc_hitmap(troops: &Vec<TroopType>, hitmap: &mut HitMap, columns: usize) {
         let info = troops.iter().enumerate().filter_map(|(num, troop)| {
             let troop = troop.get();
-			if troop.is_dead() {
-				return None;
-			}
+            if troop.is_dead() {
+                return None;
+            }
             Some((troop.unit.info.size, troop.pos, num))
         });
         for (size, pos, num) in info {
-			Army::recalc_hitmap_solo(hitmap, size, pos, num, columns);
+            Army::recalc_hitmap_solo(hitmap, size, pos, num, columns);
         }
     }
     pub fn recalc_army_hitmap(&mut self) {
@@ -137,37 +146,58 @@ impl Army {
         Army::recalc_hitmap(&self.troops, &mut hitmap, *MAX_TROOPS / MAX_LINES);
         self.hitmap = hitmap
     }
-	pub fn set_unit_at(&mut self, unit_id: Option<usize>, BattleUnitPos { army, pos }: BattleUnitPos,) {
-		let index = self.hitmap.get(pos);
-		if let Some(Some(index)) = index {
-			self.troops.remove(*index);
-		}
-		if let Some(unit_id) = unit_id {
-			let new_unit = units::unit::UNITS.read().unwrap().get(unit_id).cloned();
-			let Some(mut new_unit) = new_unit else { return; };
-			let dpos = UnitPos::from_index(pos);
-			if !Army::fit_to(&self.hitmap, new_unit.info.size, *MAX_TROOPS/2, MAX_LINES, dpos.1, dpos.0) {
-				return;
-			}
-			new_unit.restore();
-			let mut new_troop = Troop::new(new_unit);
-			new_troop.pos = UnitPos::from_index(pos);
-			self.troops.push(new_troop.into());
-		} else {
-			
-		}
-		self.recalc_army_hitmap();
-	}
-	pub fn set_item_unit_at(&mut self, item_id: Option<usize>, BattleUnitPos { army, pos }: BattleUnitPos, index: usize) -> bool {
-		if let Some(troop) = self.get_troop(pos) {
-			let unit = &mut troop.get().unit;
-			if let Some(item_id) = item_id {
-				unit.swap_item(index, Some(Item { index: item_id }));
-				unit.restore();
-				true 
-			} else { false }
-		} else { false }
-	}
+    pub fn set_unit_at(
+        &mut self,
+        unit_id: Option<usize>,
+        BattleUnitPos { army, pos }: BattleUnitPos,
+    ) {
+        let index = self.hitmap.get(pos);
+        if let Some(Some(index)) = index {
+            self.troops.remove(*index);
+        }
+        if let Some(unit_id) = unit_id {
+            let new_unit = units::unit::UNITS.read().unwrap().get(unit_id).cloned();
+            let Some(mut new_unit) = new_unit else {
+                return;
+            };
+            let dpos = UnitPos::from_index(pos);
+            if !Army::fit_to(
+                &self.hitmap,
+                new_unit.info.size,
+                *MAX_TROOPS / 2,
+                MAX_LINES,
+                dpos.1,
+                dpos.0,
+            ) {
+                return;
+            }
+            new_unit.restore();
+            let mut new_troop = Troop::new(new_unit);
+            new_troop.pos = UnitPos::from_index(pos);
+            self.troops.push(new_troop.into());
+        } else {
+        }
+        self.recalc_army_hitmap();
+    }
+    pub fn set_item_unit_at(
+        &mut self,
+        item_id: Option<usize>,
+        BattleUnitPos { army, pos }: BattleUnitPos,
+        index: usize,
+    ) -> bool {
+        if let Some(troop) = self.get_troop(pos) {
+            let unit = &mut troop.get().unit;
+            if let Some(item_id) = item_id {
+                unit.swap_item(index, Some(Item { index: item_id }));
+                unit.restore();
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
     pub fn get_army_slice<'a>(troops: &'a mut Vec<Troop>) -> Vec<&'a mut [Troop]> {
         let len = troops.len();
         let mut res = Vec::new();
@@ -250,20 +280,18 @@ impl Army {
         self.recalc_army_hitmap();
         Ok(())
     }
-	
+
     pub fn add_item(&mut self, item: Item) {
         let first = self.inventory.iter().position(|x| x.is_none());
-		if let Some(index) = first {
-			self.inventory[index] = Some(item);
-		}
+        if let Some(index) = first {
+            self.inventory[index] = Some(item);
+        }
     }
     pub fn remove_item(&mut self, rem_item: usize) {
         if let Some(index) = self
             .inventory
             .iter()
-            .position(|item| {
-				*item == Some(Item { index: rem_item})
-			}) 
+            .position(|item| *item == Some(Item { index: rem_item }))
         {
             self.inventory.remove(index);
         }

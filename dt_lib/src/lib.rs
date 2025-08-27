@@ -3,6 +3,7 @@
 pub mod battle;
 pub mod bonuses;
 pub mod effects;
+pub mod hwid;
 pub mod items;
 pub mod locale;
 pub mod map;
@@ -11,7 +12,6 @@ pub mod network;
 pub mod parse;
 pub mod time;
 pub mod units;
-pub mod hwid;
 #[repr(u32)]
 pub enum Menu {
     Main,

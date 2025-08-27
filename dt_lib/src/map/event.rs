@@ -1,11 +1,19 @@
 use crate::{
-    battle::{control::{Player, Players}, troop::Troop}, items::Item, map::map::GameMap, mutrc::SendMut, time::time::Time, units::unit::{Unit, UnitPos}
+    battle::{
+        control::{Player, PlayerId, Players},
+        troop::Troop,
+    },
+    items::Item,
+    map::map::GameMap,
+    mutrc::SendMut,
+    time::time::Time,
+    units::unit::{Unit, UnitPos},
 };
 use advini::{Ini, IniParseError, Section, SectionError, Sections, SEPARATOR};
-use serde;
-use std::collections::HashMap;
-use struct_field_names_as_array::FieldNamesAsArray;
 use alkahest::*;
+use serde;
+use std::{collections::HashMap, path::Path};
+use struct_field_names_as_array::FieldNamesAsArray;
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -114,7 +122,6 @@ pub enum Location {
     Local, // building id
     Place, // map xy
     Quest,
-    Sub,
     Talks, // building id
 }
 impl Ini for Location {
@@ -138,9 +145,6 @@ impl Ini for Location {
                 Ok(v) => Ok((Self::Talks, v.1)),
                 Err(err) => Err(err),
             },
-            "Sub" => {
-                return Ok((Self::Sub, chars));
-            }
             _ => Err(IniParseError::Error("netu")),
         }
     }
@@ -150,24 +154,30 @@ impl Ini for Location {
             Location::Place => "Place".to_string(),
             Location::Local => "Local".to_string(),
             Location::Talks => "Talks".to_string(),
-            Location::Sub => "Sub".to_string(),
             Location::Quest => "Quest".into(),
         }
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize, Ini
-)]
+#[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize, Ini)]
 pub enum ItemCheck {
-	#[default]
-	Player,
-	PlayerHasNo,
-	FactionHas(usize)
+    #[default]
+    Player,
+    PlayerHasNo,
+    FactionHas(usize),
 }
 
+pub type EventId = usize;
+
 #[derive(
-    Clone, Debug, PartialEq, Default, Sections, serde::Serialize, serde::Deserialize, FieldNamesAsArray
+    Clone,
+    Debug,
+    PartialEq,
+    Default,
+    Sections,
+    serde::Serialize,
+    serde::Deserialize,
+    FieldNamesAsArray,
 )]
 pub struct Conditions {
     #[default_value = "false"]
@@ -177,28 +187,35 @@ pub struct Conditions {
     #[default_value = "false"]
     #[unused]
     pub executed: bool,
-
+    #[default_value = "false"]
+    pub sub: bool,
     #[default_value = "Time::new(0)"]
     pub activation_time: Time,
     #[default_value = "None"]
     pub if_event_executed: Option<Vec<usize>>,
-	#[default_value = "None"]
+    #[default_value = "None"]
     pub army_meet: Option<usize>,
     #[default_value = "None"]
     pub armies_defeated: Option<Vec<usize>>,
-	#[default_value = "None"]
-	pub armies_active: Option<Vec<usize>>,
-	#[default_value = "None"]
-	pub armies_inactive: Option<Vec<usize>>,
-	#[default_value = "None"]
-	pub items_check: Option<Vec<(ItemCheck, usize)>>,
+    #[default_value = "None"]
+    pub armies_defeated_by_player: Option<Vec<usize>>,
+    #[default_value = "None"]
+    pub armies_active: Option<Vec<usize>>,
+    #[default_value = "None"]
+    pub armies_inactive: Option<Vec<usize>>,
+
+    #[default_value = "None"]
+    pub building_ownership: Option<Vec<(usize, usize)>>,
+
+    #[default_value = "None"]
+    pub items_check: Option<Vec<(ItemCheck, usize)>>,
     #[default_value = "None"]
     pub if_event_not_executed: Option<Vec<usize>>,
-	#[default_value = "None"]
-	pub if_event_answ: Option<Vec<(usize, usize)>>,
-	#[default_value = "None"]
-    #[default_value = "String::new()"]
-    pub flag_check: String,
+    #[default_value = "None"]
+    pub if_event_answ: Option<Vec<(usize, usize)>>,
+    #[default_value = "None"]
+    #[default_value = "None"]
+    pub flag_check: Option<String>,
 
     #[default_value = "None"]
     pub xp_req: Option<Cmp<u64>>,
@@ -215,61 +232,68 @@ pub struct Conditions {
     pub hero_has_1_hp: bool,
     #[default_value = "None"]
     pub in_building: Option<usize>,
-	#[default_value= "None"]
-	pub archetype_req: Option<usize>,
+    #[default_value = "None"]
+    pub archetype_req: Option<usize>,
 }
 #[derive(
-    Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize, FieldNamesAsArray, Sections
+    Clone,
+    Debug,
+    PartialEq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    FieldNamesAsArray,
+    Sections,
 )]
 pub struct EventResult {
     #[default_value = "None"]
-	/// Возможный список активации фонарей в следующем формате
-	/// lit_lights=2,3,1
+    /// Возможный список активации фонарей в следующем формате
+    /// lit_lights=2,3,1
     pub lit_lights: Option<Vec<usize>>,
     #[default_value = "(Time::new(0), false)"]
-	/// Задержка перед выполнением
+    /// Задержка перед выполнением
     pub delay: (Time, bool),
-	/// Операция смены флага
-    #[default_value = "String::new()"]
-    pub flag_change: String,
-	/// Возможный список подчинённых событий в следующем формате
-	/// sub_event=2,1,3
+    /// Операция смены флага
+    #[default_value = "None"]
+    pub flag_change: Option<String>,
+    /// Возможный список подчинённых событий в следующем формате
+    /// sub_event=2,1,3
     #[default_value = "None"]
     pub sub_event: Option<Vec<usize>>,
     #[default_value = "None"]
-	/// Возможное отложенное событие
+    /// Возможное отложенное событие
     pub delayed_event: Option<DelayedEvent>,
     #[default_value = "None"]
-	/// Список индексов предметов, которые будут отобраны
+    /// Список индексов предметов, которые будут отобраны
     pub minus_items: Option<Vec<usize>>, // index of all game items
     #[default_value = "None"]
-	/// Убрать предметыы
+    /// Убрать предметыы
     pub plus_items: Option<Vec<usize>>,
     #[default_value = "None"]
     pub question: Option<(String, Vec<String>)>,
 
-	#[default_value = "None"]
-	pub activate_armies: Option<Vec<usize>>,
-	#[default_value = "None"]
-	pub deactivate_armies: Option<Vec<usize>>,
-	#[default_value = "None"]
-	pub start_battle_with: Option<usize>,
-	
-	#[default_value = "None"]
-	pub complete_quest: Option<usize>,
-	#[default_value = "None"]
-	pub learn_spells: Option<Vec<usize>>,
-	
+    #[default_value = "None"]
+    pub activate_armies: Option<Vec<usize>>,
+    #[default_value = "None"]
+    pub deactivate_armies: Option<Vec<usize>>,
+    #[default_value = "None"]
+    pub start_battle_with: Option<usize>,
+
+    #[default_value = "None"]
+    pub complete_quest: Option<usize>,
+    #[default_value = "None"]
+    pub learn_spells: Option<Vec<usize>>,
+
     #[default_value = "0"]
-	/// Добавить опыт
+    /// Добавить опыт
     pub change_xp: i64,
     #[default_value = "0"]
-	/// Добавить золото
+    /// Добавить золото
     pub change_gold: i64,
     #[default_value = "0"]
-	/// Добавить ману
+    /// Добавить ману
     pub change_mana: i64,
-	
+
     #[default_value = "None"]
     pub add_units: Option<Vec<usize>>, // index of all game units
     #[default_value = "None"]
@@ -314,7 +338,7 @@ impl Event {
 }
 pub fn execute_event(
     event: usize,
-	players: &mut Players,
+    players: &mut Players,
     gamemap: &mut GameMap,
     events: &mut Vec<Event>,
     units: &Vec<Unit>,
@@ -329,17 +353,18 @@ pub fn execute_event(
             result,
             message,
         } = &events[event];
-		let mut sub = false;
+        let mut sub = false;
+        if conditions.sub || *location == Location::Quest {
+            if !executed_as_sub {
+                return None;
+            } else {
+                sub = true;
+            }
+        };
         match location {
-            Location::Sub => {
-                if !executed_as_sub {
-                    return None;
-                }
-				sub = true;
-            },
-			Location::Talks => {
-				return None;
-			}
+            Location::Talks | Location::Local => {
+                return None;
+            }
             _ => {}
         }
         let time = if conditions.relative_time {
@@ -347,17 +372,19 @@ pub fn execute_event(
         } else {
             gamemap.time
         };
-        if !sub && !(((!conditions.executed || conditions.repeat.is_some())
-            && conditions.activation_time <= gamemap.time)
-            && (conditions
+        if !sub
+            && !(((!conditions.executed || conditions.repeat.is_some())
+			&& conditions.activation_time <= gamemap.time)
+			 // TODO asnw check
+			&& conditions.if_event_answ.is_none()
+            && conditions
                 .if_event_executed
                 .as_ref()
-                .is_some_and(|event| {
+                .is_none_or(|event| {
 					event
 						.iter()
 						.all(|&event| events[event].conditions.executed)
 				})
-                || conditions.if_event_executed.is_none())
 			&& (conditions
                 .armies_defeated
                 .as_ref()
@@ -379,6 +406,9 @@ pub fn execute_event(
 					armys_index.iter().all(|army| !gamemap.armys[*army].active)
 				})
 				|| conditions.armies_inactive.is_none())
+			&& (conditions
+				.flag_check.is_none()
+			)
 			&& (conditions
                 .if_event_not_executed
                 .as_ref()
@@ -403,7 +433,14 @@ pub fn execute_event(
     let mut res = Vec::new();
     for player in player {
         if let Some(events) = execute_event_as_player(
-            message, result, conditions, location, gamemap, &mut players[*player], *player, units,
+            message,
+            result,
+            conditions,
+            location,
+            gamemap,
+            &mut players[*player],
+            *player,
+            units,
         ) {
             res.extend(events);
         };
@@ -417,7 +454,7 @@ pub fn execute_event_as_player(
     location: &Location,
     gamemap: &mut GameMap,
     player: &mut Player,
-	player_id: usize,
+    player_id: usize,
     units: &Vec<Unit>,
 ) -> Option<Executions> {
     let time = if conds.relative_time {
@@ -425,7 +462,7 @@ pub fn execute_event_as_player(
     } else {
         gamemap.time
     };
-	let player_army = &mut gamemap.armys[player.army];
+    let player_army = &mut gamemap.armys[player.army];
     if (conds
         .xp_req
         .as_ref()
@@ -436,17 +473,24 @@ pub fn execute_event_as_player(
             .as_ref()
             .is_some_and(|req| req.check(player_army.stats.gold))
             || conds.gold_req.is_none())
-        && (conds
-            .army_req
-            .as_ref()
-            .is_some_and(|req| req.check(player_army.troops.len() as u64))
-            || conds.army_req.is_none())
-        && (conds
+        && conds
+        .army_req
+        .as_ref()
+        .is_none_or(|req| req.check(player_army.troops.len() as u64))
+		// TODO archetype check
+		&& conds.archetype_req.is_none_or(|arch| arch == 1)
+		//TODO
+        && conds
             .mana_req
             .as_ref()
-            .is_some_and(|req| req.check(player_army.stats.mana))
-            || conds.mana_req.is_none())
-		// TODO POWER
+            .is_none_or(|req| req.check(player_army.stats.mana))
+		&&	conds.army_meet.is_none_or(|army| false)
+		// TODO defeated armies check 
+		&& conds
+		.armies_defeated_by_player
+		.as_ref()
+		.is_none_or(|req| req.iter().all(|&x| false))
+		// TODO power check
         && (conds.power_req.as_ref().and_then(|req| Some(true)).unwrap_or(true))
         && (conds.hero_has_1_hp || !conds.hero_has_1_hp)
 		&& (conds
@@ -459,6 +503,8 @@ pub fn execute_event_as_player(
 					_ => false
 				}
 			})) || conds.items_check.is_none())
+		// TODO
+		&& conds.building_ownership.as_ref().is_none_or(|reqs| reqs.iter().all(|x| false))
         && (conds
             .in_building
             .and_then(|building| Some(player_army.building == building.into())))
@@ -479,43 +525,59 @@ pub fn execute_event_as_player(
 
         {
             // Player army stats changes
-            player_army.stats.gold = player_army.stats.gold.saturating_add_signed(result.change_gold);
-            player_army.stats.mana = player_army.stats.mana.saturating_add_signed(result.change_mana);
+            player_army.stats.gold = player_army
+                .stats
+                .gold
+                .saturating_add_signed(result.change_gold);
+            player_army.stats.mana = player_army
+                .stats
+                .mana
+                .saturating_add_signed(result.change_mana);
             let troop = &mut player_army.troops[0].get();
             troop.unit.lvl.xp = troop.unit.lvl.xp.saturating_add_signed(result.change_xp);
         }
         {
             if let Some(add_units) = &mut result.add_units {
                 add_units.iter().for_each(|unit| {
-                    player_army.add_troop(SendMut::new(Troop {
-                        unit: units[*unit].clone(),
-                        custom_name: None,
-                        is_free: true,
-                        was_payed: true,
-                        is_main: false,
-                        pos: UnitPos::from_index(0),
-                    }))
-                    .ok();
+                    player_army
+                        .add_troop(SendMut::new(Troop {
+                            unit: units[*unit].clone(),
+                            custom_name: None,
+                            is_free: true,
+                            was_payed: true,
+                            is_main: false,
+                            pos: UnitPos::from_index(0),
+                        }))
+                        .ok();
                 });
             }
         }
 
         let mut res = Vec::new();
-		if let Some(q) = &result.question {
-			res.push((Execute::Message(Message { text: q.0.clone(), variants: q.1.clone() }), player_id));
-		}
+        if let Some(q) = &result.question {
+            res.push((
+                Execute::Message(Message {
+                    text: q.0.clone(),
+                    variants: q.1.clone(),
+                }),
+                player_id,
+            ));
+        }
         if let Some(text) = message.clone() {
-            res.push((Execute::Message(Message { text, variants: vec![] }), player_id));
+            res.push((
+                Execute::Message(Message {
+                    text,
+                    variants: vec![],
+                }),
+                player_id,
+            ));
         }
         if result.delay.1 == true {
             res.push((Execute::Wait(result.delay.0.clone()), player_id));
         }
         if let Some(event) = &result.sub_event {
             for event in event {
-                res.push((Execute::Execute(
-                    DelayedEvent::new(Time::new(0), *event)),
-						  player_id,
-                ));
+                res.push((Execute::Sub(*event), player_id));
             }
         }
         if let Some(event) = result.delayed_event.clone() {
@@ -534,7 +596,7 @@ pub fn execute_event_as_player(
 }
 
 #[derive(Clone, Debug, PartialEq, Default, serde::Deserialize, serde::Serialize)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)] 
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct DelayedEvent {
     pub time: Time,
     pub event: usize,
@@ -547,7 +609,7 @@ impl DelayedEvent {
         &self,
         gamemap: &mut GameMap,
         events: &mut Vec<Event>,
-		players: &mut Players,
+        players: &mut Players,
         player: usize,
         units: &Vec<Unit>,
     ) -> Option<()> {
@@ -559,13 +621,14 @@ impl DelayedEvent {
 }
 impl Ini for DelayedEvent {
     fn eat(chars: std::str::Chars<'_>) -> Result<(Self, std::str::Chars<'_>), IniParseError> {
-		
         <(Time, usize) as Ini>::eat(chars).map(|res| {
-            (Self {
-                time: res.0 .0,
-                event: res.0 .1,
-            },
-             res.1,)
+            (
+                Self {
+                    time: res.0 .0,
+                    event: res.0 .1,
+                },
+                res.1,
+            )
         })
     }
     fn vomit(&self) -> String {
@@ -573,17 +636,18 @@ impl Ini for DelayedEvent {
     }
 }
 #[derive(Debug, Clone, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)] 
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Message {
     pub text: String,
-	pub variants: Vec<String>
+    pub variants: Vec<String>,
 }
-pub type Executions = Vec<(Execute, usize)>;
+pub type Executions = Vec<(Execute, PlayerId)>;
 #[derive(Debug, Clone, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)] 
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum Execute {
     Wait(Time),
     Message(Message),
     StartBattle(usize),
     Execute(DelayedEvent),
+    Sub(EventId),
 }

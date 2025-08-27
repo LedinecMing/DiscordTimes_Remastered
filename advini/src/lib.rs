@@ -210,15 +210,15 @@ impl Ini for bool {
     }
 }
 impl<T: Ini> Ini for Option<T> {
-	fn eat(chars: Chars) -> Result<(Self, Chars), IniParseError> {
-		T::eat(chars).map(|x| (Some(x.0), x.1))
-	}
-	fn vomit(&self) -> String {
-		match self {
-			Some(v) => v.vomit(),
-			None => "None".to_string(),
-		}
-	}
+    fn eat(chars: Chars) -> Result<(Self, Chars), IniParseError> {
+        T::eat(chars).map(|x| (Some(x.0), x.1))
+    }
+    fn vomit(&self) -> String {
+        match self {
+            Some(v) => v.vomit(),
+            None => "None".to_string(),
+        }
+    }
 }
 // impl<'b> Ini for &'b str {
 // 	fn eat<'a>(chars: Chars<'a>) -> Result<(Self, Chars<'a>), IniParseError> {

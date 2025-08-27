@@ -137,21 +137,29 @@ use crate::{
         control::Relations,
     },
     items,
-    map::{map::TileMap, object::BuildingVariant},
+    map::{deco::MapDeco, map::TileMap, object::BuildingVariant},
 };
 use advini::*;
 use ini_core::{Item as IniItem, Parser};
 use math_thingies::Percent;
 use once_cell::sync::Lazy;
 use std::{
-    any::type_name, collections::HashMap, default, fmt::{Debug, Display}, io::Read, net::{IpAddr, Ipv4Addr}, ops::Add, str::FromStr, sync::RwLock
+    any::type_name,
+    collections::HashMap,
+    default,
+    fmt::{Debug, Display},
+    io::Read,
+    net::{IpAddr, Ipv4Addr},
+    ops::Add,
+    str::FromStr,
+    sync::RwLock,
 };
 use tracing_mutex::stdsync::TracingMutex as Mutex;
 
 //#[cfg(target_arch = "wasm32")]
 //use wasm_bindgen_futures::spawn_local;
 pub fn read_file(path: &str) -> Vec<u8> {
-	std::fs::read(path.clone()).unwrap()
+    std::fs::read(path.clone()).unwrap()
 }
 
 trait CollectInplace {
@@ -235,7 +243,9 @@ pub fn match_magictype(
     }
 }
 
-pub async fn parse_units<Reader: FileAccess>(path: Option<&str>) -> Result<(Vec<Unit>, (&'static str, Vec<String>)), String> {
+pub async fn parse_units<Reader: FileAccess>(
+    path: Option<&str>,
+) -> Result<(Vec<Unit>, (&'static str, Vec<String>)), String> {
     let mut units = vec![];
     let sections = parse_for_sections::<Reader>(path.unwrap_or("Units.ini")).await;
     let mut error_collector: Vec<String> = Vec::new();
@@ -519,31 +529,31 @@ pub struct Settings {
     pub additional_locale: String,
     pub fullscreen: bool,
     pub init_size: (u32, u32),
-	pub ip: IpAddr,
+    pub ip: IpAddr,
     pub port: u64,
 }
 impl Default for Settings {
-	fn default() -> Self {
-		Self {	
-			max_troops: 12,
-			locale: String::new(),
-			additional_locale: String::new(),
-			fullscreen: true,
-			init_size: (1600, 1200),
-			ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-			port: 0,
-		}
-	}
+    fn default() -> Self {
+        Self {
+            max_troops: 12,
+            locale: String::new(),
+            additional_locale: String::new(),
+            fullscreen: true,
+            init_size: (1600, 1200),
+            ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            port: 0,
+        }
+    }
 }
 
-pub static mut SETTINGS: Settings = Settings {	
-	max_troops: 12,
-	locale: String::new(),
-	additional_locale: String::new(),
-	fullscreen: true,
-	init_size: (1600, 1200),
-	ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-	port: 0,
+pub static mut SETTINGS: Settings = Settings {
+    max_troops: 12,
+    locale: String::new(),
+    additional_locale: String::new(),
+    fullscreen: true,
+    init_size: (1600, 1200),
+    ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+    port: 0,
 };
 pub static LOCALE: Lazy<RwLock<Locale>> =
     Lazy::new(|| RwLock::new(Locale::new("Rus".into(), "Eng".into())));
@@ -556,7 +566,7 @@ pub async fn parse_settings<Reader: FileAccess>() -> Settings {
     let mut fullscreen = false;
     let mut init_size = None;
     let mut port = 0;
-	let mut ip = IpAddr::V4(Ipv4Addr::new(127,0,0,1));
+    let mut ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
     for (sec, prop) in sections.iter() {
         for (k, value) in prop.iter() {
             match &**k {
@@ -578,9 +588,7 @@ pub async fn parse_settings<Reader: FileAccess>() -> Settings {
                 "port" => {
                     port = value.parse::<u64>().unwrap();
                 }
-				"ip" => {
-					ip = value.parse().unwrap()
-				}
+                "ip" => ip = value.parse().unwrap(),
                 _ => {}
             }
         }
@@ -591,7 +599,7 @@ pub async fn parse_settings<Reader: FileAccess>() -> Settings {
         additional_locale,
         fullscreen,
         init_size: init_size.unwrap(),
-		ip,
+        ip,
         port,
     };
     unsafe {
@@ -601,16 +609,16 @@ pub async fn parse_settings<Reader: FileAccess>() -> Settings {
 }
 
 pub trait FileAccess {
-	async fn read(path: &str) -> Vec<u8>;
-	async fn read_as_string(path: &str) -> String {
-		String::from_utf8(Self::read(path).await).unwrap()
-	}
+    async fn read(path: &str) -> Vec<u8>;
+    async fn read_as_string(path: &str) -> String {
+        String::from_utf8(Self::read(path).await).unwrap()
+    }
 }
 pub struct StupidReader;
 impl FileAccess for StupidReader {
-	async fn read(path: &str) -> Vec<u8> {
-		read_file(path)
-	}
+    async fn read(path: &str) -> Vec<u8> {
+        read_file(path)
+    }
 }
 async fn parse_for_props<Reader: FileAccess>(path: &str) -> HashMap<String, String> {
     let mut props = HashMap::new();
@@ -628,7 +636,9 @@ async fn parse_for_props<Reader: FileAccess>(path: &str) -> HashMap<String, Stri
     }
     props
 }
-async fn parse_for_sections<Reader: FileAccess>(path: &str) -> Vec<(String, HashMap<String, String>)> {
+async fn parse_for_sections<Reader: FileAccess>(
+    path: &str,
+) -> Vec<(String, HashMap<String, String>)> {
     let ini_doc = Reader::read_as_string(path).await;
     advini::parse_for_sections(&ini_doc)
 }
@@ -638,45 +648,62 @@ pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec
     let mut req_assets = Vec::new();
     let sections = parse_for_sections::<Reader>("Objects.ini").await;
     for (sec, prop) in sections.iter() {
-        let mut category = "".into();
+        let mut category = "".to_string();
         let mut obj_type = None;
         let mut index = None;
+        let mut id = None;
         let name = sec.clone();
         let mut size = (Some(1), Some(1));
         let mut error_collector: Vec<String> = Vec::new();
-        for (k, v) in prop.iter() {
-            match &**k {
-                "index" => {
-                    index = collect_errors(
-                        v.parse::<usize>(),
-                        &mut error_collector,
-                        "Value of field Index ommited as non-usize",
-                    );
-                    let path = format!("{sec}.png");
-                    req_assets.push(path.clone());
-                }
-                "size" => {
-                    let mut sizes = v
-                        .split(|ch: char| !ch.is_ascii_digit())
-                        .map(|string| Some(string.parse().unwrap()));
-                    size.0 = sizes.next().unwrap();
-                    size.1 = sizes.next().unwrap();
-                }
-                "type" => {
-                    obj_type = Some(match &**v {
-                        "MapDeco" => ObjectType::MapDeco,
-                        "Bridge" => ObjectType::Bridge,
-                        "Building" => ObjectType::Building,
-                        _ => panic!(
-                            "{}",
-                            format!("Wrong Object Type - '{}' at section {}", v, sec)
-                        ),
-                    })
-                }
-                "category" => category = v.clone(),
-                _ => {}
-            }
+        let path = if let Some(at) = sec.find(|x: char| x.is_ascii_digit()) {
+            sec.clone()
+                .split_at_checked(at)
+                .and_then(|(a, b)| {
+                    if let Some(num) = b.parse::<usize>().ok() {
+                        Some(format!("{a}{num:0>3}"))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| sec.clone())
+                .add(".png")
+        } else {
+            sec.clone().add(".png")
+        };
+        req_assets.push(path.clone());
+        if let Some(res) = prop.get("index") {
+            index = collect_errors(
+                res.parse::<usize>(),
+                &mut error_collector,
+                "Value of field Index ommited as non-usize",
+            );
         }
+        if let Some(res) = prop.get("id") {
+            id = collect_errors(
+                res.parse::<usize>(),
+                &mut error_collector,
+                "Value of field Id ommited as non-usize",
+            );
+        }
+        if let Some(res) = prop.get("size") {
+            let mut sizes = res
+                .split(|ch: char| !ch.is_ascii_digit())
+                .map(|string| Some(string.parse().unwrap()));
+            size.0 = sizes.next().unwrap();
+            size.1 = sizes.next().unwrap();
+        }
+        if let Some(res) = prop.get("type") {
+            obj_type = Some(match &**res {
+                "MapDeco" => ObjectType::MapDeco,
+                "Bridge" => ObjectType::Bridge,
+                "Building" => ObjectType::Building,
+                _ => panic!(
+                    "{}",
+                    format!("Wrong Object Type - '{}' at section {}", res, sec)
+                ),
+            })
+        }
+        category = prop.get("category").cloned().unwrap_or_default();
 
         if !error_collector.is_empty() {
             panic!("{}", error_collector.join("\n"));
@@ -693,7 +720,24 @@ pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec
                     size.0.expect("Cant find SizeW key!"),
                     size.1.expect("Cant find SizeH key!"),
                 ),
-                path: sec.clone().add(".png"),
+                id: id.unwrap_or(0),
+                path: {
+                    if let Some(at) = sec.find(|x: char| x.is_ascii_digit()) {
+                        sec.clone()
+                            .split_at_checked(at)
+                            .and_then(|(a, b)| {
+                                if let Some(num) = b.parse::<usize>().ok() {
+                                    Some(format!("{a}{num:0>3}"))
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| sec.clone())
+                            .add(".png")
+                    } else {
+                        sec.clone().add(".png")
+                    }
+                },
             },
         ));
     }
@@ -703,17 +747,13 @@ pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec
         ("assets/Objects", req_assets),
     )
 }
-fn match_magic_variants(
-    magic_type: String,
-) -> MagicVariants {
+fn match_magic_variants(magic_type: String) -> MagicVariants {
     match &*magic_type {
         "LifeMagic" => MagicVariants::Life,
         "ElementalMagic" => MagicVariants::Elemental,
         "DeathMagic" => MagicVariants::Death,
         "NoMagic" | "" => MagicVariants::Any,
-        _ => {
-            MagicVariants::Any
-        }
+        _ => MagicVariants::Any,
     }
 }
 /*
@@ -721,7 +761,10 @@ fn match_magic_variants(
  * p-{stat} - добавление процента
  * f-{stat} - установить
  */
-pub async fn parse_items<Reader: FileAccess>(path: Option<&str>, lang: &String) -> (&'static str, Vec<String>) {
+pub async fn parse_items<Reader: FileAccess>(
+    path: Option<&str>,
+    lang: &String,
+) -> (&'static str, Vec<String>) {
     let mut error_collector: Vec<String> = Vec::new();
     let mut items = vec![];
     let mut req_assets = Vec::new();
@@ -924,7 +967,7 @@ pub async fn parse_items<Reader: FileAccess>(path: Option<&str>, lang: &String) 
                         0
                     }
                 },
-				magic_req: magic,
+                magic_req: magic,
                 icon: icon.expect("No icon key").into(),
                 sells: cost.unwrap() > 0,
                 bonus,
@@ -933,9 +976,12 @@ pub async fn parse_items<Reader: FileAccess>(path: Option<&str>, lang: &String) 
             },
         ));
     }
-	items.sort_by_key(|x| x.0);
-	ITEMS.write().unwrap().extend(items.iter().map(|(_, v)| v.clone()));
-	assert!(ITEMS.read().unwrap().len() > 0);
+    items.sort_by_key(|x| x.0);
+    ITEMS
+        .write()
+        .unwrap()
+        .extend(items.iter().map(|(_, v)| v.clone()));
+    assert!(ITEMS.read().unwrap().len() > 0);
     ("assets/Items", req_assets)
 }
 
@@ -992,12 +1038,12 @@ async fn parse_mapdata<Reader: FileAccess>(
     objects: &Objects,
 ) -> (
     TileMap<usize>,
-	Vec<usize>,
+    Vec<MapDeco>,
     Vec<MapBuildingdata>,
     Vec<Army>,
 ) {
     let mut tilemap: Option<TileMap<usize>> = None;
-    let mut decomap: Vec<usize> = vec![];
+    let mut decomap = Vec::default();
 
     let mut armys = Vec::new();
     let mut buildings = Vec::new();
@@ -1013,14 +1059,10 @@ async fn parse_mapdata<Reader: FileAccess>(
                                     .1
                                     .split(|ch: char| !ch.is_ascii_digit())
                                     .map(|ch| ch.parse::<usize>().unwrap());
-								TileMap::new(tilemap)
+                                TileMap::new(tilemap)
                             });
                         }
-                        "decomap" => {
-                            decomap = {
-                                Vec::<usize>::eat(prop.1.chars()).unwrap().0
-                            }
-                        }
+                        "decomap" => decomap = { Vec::<MapDeco>::eat(prop.1.chars()).unwrap().0 },
                         _ => {}
                     }
                 }
@@ -1103,7 +1145,10 @@ async fn parse_mapdata<Reader: FileAccess>(
             x if x.starts_with("Building") => {
                 let id = props.get("id").and_then(|x| x.parse().ok()).unwrap_or(0);
                 let name = props.get("name").cloned().unwrap_or_else(|| String::new());
-                let object_name = props.get("object").cloned().unwrap_or_else(|| String::new());
+                let object_name = props
+                    .get("object")
+                    .cloned()
+                    .unwrap_or_else(|| String::new());
                 let desc = props.get("desc").cloned().unwrap_or_else(|| String::new());
                 let building_type = props.get("type").cloned().unwrap_or_else(|| String::new());
                 let mut event = Vec::new();
@@ -1111,13 +1156,35 @@ async fn parse_mapdata<Reader: FileAccess>(
                 let mut recruitment = None;
                 let cost_modify = 1.;
                 let mut market = None;
-                let items = props.get("items").and_then(|x| Some(split_and_parse::<usize>(x.to_string()).iter().map(|index| Item { index: *index }).collect())).unwrap_or(vec![]);
-                let itemcost_range = props.get("itemcost_range").and_then(|x| parse_duo_tuple::<u64>(&x).ok()).unwrap_or((0u64, 1000u64));
+                let items = props
+                    .get("items")
+                    .and_then(|x| {
+                        Some(
+                            split_and_parse::<usize>(x.to_string())
+                                .iter()
+                                .map(|index| Item { index: *index })
+                                .collect(),
+                        )
+                    })
+                    .unwrap_or(vec![]);
+                let itemcost_range = props
+                    .get("itemcost_range")
+                    .and_then(|x| parse_duo_tuple::<u64>(&x).ok())
+                    .unwrap_or((0u64, 1000u64));
                 let max_items = props.get("id").and_then(|x| x.parse().ok()).unwrap_or(10);
                 let control = Control::PC;
-                let pos = props.get("pos").and_then(|x| parse_duo_tuple::<usize>(&x).ok()).unwrap_or((0, 0));
-                let defense = props.get("defense").and_then(|x| x.parse().ok()).unwrap_or(0);
-                let gold_income = props.get("income").and_then(|x| x.parse().ok()).unwrap_or(0);
+                let pos = props
+                    .get("pos")
+                    .and_then(|x| parse_duo_tuple::<usize>(&x).ok())
+                    .unwrap_or((0, 0));
+                let defense = props
+                    .get("defense")
+                    .and_then(|x| x.parse().ok())
+                    .unwrap_or(0);
+                let gold_income = props
+                    .get("income")
+                    .and_then(|x| x.parse().ok())
+                    .unwrap_or(0);
                 let owner = props.get("owner").and_then(|x| x.parse().ok());
                 for prop in props {
                     let prop = (prop.0, process_locale(prop.1, locale));
@@ -1154,7 +1221,7 @@ async fn parse_mapdata<Reader: FileAccess>(
                 buildings.push((
                     id,
                     MapBuildingdata {
-						owner_name: String::new(),
+                        owner_name: String::new(),
                         spells_to_learn: Vec::new(),
                         variant: BuildingVariant::Castle,
                         garrison: Vec::new(),
@@ -1165,7 +1232,7 @@ async fn parse_mapdata<Reader: FileAccess>(
                             .into_iter()
                             .position(|obj| obj.name == object_name)
                             .unwrap(),
-						name,
+                        name,
                         desc,
                         events: event,
                         market,
@@ -1265,8 +1332,10 @@ pub async fn parse_story<Reader: FileAccess>(
         units,
         &mut locale,
         objects,
-    ).await;
-    let events = parse_events::<Reader>(format!("{map_dir}{}", events_path.unwrap()), &mut locale).await;
+    )
+    .await;
+    let events =
+        parse_events::<Reader>(format!("{map_dir}{}", events_path.unwrap()), &mut locale).await;
 
     let gamemap = GameMap {
         armys: mapdata.3,

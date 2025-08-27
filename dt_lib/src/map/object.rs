@@ -24,6 +24,8 @@ pub struct ObjectInfo {
     pub category: String,
     pub obj_type: ObjectType,
     pub index: usize,
+    /// DTm id
+    pub id: usize,
     pub size: (u8, u8),
 }
 
@@ -68,8 +70,8 @@ pub struct MapBuildingdata {
     #[alias([description])]
     #[default_value = "String::new()"]
     pub desc: String,
-	#[default_value = "String::new()"]
-	pub owner_name: String,
+    #[default_value = "String::new()"]
+    pub owner_name: String,
 
     pub id: usize,
 
@@ -147,8 +149,7 @@ impl Market {
         }
     }
     fn can_buy(&self, buyer: &Army, item_num: usize) -> bool {
-        if self.items[item_num].get_info().sells
-        {
+        if self.items[item_num].get_info().sells {
             return buyer.stats.gold >= self.get_item_cost(item_num);
         }
         false

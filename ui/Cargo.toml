@@ -1,6 +1,6 @@
 [package]
-name = "DT_Remastered"
-description = "Main executable for the game"
+name = "ui"
+description = "Old frontend for the game"
 version = "0.1.0"
 edition = "2021"
 

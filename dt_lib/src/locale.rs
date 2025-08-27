@@ -21,14 +21,24 @@ impl Locale {
         self.main_lang = lang.0.clone();
         self.additional_lang = lang.1.clone();
     }
-	pub fn keys_lack(&mut self) -> Vec<String> {
-		let keys = self.map.get(&self.main_lang).and_then(|map| Some(map.keys()));
-		let keys_other = self.map.get(&self.additional_lang).and_then(|map| Some(map.keys()));
-		if let (Some(keys), Some(other_keys)) = (keys, keys_other) {
-			let other_keys: Vec<_> = other_keys.collect();
-			keys.filter(|key| !other_keys.contains(key)).cloned().collect()
-		} else { vec![] }
-	}
+    pub fn keys_lack(&mut self) -> Vec<String> {
+        let keys = self
+            .map
+            .get(&self.main_lang)
+            .and_then(|map| Some(map.keys()));
+        let keys_other = self
+            .map
+            .get(&self.additional_lang)
+            .and_then(|map| Some(map.keys()));
+        if let (Some(keys), Some(other_keys)) = (keys, keys_other) {
+            let other_keys: Vec<_> = other_keys.collect();
+            keys.filter(|key| !other_keys.contains(key))
+                .cloned()
+                .collect()
+        } else {
+            vec![]
+        }
+    }
     pub fn get<K: AsRef<str> + ToString>(&self, id: K) -> String {
         let id = id.as_ref();
         self.map
@@ -134,7 +144,7 @@ pub async fn parse_locale<Reader: FileAccess>(languages: &[&String], locale: &mu
 pub fn parse_locale_doc(ini_doc: String, language: &String, locale: &mut Locale) {
     let props = advini::parse_for_props(&ini_doc);
     for (k, value) in props {
-		register_locale(k, value, language.clone(), locale);
+        register_locale(k, value, language.clone(), locale);
     }
 }
 pub async fn parse_for_sections_localised<Reader: FileAccess>(
@@ -149,7 +159,11 @@ pub async fn parse_for_sections_localised<Reader: FileAccess>(
     )
 }
 
-pub async fn parse_map_locale<Reader: FileAccess>(path: &str, languages: &[&String], locale: &mut Locale) {
+pub async fn parse_map_locale<Reader: FileAccess>(
+    path: &str,
+    languages: &[&String],
+    locale: &mut Locale,
+) {
     for (sec, props) in advini::parse_for_sections(&Reader::read_as_string(path).await) {
         if !languages.contains(&&sec) {
             continue;
@@ -187,6 +201,6 @@ test"#;
         assert!(dbg!(process_locale("$a", &mut locale)) == "test".to_string());
         assert!(dbg!(process_locale("$b", &mut locale)) == "test".to_string());
         assert!(dbg!(process_locale("$c", &mut locale)) == "test".to_string());
-		assert_eq!(locale.get("dggdgdd"), "adddlk".to_string())
+        assert_eq!(locale.get("dggdgdd"), "adddlk".to_string())
     }
 }

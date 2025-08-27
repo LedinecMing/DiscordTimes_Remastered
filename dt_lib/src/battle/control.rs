@@ -2,7 +2,10 @@ use advini::{Ini, IniParseError};
 use alkahest::*;
 use math_thingies::Percent;
 
-use crate::{map::event::{Execute, Executions}, time::time::Time};
+use crate::{
+    map::event::{Execute, Executions},
+    time::time::Time,
+};
 #[derive(Clone, Debug, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Relations {
@@ -48,7 +51,7 @@ impl Default for Relations {
 pub enum Control {
     #[default]
     PC,
-    Player(usize),
+    Player(PlayerId),
 }
 impl Ini for Control {
     fn eat<'a>(chars: std::str::Chars<'a>) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
@@ -74,34 +77,35 @@ impl Ini for Control {
         }
     }
 }
+pub type PlayerId = usize;
 pub type Players = Vec<Player>;
 #[derive(Clone, Debug, PartialEq, Default)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)] 
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Player {
-	pub army: usize,
-	pub questbook: Option<Vec<(String, String)>>,
-	pub execution_queue: Vec<Execute>,
+    pub army: usize,
+    pub questbook: Option<Vec<(String, String)>>,
+    pub execution_queue: Vec<Execute>,
 }
 #[derive(Clone, Debug, PartialEq, Default)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct PC_ControlSetings {
     pub xp_like_player: bool,
     pub xp_add: u64,
-	pub xp_correction: Percent,
-	pub gold_income: u64,
-	pub mana_income: u64,
-	pub speed_correction: Percent,
+    pub xp_correction: Percent,
+    pub gold_income: u64,
+    pub mana_income: u64,
+    pub speed_correction: Percent,
     pub units_dont_have_money: bool,
     pub ignores_ai_armys: bool,
     pub targets_player: bool,
     pub forbid_random_targets: bool,
     pub forbid_random_talks: bool,
     pub not_interested_in_buildings: bool,
-	pub aggression: u8,
-	pub patrol: u8,
-	pub revive_everyone: bool,
-	pub revive_time: Time,
-	pub garrison_power: u8,
+    pub aggression: u8,
+    pub patrol: u8,
+    pub revive_everyone: bool,
+    pub revive_time: Time,
+    pub garrison_power: u8,
     pub patrol_radius: Option<u64>,
     pub relations: Relations,
 }
@@ -121,4 +125,3 @@ pub struct PC_ControlState {
     current_target: Option<Target>,
     plan: Option<Plan>,
 }
-

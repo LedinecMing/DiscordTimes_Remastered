@@ -1,9 +1,12 @@
-use std::{io::{self, stdin}, time::Duration};
+use std::{
+    io::{self, stdin},
+    time::Duration,
+};
 
+use dt_client::*;
 use dt_lib::hwid;
 use futures_util::StreamExt;
 use tokio::sync::oneshot;
-use dt_client::*;
 
 fn parse_duo_tuple<T: std::str::FromStr>(v: &str) -> Result<(T, T), &'static str> {
     let mut points = v.split(|ch: char| !ch.is_ascii_digit()).map(|string| {
@@ -24,9 +27,9 @@ async fn main() {
     //     .spawn()
     //     .unwrap();
 
-	let mut room = String::new();
-	stdin().read_line(&mut room);
-	room = room.trim().to_owned();
+    let mut room = String::new();
+    stdin().read_line(&mut room);
+    room = room.trim().to_owned();
     let mut conn = connect(room, hwid::get_id().unwrap()).await;
 
     //conn.events_sender.try_send(OutcomingEvent((0,0))).unwrap();
@@ -40,15 +43,15 @@ async fn main() {
     //     //     HANDLE THAT
     //     ()
     // }));
-	println!("Connection established");
-	loop {
-		let mut action = String::new();
-		stdin().read_line(&mut action);
-		action = action.trim().to_owned();
-		let Ok(action) = parse_duo_tuple::<usize>(&action) else {
-			println!("Wrong action!");
-			continue;
-		};
-		println!("Sent action");
-	} 
+    println!("Connection established");
+    loop {
+        let mut action = String::new();
+        stdin().read_line(&mut action);
+        action = action.trim().to_owned();
+        let Ok(action) = parse_duo_tuple::<usize>(&action) else {
+            println!("Wrong action!");
+            continue;
+        };
+        println!("Sent action");
+    }
 }

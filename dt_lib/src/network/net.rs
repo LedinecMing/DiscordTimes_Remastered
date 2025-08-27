@@ -43,7 +43,7 @@ pub enum ServerMessage {
     State((Option<BattleInfo>, GameMap)),
     ChangeMenu(usize),
     Message(String),
-} 
+}
 #[derive(Debug)]
 pub struct ClientConnection {
     pub client: Box<RenetClient>,
@@ -182,11 +182,7 @@ impl GameServer {
                 if Some(client_id.and_then(|v| self.auth.get(&v)).unwrap_or(&0usize))
                     == battle.active_unit.and_then(|v| Some(v.army)).as_ref()
                 {
-                    handle_action(
-                        v,
-                        battle,
-                        &mut gamemap.armys,
-                    );
+                    handle_action(v, battle, &mut gamemap.armys);
                     let message = ServerMessage::State((Some(battle.clone()), gamemap.clone()));
                     let size = serialized_size::<ServerMessage, _>(&message);
                     let mut output = vec![0u8; size.0];
@@ -316,11 +312,7 @@ impl GameServer {
                             if self.auth.get(&client_id)
                                 == battle.active_unit.and_then(|v| Some(v.army)).as_ref()
                             {
-                                handle_action(
-                                    v,
-                                    battle,
-                                    &mut gamemap.armys,
-                                );
+                                handle_action(v, battle, &mut gamemap.armys);
                                 let message =
                                     ServerMessage::State((Some(battle.clone()), gamemap.clone()));
                                 let size = serialized_size::<ServerMessage, _>(&message);
@@ -420,7 +412,7 @@ impl GameServer {
             for i in 0..gameevents.len() {
                 // if let Some(executions) = execute_event(i, gamemap, gameevents, units, false) {
                 //     for exec in executions {
-				// 		let player = exec.1;
+                // 		let player = exec.1;
                 //         match exec.0 {
                 //             Execute::Wait(t) => {}
                 //             Execute::Execute(event) => {

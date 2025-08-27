@@ -1,9 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use clap::*;
-use dt_lib::map::{convert::{
-    if_not_zero, parse_dtm_map, ArmyTroopsData, BuildingData, EventData, FromDtm, GarrisonUnit, HeroInfoData, PatrolData, ToBool
-}, event::Event};
+use dt_lib::map::{
+    convert::{
+        if_not_zero, parse_dtm_map, ArmyTroopsData, BuildingData, EventData, FromDtm, GarrisonUnit,
+        HeroInfoData, PatrolData, ToBool,
+    },
+    event::Event,
+};
 use zerocopy::FromZeros;
 #[derive(Parser)]
 struct Args {
@@ -339,10 +343,14 @@ fn main() {
         if_not_zero(empty7, |empty7| println!("Empty7/ is: {:?}", empty7));
     }
     if args.events {
-		for event in data.events {
-			println!("{:?}", event);
-		}
+        for event in data.events {
+            println!("{:?}", event);
+        }
+        for lantern in data.lanterns {
+            println!("{:?}", lantern);
+        }
     }
+
     if args.texts {
         for text in data.text {
             if !text.is_empty() {

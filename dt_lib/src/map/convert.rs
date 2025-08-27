@@ -1,17 +1,38 @@
 use crate::{
-    battle::{control::{Control, Relations}, Army, ArmyStats, Troop}, items::{Item, ITEMS}, map::{event::Location, object::{BuildingVariant, Village}}, mutrc::SendMut, time::time::Time, units::unit::{Unit, UNITS}
+    battle::{
+        control::{Control, Relations},
+        Army, ArmyStats, Troop,
+    },
+    items::{Item, ITEMS},
+    map::{
+        event::Location,
+        object::{BuildingVariant, Village},
+    },
+    mutrc::SendMut,
+    time::time::{Data, Time},
+    units::unit::{Unit, UNITS},
 };
 
-use super::{deco::*, event::{Cmp, Conditions, DelayedEvent, Event, EventResult, ItemCheck}, map::*, object::{MapBuildingdata, Market, RecruitUnit, Recruitment}};
+use super::{
+    deco::*,
+    event::{Cmp, Conditions, DelayedEvent, Event, EventResult, ItemCheck},
+    map::*,
+    object::{MapBuildingdata, Market, RecruitUnit, Recruitment},
+};
 use bufread::BzDecoder;
 use bytes::*;
 use bzip2::*;
-use num::{Num, ToPrimitive};
 use core::str;
 use encoding_rs::*;
+use num::{Num, ToPrimitive};
 use num_enum::{Default, FromPrimitive, IntoPrimitive};
 use std::{
-    fs::{self, File}, io::{self, Read, Write}, iter::Filter, ops::Not, path::Path, usize
+    fs::{self, File},
+    io::{self, Read, Write},
+    iter::Filter,
+    ops::Not,
+    path::Path,
+    usize,
 };
 use zerocopy::{FromBytes, FromZeros, IntoBytes, Unaligned};
 
@@ -52,7 +73,7 @@ pub struct UnitData {
 pub struct ManyUnitsData {
     pub id: u8,
     pub level: u8,
-	pub amount: u8,
+    pub amount: u8,
 }
 #[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(packed(1))]
@@ -241,7 +262,7 @@ pub struct BuildingData {
     pub event_ids: [u16; 64],              // айди событий в максимальном количестве 64 штуки 136
     pub artifact_ids: [u16; 6],            // на рынке 5 штук, в руинах 4 максимально 148
     pub _empty_big: [u8; 117],             //
-    pub recruits: [RecruitUnitData; 6],        // найм в казармах 282
+    pub recruits: [RecruitUnitData; 6],    // найм в казармах 282
     pub gold_income: u16,                  // золотой доход 284
     pub max_gold_income: u16,              // максимальный золотой доход? 286
     pub _empty: [u8; 2],                   // 288
@@ -343,9 +364,9 @@ pub struct LightOrEvent {
     pub y: u16,
     pub id: u8,
     pub map_model: u8,
-    pub _empty: [u8; 33],
+    pub events: [u8; 32],
     pub light_radius: u8,
-    pub _empty1: [u8; 59],
+    pub _empty1: [u8; 60],
 }
 #[derive(FromBytes, Unaligned, PartialEq, Eq, Debug, Copy, Clone)]
 #[repr(packed(1))]
@@ -365,12 +386,12 @@ pub struct MapData {
     pub text: Vec<String>,
 }
 pub trait IsZero {
-	fn is_zero(&self) -> bool;
+    fn is_zero(&self) -> bool;
 }
 impl<T: FromZeros + PartialEq> IsZero for T {
-	fn is_zero(&self) -> bool {
-		*self == <Self as FromZeros>::new_zeroed()
-	}
+    fn is_zero(&self) -> bool {
+        *self == <Self as FromZeros>::new_zeroed()
+    }
 }
 
 pub fn if_not_zero<T: IsZero + PartialEq>(obj: T, f: impl Fn(T)) {
@@ -379,10 +400,20 @@ pub fn if_not_zero<T: IsZero + PartialEq>(obj: T, f: impl Fn(T)) {
     }
 }
 pub fn convert_id<T: ToPrimitive + IsZero>(id: T) -> Option<usize> {
-	id.is_zero().not().then(|| id.to_usize().and_then(|x| Some(x - 1))).flatten()
+    id.is_zero()
+        .not()
+        .then(|| id.to_usize().and_then(|x| Some(x - 1)))
+        .flatten()
 }
 pub fn convert_ids<T: ToPrimitive + IsZero>(id: &[T]) -> Vec<usize> {
-	id.iter().filter_map(|x| x.is_zero().not().then(|| x.to_usize().and_then(|x| Some(x - 1)))).flatten().collect()
+    id.iter()
+        .filter_map(|x| {
+            x.is_zero()
+                .not()
+                .then(|| x.to_usize().and_then(|x| Some(x - 1)))
+        })
+        .flatten()
+        .collect()
 }
 pub fn parse_dtm_map(path: &Path) -> Result<MapData, ()> {
     let mut buf: bytes::Bytes = {
@@ -394,9 +425,7 @@ pub fn parse_dtm_map(path: &Path) -> Result<MapData, ()> {
     parse_dtm_map_by_bytes(buf)
 }
 pub fn parse_dtm_vec(vec: Vec<u8>) -> Result<MapData, ()> {
-    let buf: bytes::Bytes = {
-        Bytes::copy_from_slice(&vec)
-    };
+    let buf: bytes::Bytes = { Bytes::copy_from_slice(&vec) };
     parse_dtm_map_by_bytes(buf)
 }
 pub fn parse_dtm_map_by_bytes(mut buf: Bytes) -> Result<MapData, ()> {
@@ -546,7 +575,7 @@ pub fn parse_dtm_texts(
     Vec<(String, String, String)>,
     Vec<(String, String, String)>,
 ) {
-	let texts = &mut data.text;
+    let texts = &mut data.text;
     let name = texts.remove(0);
     let desc = texts.remove(0);
 
@@ -581,59 +610,64 @@ pub fn parse_dtm_texts(
     ((name, desc), (comp, next), buildings, armies, events)
 }
 pub trait FromDtm {
-	type From;
-	type Additional;
-	type Texts;
-	fn from_dtm(from: &Self::From, texts: &mut Self::Texts, additional: Self::Additional) -> Self;
+    type From;
+    type Additional;
+    type Texts;
+    fn from_dtm(from: &Self::From, texts: &mut Self::Texts, additional: Self::Additional) -> Self;
 }
 impl FromDtm for Relations {
-	type Additional = ();
-	type From = RelationsData;
-	type Texts = ();
-	fn from_dtm(from: &Self::From, _: &mut Self::Texts, _: Self::Additional) -> Self {
-		Self {
-			player: from.a,
-			ally: from.b,
-			neighbour: from.c,
-			enemy: from.d
-		}
-	}
+    type Additional = ();
+    type From = RelationsData;
+    type Texts = ();
+    fn from_dtm(from: &Self::From, _: &mut Self::Texts, _: Self::Additional) -> Self {
+        Self {
+            player: from.a,
+            ally: from.b,
+            neighbour: from.c,
+            enemy: from.d,
+        }
+    }
 }
 impl FromDtm for Army {
-	type Additional = usize;
-	type From = ArmyData;
-	type Texts = Vec<(String, String, String)>;
+    type Additional = usize;
+    type From = ArmyData;
+    type Texts = Vec<(String, String, String)>;
 
-	fn from_dtm(army: &Self::From, armies_texts: &mut Self::Texts, id: Self::Additional) -> Self {
-		let mut troops = vec![];
-		let units = UNITS.read().unwrap();
-		let (army_name, _, _) = armies_texts.remove(0);
-		for troop in &army.troops.troops {
-			troops.extend([
-				&units[troop.id.min(100) as usize]
-			].iter().cycle().take(troop.amount as usize));
-		}
-		let troops = troops.iter().map(|x: &&Unit| {
-			SendMut::new(Troop::new(<Unit as Clone>::clone(x)))
-		});
-		let stats = ArmyStats {
-			gold: 0,
-			mana: 0,
-			army_name
-		};
-		let inventory: Vec<_> = army.items_ids.into_iter().filter(|x| !x.is_zero()).map(|index| {
-			Some(Item { index: index as usize - 1 })
-		}).collect();
-		let pos = pos_from_dtm((army.x as usize, army.y as usize));
-		let active = army.activity.to_bool();
-		let control = Control::PC;
-		Army::new(troops.collect(),
-				  stats,
-				  inventory,
-				  pos,
-				  active,
-				  control)
-	}
+    fn from_dtm(army: &Self::From, armies_texts: &mut Self::Texts, id: Self::Additional) -> Self {
+        let mut troops = vec![];
+        let units = UNITS.read().unwrap();
+        let (army_name, _, _) = armies_texts.remove(0);
+        for troop in &army.troops.troops {
+            troops.extend(
+                [&units[troop.id.min(100) as usize]]
+                    .iter()
+                    .cycle()
+                    .take(troop.amount as usize),
+            );
+        }
+        let troops = troops
+            .iter()
+            .map(|x: &&Unit| SendMut::new(Troop::new(<Unit as Clone>::clone(x))));
+        let stats = ArmyStats {
+            gold: 0,
+            mana: 0,
+            army_name,
+        };
+        let inventory: Vec<_> = army
+            .items_ids
+            .into_iter()
+            .filter(|x| !x.is_zero())
+            .map(|index| {
+                Some(Item {
+                    index: index as usize - 1,
+                })
+            })
+            .collect();
+        let pos = pos_from_dtm((army.x as usize, army.y as usize));
+        let active = army.activity.to_bool();
+        let control = Control::PC;
+        Army::new(troops.collect(), stats, inventory, pos, active, control)
+    }
 }
 impl FromDtm for Event {
     type Additional = usize;
@@ -643,172 +677,263 @@ impl FromDtm for Event {
     fn from_dtm(from: &Self::From, texts: &mut Self::Texts, id: Self::Additional) -> Self {
         // Handle location type
         let location = match from.event_type {
-            0 => Location::Global,
-            1 => Location::Local,
-            2 => Location::Quest,
-            3 => Location::Talks,
-            _ => Location::Global,
+            1 => Location::Global,
+            2 => Location::Local,
+            3 => Location::Quest,
+            4 => Location::Talks,
+            _ => {
+                dbg!(from.event_type, id);
+                Location::Global
+            }
         };
-		
+
         let (name, question, text) = if !texts.is_empty() {
             texts.remove(0)
         } else {
             (String::new(), String::new(), String::new())
         };
+        if from.enemy_defeat_checkmark.to_bool() {
+            dbg!(from.defeat_army_id, id);
+        }
+
+        let (flag_check, flag_change) = {
+            let mut flag = name.split("%").skip(1);
+            flag.next()
+                .and_then(|flag| {
+                    Some(if flag.starts_with("=") {
+                        (Some(flag.split_at(1).1.to_string()), None)
+                    } else {
+                        // Has flag check
+                        if let Some(check) = flag.find("=") {
+                            (
+                                Some(flag[(check + 1)..(flag.len())].to_string()),
+                                Some(flag[1..check].to_string()),
+                            )
+                        } else {
+                            (None, Some(flag.split_at(1).1.to_string()))
+                        }
+                    })
+                })
+                .unwrap_or((None, None))
+        };
 
         let conditions = Conditions {
-			executed: false,
-            activation_time: {
-				Time::new(from.event_date as u64 % (2000 * 12 * 30 * 24 * 60))
-			},
-            relative_time: from.event_date >= 2000 * 12 * 30 * 24 * 60,
+            sub: from.subordinate_event_checkmark.to_bool(),
+            executed: false,
+            activation_time: { Time::new(from.event_date as u64 % (Data::YEAR as u64 * 2000)) },
+            relative_time: from.event_date >= (Data::YEAR as u32 * 2000),
             repeat: if from.multiple_event.to_bool() {
                 Some(Time::new(from.event_repeat as u64))
             } else {
                 None
             },
-			if_event_answ: {
-				let cp = from.happened_event_answ_no_id;
-				let no = from.happened_event_answ_no_checkmark.to_bool()
-					.then(|| {
-						cp.iter().map(|&x| (x as usize, 1))
-					});
-				let cp = from.happened_event_answ_no_id;
-				let yes = from.happened_event_answ_no_checkmark.to_bool()
-					.then(|| {
-						cp.iter().map(|&x| (x as usize, 0))
-					});
-				let mut res = vec![];
-				if let Some(yes) = yes {
-					res.extend(yes);
-				}
-				if let Some(no) = no {
-					res.extend(no);
-				}
-				res.is_empty().not().then_some(res)
-			},
-            if_event_executed: from.not_happened_event_checkmark.to_bool().then(|| {
-				let cp = from.not_happened_event_id;
-				convert_ids(&cp)
-			}),
-            if_event_not_executed: from.not_happened_event_checkmark.to_bool().then(|| {
-				let cp = from.not_happened_event_id;
+            if_event_answ: {
+                let cp = from.happened_event_answ_no_id;
+                let no = from.happened_event_answ_no_checkmark.to_bool().then(|| {
+                    cp.iter()
+                        .filter_map(|&x| x.is_zero().not().then(|| (x as usize, 1)))
+                });
+                let cp = from.happened_event_answ_yes_id;
+                let yes = from.happened_event_answ_yes_checkmark.to_bool().then(|| {
+                    cp.iter()
+                        .filter_map(|&x| x.is_zero().not().then(|| (x as usize, 0)))
+                });
+                let mut res = vec![];
+                if let Some(yes) = yes {
+                    res.extend(yes);
+                }
+                if let Some(no) = no {
+                    res.extend(no);
+                }
+                res.is_empty().not().then_some(res)
+            },
+            if_event_executed: from.happened_event_answ_yes_checkmark.to_bool().then(|| {
+                let cp = from.happened_event_answ_yes_id;
                 convert_ids(&cp)
             }),
-			army_meet: convert_id(from.army_meet_id),
-			armies_active: convert_id(from.army_active_id).and_then(|x| Some(vec![x])),
-			armies_inactive: from.army_unactive_id.is_zero().not().then(|| vec![from.army_unactive_id as usize - 1]),
-			items_check: from.existing_items.to_bool().then(|| {
-				from.item_id.iter().zip(from.existing_item_group_id).filter_map(|(&id, group)| {
-					if id > 0 {
-						Some((match group {
-							6 => ItemCheck::PlayerHasNo,
-							_ => ItemCheck::Player,
-						}, id as usize - 1))
-					} else { None }
-				}).collect()
-			}),
-			flag_check: String::new(),
-            armies_defeated: from.enemy_defeat_checkmark.to_bool()
-				.then_some(convert_ids(&from.defeat_army_id)),
+            if_event_not_executed: from.not_happened_event_checkmark.to_bool().then(|| {
+                let cp = from.not_happened_event_id;
+                convert_ids(&cp)
+            }),
+            building_ownership: from.buildings_ownership.to_bool().then(|| {
+                let buildings = from.building_id;
+                let groups = from.building_ownership_group_id;
+                convert_ids(&buildings)
+                    .into_iter()
+                    .zip(convert_ids(&groups).into_iter())
+                    .collect()
+            }),
+            army_meet: convert_id(from.army_meet_id),
+            armies_active: convert_id(from.army_active_id).and_then(|x| Some(vec![x])),
+            armies_inactive: from
+                .army_unactive_id
+                .is_zero()
+                .not()
+                .then(|| vec![from.army_unactive_id as usize - 1]),
+            items_check: from.existing_items.to_bool().then(|| {
+                from.item_id
+                    .iter()
+                    .zip(from.existing_item_group_id)
+                    .filter_map(|(&id, group)| {
+                        if id > 0 {
+                            Some((
+                                match group {
+                                    6 => ItemCheck::PlayerHasNo,
+                                    _ => ItemCheck::Player,
+                                },
+                                id as usize - 1,
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            }),
+            flag_check,
+            armies_defeated_by_player: from
+                .enemy_defeat_checkmark
+                .to_bool()
+                .then_some(convert_ids(&from.army_defeat_id)),
+            armies_defeated: from
+                .army_already_defeat
+                .is_zero()
+                .not()
+                .then(|| convert_ids(&from.defeat_army_id)),
             xp_req: {
-				let cp = from.current_level;
-				match cp {
-					x if x > 0 => Some(Cmp::GE(x as u64)),
-					x if x < 0 => Some(Cmp::LE(x as u64)),
-					_ => None,
-				}
-			},
+                let cp = from.current_level;
+                match cp {
+                    x if x > 0 => Some(Cmp::GE(x as u64)),
+                    x if x < 0 => Some(Cmp::LE(x as u64)),
+                    _ => None,
+                }
+            },
             gold_req: {
-				let cp = from.current_gold;
-				match cp {
-					x if x > 0 => Some(Cmp::GE(x as u64)),
-					x if x < 0 => Some(Cmp::LE(x as u64)),
-					_ => None,
-				}
-			},
+                let cp = from.current_gold;
+                match cp {
+                    x if x > 0 => Some(Cmp::GE(x as u64)),
+                    x if x < 0 => Some(Cmp::LE(x as u64)),
+                    _ => None,
+                }
+            },
             mana_req: {
-				let cp = from.current_mana;
-				match cp {
-					x if x > 0 => Some(Cmp::GE(x as u64)),
-					x if x < 0 => Some(Cmp::LE(x as u64)),
-					_ => None,
-				}
-			},
+                let cp = from.current_mana;
+                match cp {
+                    x if x > 0 => Some(Cmp::GE(x as u64)),
+                    x if x < 0 => Some(Cmp::LE(x as u64)),
+                    _ => None,
+                }
+            },
             army_req: {
-				let cp = from.unit_in_squad_amount;
-				match cp {
-					x if x > 0 => Some(Cmp::GE(x as u64)),
-					x if x < 0 => Some(Cmp::LE(x as u64)),
-					_ => None,
-				}
-			},
+                let cp = from.unit_in_squad_amount;
+                match cp {
+                    x if x > 0 => Some(Cmp::GE(x as u64)),
+                    x if x < 0 => Some(Cmp::LE(x as u64)),
+                    _ => None,
+                }
+            },
             power_req: {
-				let cp = from.army_strength;
-				match cp {
-					x if x > 0 => Some(Cmp::GE(x as u64)),
-					x if x < 0 => Some(Cmp::LE(x as u64)),
-					_ => None,
-				}
-			},
+                let cp = from.army_strength;
+                match cp {
+                    x if x > 0 => Some(Cmp::GE(x as u64)),
+                    x if x < 0 => Some(Cmp::LE(x as u64)),
+                    _ => None,
+                }
+            },
             hero_has_1_hp: from.hero_have_only_1hp_checkmark.to_bool(),
-			archetype_req: match from.hero_archetype {
-				1 => Some(1),        // Knight
-				2 => Some(2),        // Mage
-				3 => Some(3),        // Ranger
-				_ => None
-			},
-			// TODO!
+            archetype_req: match from.hero_archetype {
+                1 => Some(1), // Knight
+                2 => Some(2), // Mage
+                3 => Some(3), // Ranger
+                _ => None,
+            },
+            // TODO!
             in_building: None,
         };
 
         let mut result = EventResult {
-			activate_armies: from.army_activate_id.is_zero().not()
-				.then_some(convert_ids(&from.army_activate_id)),
-			deactivate_armies: from.army_deactivate_id.is_zero().not()
-				.then(|| vec![from.army_deactivate_id as usize - 1]),
-			// TODO FAG
-			flag_change: String::new(),
-			delayed_event: {
-				let cp = from.relative_event;
-				cp.is_zero().not().then(|| DelayedEvent {
-					time: Time::new(from.relative_event_time_in_hours as u64 * 60),
-					event: cp as usize - 1,
-				})
-			},
-			start_battle_with: from.army_from_start_fight_id.is_zero().not().then(|| from.army_from_start_fight_id as usize - 1),
-			complete_quest: {
-				let cp = from.event_quest_complete_id;
-				convert_id(cp)
-			},
-			learn_spells: from.spell_learn_id.is_zero().not()
-				.then_some(convert_ids(&from.spell_learn_id)),
+            activate_armies: from
+                .army_activate_id
+                .is_zero()
+                .not()
+                .then_some(convert_ids(&from.army_activate_id)),
+            deactivate_armies: from
+                .army_deactivate_id
+                .is_zero()
+                .not()
+                .then(|| vec![from.army_deactivate_id as usize - 1]),
+            // TODO FAG
+            flag_change,
+            delayed_event: {
+                let cp = from.relative_event;
+                cp.is_zero().not().then(|| DelayedEvent {
+                    time: Time::new(from.relative_event_time_in_hours as u64 * 60),
+                    event: cp as usize - 1,
+                })
+            },
+            start_battle_with: from
+                .army_from_start_fight_id
+                .is_zero()
+                .not()
+                .then(|| from.army_from_start_fight_id as usize - 1),
+            complete_quest: {
+                let cp = from.event_quest_complete_id;
+                convert_id(cp)
+            },
+            learn_spells: from
+                .spell_learn_id
+                .is_zero()
+                .not()
+                .then_some(convert_ids(&from.spell_learn_id)),
             change_xp: from.change_xp as i64,
             change_gold: from.change_gold as i64,
             change_mana: from.change_mana as i64,
-            delay: (
-                Time::new(from.event_delay_in_hours as u64),
-                false,
-            ),
+            delay: (Time::new(from.event_delay_in_hours as u64), false),
             lit_lights: {
-				let cp = from.light_activate_light;
-				cp.is_zero().not()
-					.then_some(cp.iter().filter(|x| !x.is_zero()).map(|x| *x as usize - 1).collect())
-			},
+                let cp = from.light_activate_light;
+                cp.is_zero().not().then_some(
+                    cp.iter()
+                        .filter(|x| !x.is_zero())
+                        .map(|x| *x as usize - 1)
+                        .collect(),
+                )
+            },
             sub_event: {
-				let cp = from.subordinate_event_id;
-				cp.is_zero().not().then(|| vec![cp as usize - 1])
-			},
-            plus_items: from.item_add_id.is_zero().not()
-				.then_some(from.item_add_id.iter().filter(|x| !x.is_zero()).map(|&x| x as usize - 1).collect()),
-            minus_items: from.item_remove_id.is_zero().not()
-				.then_some(from.item_remove_id.iter().filter(|x| !x.is_zero()).map(|&x| x as usize - 1).collect()),
-            add_units: from.unit_add_id.is_zero().not()
-				.then_some(from.unit_add_id.iter().filter(|x| !x.is_zero()).map(|&x| x as usize - 1).collect()),
-            remove_units: from.unit_quit_id.is_zero().not()
-				.then_some(from.unit_quit_id.iter().filter(|x| !x.is_zero()).map(|&x| x as usize - 1).collect()),
+                let cp = from.subordinate_event_id;
+                cp.is_zero().not().then(|| vec![cp as usize - 1])
+            },
+            plus_items: from.item_add_id.is_zero().not().then_some(
+                from.item_add_id
+                    .iter()
+                    .filter(|x| !x.is_zero())
+                    .map(|&x| x as usize - 1)
+                    .collect(),
+            ),
+            minus_items: from.item_remove_id.is_zero().not().then_some(
+                from.item_remove_id
+                    .iter()
+                    .filter(|x| !x.is_zero())
+                    .map(|&x| x as usize - 1)
+                    .collect(),
+            ),
+            add_units: from.unit_add_id.is_zero().not().then_some(
+                from.unit_add_id
+                    .iter()
+                    .filter(|x| !x.is_zero())
+                    .map(|&x| x as usize - 1)
+                    .collect(),
+            ),
+            remove_units: from.unit_quit_id.is_zero().not().then_some(
+                from.unit_quit_id
+                    .iter()
+                    .filter(|x| !x.is_zero())
+                    .map(|&x| x as usize - 1)
+                    .collect(),
+            ),
             change_personality: None,
-            question: from.confirm_question.to_bool().then_some((question, vec!["Yes".into(), "No".into()])),
+            question: from
+                .confirm_question
+                .to_bool()
+                .then_some((question, vec!["Yes".into(), "No".into()])),
         };
 
         Event {
@@ -822,151 +947,220 @@ impl FromDtm for Event {
     }
 }
 impl FromDtm for MapBuildingdata {
-	type Additional = usize;
-	type From = BuildingData;
-	type Texts = Vec<(String, String, String)>;
+    type Additional = usize;
+    type From = BuildingData;
+    type Texts = Vec<(String, String, String)>;
 
-	fn from_dtm(building: &Self::From, building_texts: &mut Self::Texts, id: Self::Additional) -> Self {
-		let pos = pos_from_dtm((building.x as usize, building.y as usize));
-		let size = pos_from_dtm((building.size_x as usize, building.size_y as usize));
-		let events = building.event_ids.map(|x| x as usize).to_vec();
-		let gold_income = building.gold_income as u64;
-		let mana_income = building.mana_income as u64;
-		let (name, desc, owner_name) = building_texts.remove(0);
-		let spells_to_learn = building.spell_ids.map(|x| x as usize).to_vec();
-		let group = building.group as usize;
-		let owner = match building.owner_army_id as usize {
-			255 => None,
-			x => Some(x)
-		};
-		let additional_defense = building.additional_garrison_defense as u64;
-		let (items, max_items) = (
-			building.artifact_ids.map(|x| Item {index: x as usize }).to_vec(),
-			building.number_of_artifacts_for_sale as usize,
-		);
-		let (max_mana, max_gold) = (
-			building.max_mana_income as u64,
-			building.max_gold_income as u64,
-		);
-		let variant = match building.variant {
-			1 => BuildingVariant::Town,
-			2 => BuildingVariant::Village(Village { max_mana, max_gold }),
-			3 => BuildingVariant::Castle,
-			4 => BuildingVariant::Fort,
-			5 => BuildingVariant::Tavern,
-			6 => BuildingVariant::Market,
-			7 => BuildingVariant::Church,
-			8 => BuildingVariant::Forge,
-			9 => BuildingVariant::Verf,
-			10 => BuildingVariant::Altar,
-			11 => BuildingVariant::Mine,
-			12 => BuildingVariant::Ruins(items.clone()),
-			13 => BuildingVariant::StoneBridge,
-			14 => BuildingVariant::WoodenBridge,
-			_ => BuildingVariant::Ruins(items.clone()),
-		};
-		let itemcost_range = (building.min_artifact_price as u64, building.max_artifact_price as u64);
-		let market = if matches!(variant, BuildingVariant::Market | BuildingVariant::Town | BuildingVariant::Church) && max_items != 0 {
-			Market {
-				itemcost_range,
-				items,
-				max_items
-			}.into()
-		} else { None };
-		let recruitment = Some(Recruitment::new(building.recruits.map(|x| RecruitUnit { unit: x.id as usize, count: x.amount as usize}).to_vec(), 1.));
-		let mut garrison = vec![];
-		for unit in building.garrison_units {
-			let units = [UNITS.read().unwrap()[unit.id.min(100) as usize].clone()];
-			let units = units
-				.iter()
-				.cycle()
-				.take(unit.count as usize)
-				.map(|x| x.clone())
-				.collect::<Vec<_>>();
-			garrison.extend(units);
-		}
-		MapBuildingdata {
-			owner_name,
-			additional_defense,
-			name,
-			desc,
-			id,
-			events,
-			variant,
-			gold_income,
-			mana_income,
-			garrison,
-			group,
-			market,
-			recruitment,
-			owner,
-			pos,
-			spells_to_learn,
-			relations: Relations::from_dtm(&building.relations, &mut (), ()),
-		}
-	}
+    fn from_dtm(
+        building: &Self::From,
+        building_texts: &mut Self::Texts,
+        id: Self::Additional,
+    ) -> Self {
+        let pos = pos_from_dtm((building.x as usize, building.y as usize));
+        let size = pos_from_dtm((building.size_x as usize, building.size_y as usize));
+        let events = building.event_ids.map(|x| x as usize).to_vec();
+        let gold_income = building.gold_income as u64;
+        let mana_income = building.mana_income as u64;
+        let (name, desc, owner_name) = building_texts.remove(0);
+        let spells_to_learn = building.spell_ids.map(|x| x as usize).to_vec();
+        let group = building.group as usize;
+        let owner = match building.owner_army_id as usize {
+            255 => None,
+            x => Some(x),
+        };
+        let additional_defense = building.additional_garrison_defense as u64;
+        let (items, max_items) = (
+            building
+                .artifact_ids
+                .map(|x| Item { index: x as usize })
+                .to_vec(),
+            building.number_of_artifacts_for_sale as usize,
+        );
+        let (max_mana, max_gold) = (
+            building.max_mana_income as u64,
+            building.max_gold_income as u64,
+        );
+        let variant = match building.variant {
+            1 => BuildingVariant::Town,
+            2 => BuildingVariant::Village(Village { max_mana, max_gold }),
+            3 => BuildingVariant::Castle,
+            4 => BuildingVariant::Fort,
+            5 => BuildingVariant::Tavern,
+            6 => BuildingVariant::Market,
+            7 => BuildingVariant::Church,
+            8 => BuildingVariant::Forge,
+            9 => BuildingVariant::Verf,
+            10 => BuildingVariant::Altar,
+            11 => BuildingVariant::Mine,
+            12 => BuildingVariant::Ruins(items.clone()),
+            13 => BuildingVariant::StoneBridge,
+            14 => BuildingVariant::WoodenBridge,
+            _ => BuildingVariant::Ruins(items.clone()),
+        };
+        let itemcost_range = (
+            building.min_artifact_price as u64,
+            building.max_artifact_price as u64,
+        );
+        let market = if matches!(
+            variant,
+            BuildingVariant::Market | BuildingVariant::Town | BuildingVariant::Church
+        ) && max_items != 0
+        {
+            Market {
+                itemcost_range,
+                items,
+                max_items,
+            }
+            .into()
+        } else {
+            None
+        };
+        let recruitment = Some(Recruitment::new(
+            building
+                .recruits
+                .map(|x| RecruitUnit {
+                    unit: x.id as usize,
+                    count: x.amount as usize,
+                })
+                .to_vec(),
+            1.,
+        ));
+        let mut garrison = vec![];
+        for unit in building.garrison_units {
+            let units = [UNITS.read().unwrap()[unit.id.min(100) as usize].clone()];
+            let units = units
+                .iter()
+                .cycle()
+                .take(unit.count as usize)
+                .map(|x| x.clone())
+                .collect::<Vec<_>>();
+            garrison.extend(units);
+        }
+        MapBuildingdata {
+            owner_name,
+            additional_defense,
+            name,
+            desc,
+            id,
+            events,
+            variant,
+            gold_income,
+            mana_income,
+            garrison,
+            group,
+            market,
+            recruitment,
+            owner,
+            pos,
+            spells_to_learn,
+            relations: Relations::from_dtm(&building.relations, &mut (), ()),
+        }
+    }
 }
 pub fn pos_from_dtm(pos: (usize, usize)) -> (usize, usize) {
-	(pos.1, pos.0)
+    (pos.0, pos.1)
 }
 pub fn convert_dtm_map(mut data: MapData) -> (GameMap, Vec<Event>) {
-	let ((name, description), (company_name, next_map), mut buildings_text, mut armies_text, mut events_text) = parse_dtm_texts(&mut data);
+    let (
+        (name, description),
+        (company_name, next_map),
+        mut buildings_text,
+        mut armies_text,
+        mut events_text,
+    ) = parse_dtm_texts(&mut data);
     let mut tilemap = TileMap::new(data.map.iter().map(|x| *x as usize));
-	for y in 0..(data.settings.size_y as usize) {
-		for x in 0..(data.settings.size_x as usize) {
-			tilemap[pos_from_dtm((x, y))] = data.map[x * tilemap.size + y] as usize;
-		}
-	}
-	let decomap: Vec<usize> = data.decos.iter().map(|x| x.id as usize).collect();
+    for y in 0..(data.settings.size_y as usize) {
+        for x in 0..(data.settings.size_x as usize) {
+            tilemap[pos_from_dtm((x, y))] = data.map[x * tilemap.size + y] as usize;
+        }
+    }
+
+    let decomap = data
+        .decos
+        .iter()
+        .map(|x| MapDeco {
+            index: x.id as usize,
+            x: x.x as usize,
+            y: x.y as usize,
+        })
+        .collect();
+
+    let eventmap = TileMap::new(
+        data.lanterns
+            .iter()
+            .filter_map(|event| (event.map_model == 9).then(|| convert_ids(&event.events))),
+    );
+    // for lantern in data.lanterns {
+
+    // }
+
     let time = data.settings.start_time;
-	let seed = data.settings.seed as usize;
-	let winning_event_id = data.settings.winning_event_id as usize;
-	let losing_event_id = data.settings.losing_event_id as usize;
-	let scenario = match data.settings.scenario_variant {
-		0 => ScenarioVariant::Single,
-		1 => ScenarioVariant::Start(next_map),
-		_ => ScenarioVariant::Series(next_map),
-	};
-	let size = (data.settings.size_x, data.settings.size_y);
-	let buildings = data.buildings.iter().enumerate().map(|(id, b)| MapBuildingdata::from_dtm(&b, &mut buildings_text, id)).collect();
-	
-	let armys = data.armies.iter().enumerate().map(|(id, a)| Army::from_dtm(&a, &mut armies_text, id)).collect();
-	let events = data.events.iter().enumerate().map(|(id, event)| Event::from_dtm(&event, &mut events_text, id)).collect();
-	(GameMap {
-		pause: false,
-		start: StartStats {
-			name,
-			description,
-			seed,
-			winning_event_id,
-			losing_event_id,
-			scenario,
-			time: Time::new(time as u64)
-		},
-		time: Time::new(time as u64),
-		tilemap,
-		decomap,
-		relations: FractionsRelations::default(),
-		hitmap: TileMap::new((0..(size.0 * size.0)).map(|_| HitboxTile::default())),
-		buildings,
-		armys
-	}, events)
+    let seed = data.settings.seed as usize;
+    let winning_event_id = data.settings.winning_event_id as usize;
+    let losing_event_id = data.settings.losing_event_id as usize;
+    let scenario = match data.settings.scenario_variant {
+        0 => ScenarioVariant::Single,
+        1 => ScenarioVariant::Start(next_map),
+        _ => ScenarioVariant::Series(next_map),
+    };
+    let size = (data.settings.size_x, data.settings.size_y);
+    let buildings = data
+        .buildings
+        .iter()
+        .enumerate()
+        .map(|(id, b)| MapBuildingdata::from_dtm(&b, &mut buildings_text, id))
+        .collect();
+
+    let armies = data
+        .armies
+        .iter()
+        .enumerate()
+        .map(|(id, a)| Army::from_dtm(&a, &mut armies_text, id))
+        .collect();
+    let events = data
+        .events
+        .iter()
+        .enumerate()
+        .map(|(id, event)| Event::from_dtm(&event, &mut events_text, id))
+        .collect();
+    (
+        GameMap {
+            pause: false,
+            start: StartStats {
+                name,
+                description,
+                seed,
+                winning_event_id,
+                losing_event_id,
+                scenario,
+                time: Time::new(time as u64),
+            },
+            time: Time::new(time as u64),
+            tilemap,
+            decomap,
+            eventmap,
+            relations: FractionsRelations::default(),
+            hitmap: TileMap::new((0..(size.0 * size.0)).map(|_| HitboxTile::default())),
+            buildings,
+            armys: armies,
+        },
+        events,
+    )
 }
 
 #[derive(FromBytes, Unaligned, Debug)]
 #[repr(packed(1))]
 struct ObjectData {
-	pub group: u16,
-	pub _empty:  [u8; 6],
-	pub id: u16,
-	pub _empty1: [u8;6],
-	
+    pub group: u16,
+    pub _empty: [u8; 6],
+    pub id: u16,
+    pub _empty1: [u8; 6],
 }
 
 pub fn convert_object_id(id: usize) -> (&'static str, usize) {
-	match id {
-		_ => ("zalup", usize::MAX)
-	}
+    match id {
+        _ => ("zalup", usize::MAX),
+    }
 }
 // fn parsing_ugs(content: Vec<u8>) -> Vec<()> {
 // 	let mut bytes = content.bytes();
@@ -982,8 +1176,8 @@ pub fn convert_object_id(id: usize) -> (&'static str, usize) {
 // 				break cp;
 // 			}
 // 		};
-// 		let 
-		
+// 		let
+
 // 	}
 // 	todo!()
 // }
@@ -1000,22 +1194,46 @@ mod test {
     use bytes::Bytes;
     use itertools::Itertools;
 
-    use crate::parse::{parse_units, StupidReader};
-	use tokio;
     use super::convert_dtm_map;
+    use crate::parse::{parse_units, StupidReader};
+    use tokio;
     #[tokio::test]
     async fn test() {
         let buf = include_bytes!("../../../dt/Maps_Rus/Другой берег.DTm");
-		dbg!(fs::read_dir("."));
-		parse_units::<StupidReader>("/home/ledinec/Projects/DiscordTimes_Remastered/dt/Units.ini".into()).await;
+        dbg!(fs::read_dir("."));
+        parse_units::<StupidReader>(
+            "/home/ledinec/Projects/DiscordTimes_Remastered/dt/Units.ini".into(),
+        )
+        .await;
         let data = super::parse_dtm_map_by_bytes(Bytes::copy_from_slice(buf)).unwrap();
-		let (mapa, events) = convert_dtm_map(data);
-		let res = mapa.to_section().iter().map(|(k,v)| format!("{k}={v}")).join("\n");
-		let res1 = events.iter().map(|event| {
-			format!("[Event {}]\n{}\n", event.name, event.to_section().iter().map(|(k,v)| format!("{k}={v}")).join("\n"))
-		}).join("\n");
-		fs::write("/home/ledinec/Projects/DiscordTimes_Remastered/dt/mapapapa.ini", res);
-		fs::write("/home/ledinec/Projects/DiscordTimes_Remastered/dt/mapaevapa.ini", res1);
-		panic!("sosal");
+        let (mapa, events) = convert_dtm_map(data);
+        let res = mapa
+            .to_section()
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .join("\n");
+        let res1 = events
+            .iter()
+            .map(|event| {
+                format!(
+                    "[Event {}]\n{}\n",
+                    event.name,
+                    event
+                        .to_section()
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .join("\n")
+                )
+            })
+            .join("\n");
+        fs::write(
+            "/home/ledinec/Projects/DiscordTimes_Remastered/dt/mapapapa.ini",
+            res,
+        );
+        fs::write(
+            "/home/ledinec/Projects/DiscordTimes_Remastered/dt/mapaevapa.ini",
+            res1,
+        );
+        panic!("sosal");
     }
 }

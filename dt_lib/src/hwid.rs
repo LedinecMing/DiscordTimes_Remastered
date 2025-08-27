@@ -4,8 +4,8 @@
 //! Get a "Hardware ID" for the host machine. This is a UUID
 //! which is intended to uniquely represent this entity.
 
-use thiserror::Error;
 use sysinfo;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum HwIdError {
@@ -108,23 +108,23 @@ mod hwid {
         }
         Err(HwIdError::NotFound)
     }
-	pub fn get_id1() -> Result<std::string::String, HwIdError> {
-		let comps = sysinfo::Components::new_with_refreshed_list();
-		let id =  comps.list().iter().map(|comp| comp.label()).join("\n");
-		let mut hasher = DefaultHasher::new();
-		id.hash(&mut hasher);
-		Ok(dbg!(hasher.finish().to_string()))
-	}
+    pub fn get_id1() -> Result<std::string::String, HwIdError> {
+        let comps = sysinfo::Components::new_with_refreshed_list();
+        let id = comps.list().iter().map(|comp| comp.label()).join("\n");
+        let mut hasher = DefaultHasher::new();
+        id.hash(&mut hasher);
+        Ok(dbg!(hasher.finish().to_string()))
+    }
 }
-#[cfg(target_os="android")]
+#[cfg(target_os = "android")]
 mod hwid {
-	use std::hash;
+    use std::hash;
 
-	use super::*;
-	pub fn get_id() -> Result<std::string::String, HwIdError> {
-		// TODO
-		Ok("mobila".to_string())
-	}
+    use super::*;
+    pub fn get_id() -> Result<std::string::String, HwIdError> {
+        // TODO
+        Ok("mobila".to_string())
+    }
 }
 #[cfg(target_os = "freebsd")]
 #[cfg(target_os = "dragonfly")]
