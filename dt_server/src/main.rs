@@ -1,7 +1,7 @@
 mod hotel;
 
 use crate::hotel::*;
-use alkahest::{alkahests, deserialize, serialize, serialize_to_vec, serialized_size, Formula, SerializeRef};
+use alkahest::{alkahest, deserialize, serialize, serialize_to_vec, serialized_size, Formula, SerializeRef};
 use axum::{
     body::Bytes,
     extract::{
@@ -112,9 +112,9 @@ pub enum RoomStatus {
     End,
 }
 
-#[derive(Clone, Debug)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub enum FilterRules<T: Formula + Deserialize + Serializef> {
+// #[derive(Clone, Debug)]
+// #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub enum FilterRules<T: Formula> {
     WhiteList(Vec<T>),
     BlackList(Vec<T>),
 }
