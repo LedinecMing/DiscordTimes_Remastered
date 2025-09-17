@@ -12,9 +12,19 @@ use rand::{seq::SliceRandom, thread_rng};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ObjectType {
-    Building,
-    Bridge,
-    MapDeco,
+    Building {
+		/// DTm info
+		group: u8,
+		variant: u8
+	},
+    Bridge {
+		group: u8,
+		variant: u8
+	},
+    MapDeco {
+		/// DTm id
+		id: usize
+	},
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -24,8 +34,6 @@ pub struct ObjectInfo {
     pub category: String,
     pub obj_type: ObjectType,
     pub index: usize,
-    /// DTm id
-    pub id: usize,
     pub size: (u8, u8),
 }
 
@@ -56,7 +64,7 @@ pub enum BuildingVariant {
     Market,
     Church,
     Forge,
-    Verf,
+    Port,
     Altar,
     Mine,
     Ruins(Vec<Item>),
@@ -74,7 +82,7 @@ pub struct MapBuildingdata {
     pub owner_name: String,
 
     pub id: usize,
-
+	
     #[default_value = "vec![]"]
     pub events: Vec<usize>,
     #[default_value = "BuildingVariant::Castle"]

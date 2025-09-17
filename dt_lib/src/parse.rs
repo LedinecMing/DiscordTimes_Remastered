@@ -1,3 +1,4 @@
+use log::error;
 /*
 [GlobalIndex Name]
 
@@ -642,7 +643,7 @@ async fn parse_for_sections<Reader: FileAccess>(
     let ini_doc = Reader::read_as_string(path).await;
     advini::parse_for_sections(&ini_doc)
 }
-type Objects = Vec<ObjectInfo>;
+pub type Objects = Vec<ObjectInfo>;
 pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec<String>)) {
     let mut objects = Vec::new();
     let mut req_assets = Vec::new();
@@ -651,7 +652,6 @@ pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec
         let mut category = "".to_string();
         let mut obj_type = None;
         let mut index = None;
-        let mut id = None;
         let name = sec.clone();
         let mut size = (Some(1), Some(1));
         let mut error_collector: Vec<String> = Vec::new();
@@ -678,13 +678,6 @@ pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec
                 "Value of field Index ommited as non-usize",
             );
         }
-        if let Some(res) = prop.get("id") {
-            id = collect_errors(
-                res.parse::<usize>(),
-                &mut error_collector,
-                "Value of field Id ommited as non-usize",
-            );
-        }
         if let Some(res) = prop.get("size") {
             let mut sizes = res
                 .split(|ch: char| !ch.is_ascii_digit())
@@ -694,9 +687,53 @@ pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec
         }
         if let Some(res) = prop.get("type") {
             obj_type = Some(match &**res {
-                "MapDeco" => ObjectType::MapDeco,
-                "Bridge" => ObjectType::Bridge,
-                "Building" => ObjectType::Building,
+                "MapDeco" => ObjectType::MapDeco {
+					id: {
+						prop.get("id").and_then(|res| {
+							collect_errors(
+								res.parse::<usize>(),
+								&mut error_collector,
+								"Value of field Id ommited as non-usize",
+							)
+						}).unwrap_or_else(|| {
+							error!("MapDeco lacks id field");
+							0
+						})
+					}
+				},
+                "Bridge" | "Building" => {
+					let group = prop.get("group").and_then(|res| {
+						collect_errors(
+							res.parse::<u8>(),
+							&mut error_collector,
+							"Value of field group ommited as non-u8",
+						)
+					}).unwrap_or_else(|| {
+						error!("Lacking group field");
+						0
+					});
+					let variant = prop.get("variant").and_then(|res| {
+						collect_errors(
+							res.parse::<u8>(),
+							&mut error_collector,
+							"Value of field variant ommited as non-u8",
+						)
+					}).unwrap_or_else(|| {
+						error!("Lacking variant field");
+						0
+					});
+					if res == "Building" {
+						ObjectType::Building {
+							group,
+							variant
+						}
+					} else {
+						ObjectType::Bridge {
+							group,
+							variant
+						}
+					}
+				}
                 _ => panic!(
                     "{}",
                     format!("Wrong Object Type - '{}' at section {}", res, sec)
@@ -720,7 +757,6 @@ pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec
                     size.0.expect("Cant find SizeW key!"),
                     size.1.expect("Cant find SizeH key!"),
                 ),
-                id: id.unwrap_or(0),
                 path: {
                     if let Some(at) = sec.find(|x: char| x.is_ascii_digit()) {
                         sec.clone()

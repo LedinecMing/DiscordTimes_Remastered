@@ -97,34 +97,34 @@ impl Executor {
     }
     pub fn tick(&mut self, units: &Vec<Unit>) {
         let is_paused = self.map.pause
-            || dbg!(self.players.iter().any(|player| self
+            || self.players.iter().any(|player| self
                 .map
                 .armys
                 .get(player.army)
                 .is_some_and(|army| army.path.is_empty())
-                || !player.execution_queue.is_empty()));
+				&& !player.execution_queue.is_empty());
         if is_paused {
             return;
         }
 
-        fn handle_event_res(players: &mut Players, queue: &mut Vec<DelayedEvent>, res: Executions) {
+        fn handle_event_res(executor: &mut Executor, res: Executions, units: &Vec<Unit>) {
             for (command, player) in res {
                 match command {
                     Execute::Sub(e) => {
-                        // execute_event(
-                        //     e,
-                        //     &mut self.players,
-                        //     &mut self.map,
-                        //     &mut self.events,
-                        //     units,
-                        //     false,
-                        // );
+                        execute_event(
+                            e,
+                            &mut executor.players,
+                            &mut executor.map,
+                            &mut executor.events,
+                            units,
+                            false,
+                        );
                     }
                     Execute::Execute(e) => {
-                        queue.push(e);
+                        executor.execution_queue.push(e);
                     }
                     _ => {
-                        if let Some(player) = players.get_mut(player) {
+                        if let Some(player) = executor.players.get_mut(player) {
                             player.execution_queue.push(command);
                         }
                     }
@@ -141,7 +141,7 @@ impl Executor {
                 false,
             );
             if let Some(res) = res {
-                handle_event_res(&mut self.players, &mut self.execution_queue, res);
+                handle_event_res(self, res, units);
             }
         }
         let mut new = vec![];
@@ -162,7 +162,7 @@ impl Executor {
                 false
             }
         });
-        handle_event_res(&mut self.players, &mut self.execution_queue, new);
+        handle_event_res(self, new, units);
         for player in &mut self.players {
             if let Some(execute) = player.execution_queue.get(0) {
                 let res = match execute {
@@ -173,7 +173,6 @@ impl Executor {
                             Some(BattleInfo::new(&mut self.map.armys, player.army, *with));
                         true
                     }
-                    Execute::Wait(until) => until <= &self.map.time,
                     Execute::Sub(_) => true,
                 };
                 if res {
@@ -189,4 +188,5 @@ impl Executor {
             }
         }
     }
+	
 }

@@ -317,9 +317,10 @@ pub fn find_path(
     let path = astar(
         &start,
         |&(x, y)| {
+			let size = gamemap.tilemap.size as f32 - 1.;
             let edge = (
-                (x as f32 / (MAP_SIZE as f32 - 1.)),
-                (y as f32 / (MAP_SIZE as f32 - 1.)),
+                (x as f32 / size),
+                (y as f32 / size),
             );
             match edge {
                 (0., 0.) => vec![(x + 1, y), (x + 1, y + 1), (x, y + 1)],
@@ -366,12 +367,12 @@ pub fn find_path(
                 ],
             }
             .into_iter()
-            .filter(|p: &(usize, usize)| {
+			.filter(|p: &(usize, usize)| {
                 let hitbox = &gamemap.hitmap[*p];
                 hitbox.passable()
                     && (!(hitbox.need_transport ^ on_transport)
                         || hitbox.building.is_some_and(|n| {
-                            objects[gamemap.buildings[n].id].obj_type == ObjectType::Bridge
+                            matches!(objects[gamemap.buildings[n].id].obj_type, ObjectType::Bridge { .. })
                         }))
             })
             .map(|p| (p, 10 / TILES[gamemap.tilemap[p]].walkspeed))

@@ -85,6 +85,7 @@ pub struct Player {
     pub army: usize,
     pub questbook: Option<Vec<(String, String)>>,
     pub execution_queue: Vec<Execute>,
+	pub wait_until: Option<Time>
 }
 #[derive(Clone, Debug, PartialEq, Default)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]

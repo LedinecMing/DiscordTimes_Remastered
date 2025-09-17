@@ -3,28 +3,15 @@
 use ahash::RandomState;
 use dt_client::*;
 use dt_lib::{
-    battle::{army::*, battlefield::*, control::Player, troop::Troop},
-    effects::*,
-    hwid,
-    items::item::*,
-    locale::{find_all_matches_in_string, parse_locale, Locale},
-    map::{
-        convert::{convert_dtm_map, parse_dtm_map, parse_dtm_map_by_bytes, parse_dtm_vec},
-        event::{execute_event, Event as GameEvent, Execute},
-        map::*,
-        object::ObjectInfo,
-        tile::*,
-    },
-    network::{server::Executor, GameServer},
-    parse::{
+    battle::{army::*, battlefield::*, control::Player, troop::Troop}, effects::*, hwid, items::item::*, locale::{find_all_matches_in_string, parse_locale, Locale}, map::{
+        convert::{convert_dtm_map, parse_dtm_map, parse_dtm_map_by_bytes, parse_dtm_vec}, deco::MapDeco, event::{execute_event, Event as GameEvent, Events, Execute}, map::*, object::{MapBuildingdata, ObjectInfo, ObjectType}, tile::*
+    }, mutrc::*, network::{server::Executor, GameServer}, parse::{
         collect_errors, parse_items, parse_objects, parse_settings, parse_story, parse_units,
         FileAccess, SETTINGS,
-    },
-    time::time::Data as TimeData,
-    units::{
+    }, time::time::Data as TimeData, units::{
         unit::{calclate_unit_power, display_unit, ActionResult, Unit, UnitPos},
         unitstats::ModifyUnitStats,
-    },
+    }
 };
 use futures_util::StreamExt;
 use macroquad::{
@@ -39,12 +26,7 @@ use macroquad::{
 use miniquad::{conf::Icon, log, window::screen_size};
 use once_cell::sync::Lazy;
 use std::{
-    collections::HashMap,
-    fmt::Display,
-    future,
-    num::Saturating,
-    ops::{AddAssign, Index, Not},
-    sync::{Mutex, RwLock},
+    collections::HashMap, fmt::Display, future, num::Saturating, ops::{AddAssign, Index, Not}, path::Path, sync::{Mutex, RwLock}
 };
 use tokio::{runtime::Runtime, task::futures};
 
@@ -113,6 +95,7 @@ macro_rules! objects_mut {
 #[derive(Debug)]
 struct State {
     pub assets: Assets,
+	pub textures: RenderTextures,
     pub game: Game,
     pub game_local: Executor,
     pub ui: Ui,
@@ -151,6 +134,36 @@ async fn load_assets(
         panic!("No asssets!")
     };
     Assets::new(asset_names.into_iter().zip(assets).collect(), fonts)
+}
+async fn load_map(map: &str) -> (GameMap, Events){
+    let bytes = load_file(&format!("Maps_Rus/{}", map)).await.unwrap();
+    let (mut gamemap, events) = convert_dtm_map(parse_dtm_vec(bytes).unwrap(), objects!());
+	dbg!(&gamemap.buildings);
+    {
+        let objects = objects!();
+        let mut count = HashMap::new();
+        for deco in gamemap
+            .decomap
+            .iter()
+            .filter(|&x| objects.iter().find(|el| {
+				match el.obj_type {
+					ObjectType::MapDeco { id } => id == x.index,
+					_ => false,
+				}
+			}).is_none())
+        {
+            count
+                .entry(deco.index.clone())
+                .and_modify(|x: &mut usize| x.add_assign(1))
+                .or_insert(1usize);
+        }
+        dbg!(count);
+        export(&events, "events.ini");
+    }
+	if gamemap.armys.len() == 0 {
+		gamemap.armys.push(Army::new(vec![SendMut::new(Troop::new(units!()[0].clone()))], ArmyStats { gold: 0, army_name: "".into(), mana: 0 }, vec![], (1, 1), true, dt_lib::battle::control::Control::Player(0)));
+	}
+	(gamemap, events)
 }
 async fn game_init() -> State {
     let settings = parse_settings::<QuadFiles>().await;
@@ -269,34 +282,18 @@ async fn game_init() -> State {
         ];
         load_assets(&req_assets_list, fonts).await
     };
-    let map = /*"РК5-Столица в огне.DTm";*/ "Stinger-Paramount_War_HARD.dtm";
-    let bytes = load_file(&format!("Maps_Rus/{}", map)).await.unwrap();
-    let (mut gamemap, events) = convert_dtm_map(parse_dtm_vec(bytes).unwrap());
-    {
-        let objects = objects!();
-        let mut count = HashMap::new();
-        for deco in gamemap
-            .decomap
-            .iter()
-            .filter(|&x| objects.iter().find(|el| el.id == x.index).is_none())
-        {
-            count
-                .entry(deco.index.clone())
-                .and_modify(|x: &mut usize| x.add_assign(1))
-                .or_insert(1usize);
-        }
-        dbg!(count);
-        export(&events, "events.ini");
-    }
+    let map = "Stinger-Paramount_War_HARD.dtm";
+    let (mut gamemap, mut events) = load_map(map).await;
     let mut exec = Executor {
         map: gamemap.clone(),
         events: events.clone(),
         battle: None,
         execution_queue: vec![],
         players: vec![Player {
-            army: 0,
+            army: gamemap.armys.len() - 1,
             questbook: None,
             execution_queue: vec![],
+			wait_until: None
         }],
     };
     exec.tick(units!());
@@ -309,7 +306,7 @@ async fn game_init() -> State {
     //     &settings.additional_locale,
     // );
     gamemap.calc_hitboxes(objects!());
-    let mut battle = BattleInfo::new(&mut gamemap.armys, 0, 1);
+    // let mut battle = BattleInfo::new(&mut gamemap.armys, 0, 1);
     let rt = tokio::runtime::Runtime::new().unwrap();
     let mut camera = Camera2D::from_display_rect(Rect {
         x: 0.,
@@ -321,20 +318,22 @@ async fn game_init() -> State {
     /*let mut powers: Vec<_> = units!().iter().map(|x| (x.info.name.clone(), calclate_unit_power(x))).collect();
     powers.sort_by(|x, y| x.1.total_cmp(&y.1));
     dbg!(powers);*/
+	let game = Game {
+        gamemap,
+        focus: BattleUnitPos { army: 0, pos: 0 },
+        battle: None,
+        variant: GameVariant::Single(Scenario { events }),
+    };
     State {
         rt,
         assets,
+		textures: RenderTextures { map: Texture2D::empty(), decos: Texture2D::empty() },
         ui: Ui {
             main: Menu::Main,
             camera,
             stack: Vec::new(),
         },
-        game: Game {
-            gamemap,
-            focus: BattleUnitPos { army: 0, pos: 0 },
-            battle: Some(battle),
-            variant: GameVariant::Single(Scenario { events }),
-        },
+        game,
         game_local: exec,
     }
 }
@@ -432,8 +431,8 @@ impl Default for MapRenderSettings {
             deco_render: true,
             buildings_render: true,
             tiles_render: true,
-            armies_render: true,
-            err_render: true,
+            armies_render: false,
+            err_render: false,
         }
     }
 }
@@ -863,93 +862,165 @@ fn count_tileset_index(map: &GameMap, pos: (usize, usize)) -> usize {
         + is_dirt((pos.0 + 1, pos.1.saturating_add_signed(-1))) * 8;
     bitmask
 }
-const SIZE: (f32, f32) = (256., 176.);
+const SIZE: (f32, f32) = (32., 22.);//(256., 176.);
+#[derive(Debug)]
+struct RenderTextures {
+	pub map: Texture2D,
+	pub decos: Texture2D
+}
+fn draw_decos(assets: &Assets, decomap: &Vec<MapDeco>) {
+	for deco in decomap {
+        let (i, j) = (deco.x, deco.y);
+        if let Some(obj) = objects!().iter().find(|el| {
+			match el.obj_type {
+				ObjectType::MapDeco { id } => id == deco.index,
+				_ => false,
+			}
+		}) {
+            let texture = assets.get(&obj.path.clone());
+            let size = texture.size();
+            draw_texture_ex(
+                texture,
+                i as f32 * SIZE.0 - size.x + SIZE.0,
+                j as f32 * SIZE.1 - size.y + SIZE.1,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(Vec2::new(
+                        size.x as f32 / 32. * SIZE.0,
+                        size.y as f32 / 22. * SIZE.1,
+                    )),
+					
+                    ..Default::default()
+                },
+            );
+		}
+	}
+}
+fn draw_tiles(assets: &Assets, tilemap: &TileMap<usize>) {
+	let tile_textures = TILES.iter().map(|tile| assets.get(&tile.sprite().to_string())).collect::<Vec<_>>();
+	for i in 0..tilemap.size {
+		for j in 0..tilemap.size {
+			let tile_index = tilemap[(j, i)];
+
+			draw_texture_ex(
+				tile_textures[tile_index],
+				i as f32 * SIZE.0,
+				j as f32 * SIZE.1,
+				WHITE,
+				DrawTextureParams {
+					dest_size: Some(vec2(SIZE.0, SIZE.1)),
+					..Default::default()
+				},
+			);
+		}
+	};
+}
+fn draw_buildings(assets: &Assets, buildings: &Vec<MapBuildingdata>) {
+	for building in buildings {
+		let (i, j) = building.pos;
+		if let Some(obj) = objects!().iter().find(|el| {
+			el.index == building.id
+		}) {
+			let texture = assets.get(&obj.path.clone());
+			let size = texture.size();
+			draw_texture_ex(
+				texture,
+				i as f32 * SIZE.0 - size.x + SIZE.0,
+				j as f32 * SIZE.1 - size.y + SIZE.1,
+				WHITE,
+				DrawTextureParams {
+					dest_size: Some(Vec2::new(
+						size.x as f32 / 32. * SIZE.0,
+						size.y as f32 / 22. * SIZE.1,
+					)),
+					
+					..Default::default()
+				},
+			);
+		}
+	};
+}
+fn prepare_textures(
+	target: &[RenderTarget;2],
+	assets: &Assets,
+    game: &Game,
+) -> RenderTextures {
+	let size = game.gamemap.tilemap.size as u32;
+	let tile_size = (SIZE.0 as u32, SIZE.1 as u32);
+	debug!("CAMERA_CHANGE");
+	let mut camera = Camera2D::from_display_rect(Rect::new(0., SIZE.1 * size as f32, SIZE.0 * size as f32, -SIZE.1 * size as f32));
+	camera.render_target = Some(target[0].clone());
+	set_camera(&camera);
+	
+	let find_decos = |name: &'static str| game.gamemap.decomap.iter().filter(|deco| {
+		objects!().iter().find(|el| {
+			match el.obj_type {
+				ObjectType::MapDeco { id } => id == deco.index,
+				_ => false,
+			}
+		}).is_some_and(|obj| obj.name.contains(name)) }).cloned().collect::<Vec<_>>();
+	debug!("TILE DRAW");
+	draw_tiles(assets, &game.gamemap.tilemap);
+	let mut camera = Camera2D::from_display_rect(Rect::new(0., SIZE.1 * size as f32, SIZE.0 * size as f32, -SIZE.1 * size as f32));
+	camera.render_target = Some(target[1].clone());
+	set_camera(&camera);
+	debug!("DECOS SEARCH");
+	let hills = find_decos("Hills");
+	let mountains = find_decos("Mountain");
+	let trees = find_decos("Tree");
+	let rocks = find_decos("Rocks");
+	debug!("HILLS DRAW");
+	draw_decos(assets, &hills);
+	debug!("BUILDINGS DRAW");
+	draw_buildings(assets, &game.gamemap.buildings);
+	debug!("MOUNTAINS DRAW");
+	draw_decos(assets, &mountains);
+	debug!("TREES DRAW");
+	draw_decos(assets, &trees);
+	debug!("ROCKS DRAW");
+	draw_decos(assets, &rocks);
+
+	// Draw the rest of decos
+	draw_decos(assets, &game.gamemap.decomap.iter().filter(|deco| [&hills, &mountains, &trees, &rocks].iter().all(|x| !x.contains(&deco))).cloned().collect::<Vec<_>>());
+	RenderTextures { map: target[0].texture.clone(), decos: target[1].texture.clone() }
+} 
 fn draw_map(
     assets: &Assets,
     settings: &mut MapRenderSettings,
+	textures: &RenderTextures,
     game: &mut Game,
     executor: &mut Executor,
 ) -> Option<Menu> {
-    let (gamemap, battle) = (&mut game.gamemap, &mut game.battle);
     let camera = &mut settings.camera;
     set_camera(camera);
 
-    if settings.tiles_render {
-        for i in 0..gamemap.tilemap.size {
-            for j in 0..gamemap.tilemap.size {
-                let tile_index = gamemap.tilemap[(j, i)];
-                let tile = TILES[tile_index];
-                let tileset_index = count_tileset_index(&gamemap, (j, i));
+	let size = game.gamemap.tilemap.size as u32;
+	let tile_size = (SIZE.0 as u32, SIZE.1 as u32);
+	
+	let find_decos = |name: &'static str| game.gamemap.decomap.iter().filter(|deco| {
+		objects!().iter().find(|el| {
+			match el.obj_type {
+				ObjectType::MapDeco { id } => id == deco.index,
+				_ => false,
+			}
+		}).is_some_and(|obj| obj.name.contains(name)) }).cloned().collect::<Vec<_>>();
+	draw_tiles(assets, &game.gamemap.tilemap);
+	let hills = find_decos("Hills");
+	let mountains = find_decos("Mountain");
+	let trees = find_decos("Tree");
+	let rocks = find_decos("Rocks");
+	draw_decos(assets, &hills);
+	draw_buildings(assets, &game.gamemap.buildings);
+	draw_decos(assets, &mountains);
+	draw_decos(assets, &trees);
+	draw_decos(assets, &rocks);
 
-                draw_texture_ex(
-                    assets.get(&tile.sprite().to_string()),
-                    i as f32 * SIZE.0,
-                    j as f32 * SIZE.1,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(vec2(SIZE.0, SIZE.1)),
-                        ..Default::default()
-                    },
-                );
-                if is_key_down(KeyCode::F) {
-                    continue;
-                }
-                // if tileset_index != 0 {
-                // 	draw_texture_ex(
-                // 		assets.get(&"grass_tileset.png".to_string()),
-                // 		i as f32 * SIZE.0,
-                // 		j as f32 * SIZE.1,
-                // 		WHITE,
-                // 		DrawTextureParams {
-                // 			source: Rect::new(
-                // 				(tileset_index % 4) as f32 * 256.,
-                // 				(tileset_index / 4) as f32 * 242.,
-                // 				256., 242.
-                // 			).into(),
-                // 			..Default::default()
-                // 		}
-                // 	)
-                //}
-                //draw_text(&*format!("{};{}", i, j), i as f32 * 256., j as f32 * 242., 30., BLACK);
-            }
-        }
-    }
-    let err_texture = assets.get(&"small-fire.png".to_string());
-    if settings.deco_render {
-        for deco in &gamemap.decomap {
-            let (i, j) = (deco.x, deco.y);
-            if let Some(obj) = objects!().iter().find(|x| x.id == deco.index) {
-                let texture = assets.get(&obj.path.clone());
-                let size = texture.size();
-                draw_texture_ex(
-                    texture,
-                    i as f32 * SIZE.0,
-                    j as f32 * SIZE.1,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(Vec2::new(
-                            size.x as f32 / 32. * SIZE.0,
-                            size.y as f32 / 22. * SIZE.1,
-                        )),
-                        ..Default::default()
-                    },
-                );
-            } else if settings.err_render {
-                let size = err_texture.size();
-                draw_texture_ex(
-                    err_texture,
-                    i as f32 * SIZE.0,
-                    j as f32 * SIZE.1,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(Vec2::new(SIZE.0, SIZE.1)),
-                        //dest_size: Some(Vec2::new(size.x as f32 / 32. * SIZE.0, size.y as f32 / 22. * SIZE.1)),
-                        ..Default::default()
-                    },
-                );
-            }
-        }
-    }
+	// Draw the rest of decos
+	draw_decos(assets, &game.gamemap.decomap.iter().filter(|deco| [&hills, &mountains, &trees, &rocks].iter().all(|x| !x.contains(&deco))).cloned().collect::<Vec<_>>());
+	
+    //draw_texture(&textures.map, 0., 0., WHITE);
+	// draw_texture(&textures.decos, 0., 0., WHITE);
+	let (gamemap, battle) = (&mut game.gamemap, &mut game.battle);
     if settings.armies_render {
         for hit in &gamemap.hitmap.inner {
             if let Some(army) = hit.army {
@@ -974,6 +1045,9 @@ fn draw_map(
     if is_key_pressed(KeyCode::T) {
         settings.tiles_render = !settings.tiles_render;
     }
+	if is_key_pressed(KeyCode::F) {
+		settings.armies_render = !settings.armies_render;
+	}
     if is_key_pressed(KeyCode::Y) {
         settings.deco_render = !settings.deco_render;
     }
@@ -1026,8 +1100,8 @@ fn draw_map(
         let tile = (pos / tile_size).floor();
         executor.message_handler(
             dt_lib::network::server::ClientMessage::GoTo((
-                tile.x as usize % 200,
-                tile.y as usize % 200,
+                tile.x as usize % gamemap.tilemap.size,
+                tile.y as usize % gamemap.tilemap.size,
             )),
             0,
         );
@@ -1051,7 +1125,7 @@ fn process_event(state: &mut State, event: IncomingEvent) {
     };
     match event {
         IncomingEvent::Id(army) => {
-            println!("My id is {army}");
+            debug!("My id is {army}");
             conn.army = army;
         }
         IncomingEvent::Game(game) => {
@@ -1079,6 +1153,14 @@ fn process_event(state: &mut State, event: IncomingEvent) {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+	let mut state = game_init().await;
+	let size = state.game.gamemap.tilemap.size as u32;
+	let tile_size = (SIZE.0 as u32, SIZE.1 as u32);
+	let target = [render_target(tile_size.0 * size as u32, tile_size.1 * size as u32),render_target(tile_size.0 * size as u32, tile_size.1 * size as u32)];
+	debug!("START");
+	// state.textures = prepare_textures(&target, &state.assets, &state.game);
+	set_default_camera();
+	debug!("DEFAULT CAMERA SET");
     clear_background(WHITE);
     draw_text(
         "Loading game assets...",
@@ -1087,8 +1169,7 @@ async fn main() {
         20.,
         BLACK,
     );
-    next_frame().await;
-    let mut state = game_init().await;
+    //next_frame().await;
     let bg = root_ui()
         .style_builder()
         .background(state.assets.get(&"Menu.png".to_owned()).get_texture_data())
@@ -1176,11 +1257,32 @@ async fn main() {
                         let mut locale = LOCALE.write().unwrap();
                         ui.label(Some((50., 50.).into()), &locale.get("menu_game_name"));
                         if ui.button(Some((250., 300.).into()), locale.get("menu_start_title")) {
+							// let path = rfd::FileDialog::new()
+							// 	.add_filter("DT maps", &["dtm", "DTm", "DTM"])
+							// 	.set_can_create_directories(false)
+							// 	.pick_file();
+							// if let Some(path) = path {
+							// 	let (gamemap, events) = load_map(&path);
+							// 	state.game.gamemap =gamemap;
+							// 	state.events = events;
+							// 	let exec = Executor {
+							// 		map: gamemap.clone(),
+							// 		events: events.clone(),
+							// 		battle: None,
+							// 		execution_queue: vec![],
+							// 		players: vec![Player {
+							// 			army: 0,
+							// 			questbook: None,
+							// 			execution_queue: vec![],
+							// 		}],
+							// 	};
+							// 	state.game_local = exec;
+							// }
                             let mut camera = Camera2D::from_display_rect(Rect::new(
                                 0.,
-                                SIZE.1 * 30.,
+                                SIZE.1 * 50.,
                                 SIZE.0 * 50.,
-                                -SIZE.1 * 30.,
+                                -SIZE.1 * 50.,
                             ));
                             camera.rotation = 0.;
                             dbg!(&camera);
@@ -1213,11 +1315,13 @@ async fn main() {
                 if let Some(menu) = draw_map(
                     &state.assets,
                     settings,
+					&state.textures,
                     &mut state.game,
                     &mut state.game_local,
                 ) {
                     state.ui.main = menu;
                 };
+				state.game_local.tick(units!());
             }
             Menu::Info => {
                 root_ui().pop_skin();

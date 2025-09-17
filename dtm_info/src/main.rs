@@ -1,13 +1,12 @@
 use std::path::{Path, PathBuf};
-
 use clap::*;
-use dt_lib::map::{
+use dt_lib::{map::{
     convert::{
         if_not_zero, parse_dtm_map, ArmyTroopsData, BuildingData, EventData, FromDtm, GarrisonUnit,
         HeroInfoData, PatrolData, ToBool,
     },
     event::Event,
-};
+}, time::time::{Data, Time}};
 use zerocopy::FromZeros;
 #[derive(Parser)]
 struct Args {
@@ -96,6 +95,8 @@ fn main() {
         data.settings.size_y + 0
     );
 
+	let time = settings.start_time;
+	println!("Time: {}m; {}", time, Time::new(time as u64).to_data([Data::YEAR, Data::MONTH, Data::DAY, Data::HOUR], ":"));
     fn print_hero_info(hero: HeroInfoData) {
         println!("Pos: {}/{}", { hero.x }, { hero.y });
         if_not_zero(hero.gold, |gold| println!("Gold: {}", gold));
@@ -106,7 +107,7 @@ fn main() {
             if_not_zero(unit, |unit| {
                 println!(
                     "Unit: {}; Level: {}; Count: {}",
-                    unit.id, unit.level, unit.count
+                    unit.id, unit.level, unit.amount
                 )
             });
         }

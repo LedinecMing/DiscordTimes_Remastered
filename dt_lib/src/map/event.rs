@@ -466,13 +466,11 @@ pub fn execute_event_as_player(
     if (conds
         .xp_req
         .as_ref()
-        .is_some_and(|req| req.check(player_army.troops[0].get().unit.lvl.xp))
-        || conds.xp_req.is_none())
+        .is_none_or(|req| req.check(player_army.troops[0].get().unit.lvl.xp)))
         && (conds
             .gold_req
             .as_ref()
-            .is_some_and(|req| req.check(player_army.stats.gold))
-            || conds.gold_req.is_none())
+            .is_none_or(|req| req.check(player_army.stats.gold)))
         && conds
         .army_req
         .as_ref()
@@ -491,24 +489,23 @@ pub fn execute_event_as_player(
 		.as_ref()
 		.is_none_or(|req| req.iter().all(|&x| false))
 		// TODO power check
-        && (conds.power_req.as_ref().and_then(|req| Some(true)).unwrap_or(true))
-        && (conds.hero_has_1_hp || !conds.hero_has_1_hp)
+        && (conds.power_req.as_ref().is_none_or(|req| true))
+        && (conds.hero_has_1_hp && player_army.troops[0].get().unit.modified.hp == 1)
 		&& (conds
 			.items_check
 			.as_ref()
-			.is_some_and(|items| items.iter().all(|item| {
+			.is_none_or(|items| items.iter().all(|item| {
 				match item.0 {
 					ItemCheck::Player => player_army.inventory.contains(&Some(Item { index: item.1 })),
 					ItemCheck::PlayerHasNo => !player_army.inventory.contains(&Some(Item { index: item.1 })),
 					_ => false
 				}
-			})) || conds.items_check.is_none())
+			})))
 		// TODO
 		&& conds.building_ownership.as_ref().is_none_or(|reqs| reqs.iter().all(|x| false))
         && (conds
             .in_building
-            .and_then(|building| Some(player_army.building == building.into())))
-        .unwrap_or(true)
+            .is_none_or(|building| player_army.building == building.into()))
     {
         let repeat = conds.repeat;
         // Player army items change
@@ -533,8 +530,11 @@ pub fn execute_event_as_player(
                 .stats
                 .mana
                 .saturating_add_signed(result.change_mana);
-            let troop = &mut player_army.troops[0].get();
-            troop.unit.lvl.xp = troop.unit.lvl.xp.saturating_add_signed(result.change_xp);
+            let troop = &mut player_army.troops.get(0);
+			if let Some(troop) = *troop {
+				let mut troop = troop.get();
+				troop.unit.lvl.xp = troop.unit.lvl.xp.saturating_add_signed(result.change_xp);
+			}
         }
         {
             if let Some(add_units) = &mut result.add_units {
@@ -573,7 +573,7 @@ pub fn execute_event_as_player(
             ));
         }
         if result.delay.1 == true {
-            res.push((Execute::Wait(result.delay.0.clone()), player_id));
+			player.wait_until = Some(result.delay.0.clone() + gamemap.time);
         }
         if let Some(event) = &result.sub_event {
             for event in event {
@@ -645,7 +645,6 @@ pub type Executions = Vec<(Execute, PlayerId)>;
 #[derive(Debug, Clone, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum Execute {
-    Wait(Time),
     Message(Message),
     StartBattle(usize),
     Execute(DelayedEvent),

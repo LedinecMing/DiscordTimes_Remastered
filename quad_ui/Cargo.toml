@@ -10,6 +10,7 @@ dt_client = {path = "../dt_client"}
 ahash = { version = "0.8.11" }
 tokio = { version = "*", features = ["sync", "rt", "rt-multi-thread", "process", "macros", "fs", "time"] }
 futures-util = "*"
+# rfd = { version = "0.15.4", features = ["gtk3"] }
 once_cell = "1.19.0"
 [package.metadata.android]
 res = "../dt/android_pack/android/res/"
