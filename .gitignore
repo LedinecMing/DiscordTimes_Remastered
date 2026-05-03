@@ -1,6 +1,7 @@
 **/target/**
 /.idea/**
 /dt/*
+/dt/assets/**/*.meta
 DT_THINGS
 Water
 notan
@@ -10,7 +11,7 @@ macroquad
 Cargo.lock
 !*/dt/android_pack/android/**
 !dt/assets/
-!dt/assets/**
+!dt/assets/**/*.png
 !*/map/*
 !*/**.ini
 !*/map/**
