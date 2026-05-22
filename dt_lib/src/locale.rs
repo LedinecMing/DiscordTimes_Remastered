@@ -1,10 +1,11 @@
 use crate::parse::FileAccess;
 
 use advini;
+use indexmap::IndexMap;
 use itertools::Itertools;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Locale {
     pub map: HashMap<String, HashMap<String, String>>,
     pub main_lang: String,
@@ -150,7 +151,7 @@ pub fn parse_locale_doc(ini_doc: String, language: &String, locale: &mut Locale)
 pub async fn parse_for_sections_localised<Reader: FileAccess>(
     path: &str,
     locale: &mut Locale,
-) -> Vec<(String, HashMap<String, String>)> {
+) -> Vec<(String, IndexMap<String, String>)> {
     let ini_doc = Reader::read_as_string(path).await;
     advini::parse_for_sections_with(
         &ini_doc,

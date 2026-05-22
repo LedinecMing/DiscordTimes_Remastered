@@ -1,6 +1,7 @@
+use crate::registry::GameInfo;
 use crate::units::unitstats::ModifyUnitStats;
 
-use crate::{battle::army::Army, bonuses::Bonus, effects::effect::EffectTrait, units::unit::*};
+use crate::{battle::army::Army, units::unit::*};
 use alkahest::alkahest;
 use std::fmt::{Debug, Display, Formatter};
 
@@ -17,8 +18,9 @@ pub struct Troop {
 impl Debug for Troop {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Troop")
-            .field("Name", &self.unit.info.name)
-            .field("Army", &self.unit.army)
+			// TODO remove
+//            .field("Name", &self.unit.info.name)
+//            .field("Army", &self.unit.army)
             .field("Pos", &self.pos)
             .finish_non_exhaustive()
     }
@@ -34,56 +36,32 @@ impl Troop {
             unit,
         }
     }
-    pub fn on_pay(&self, army: &mut Army) -> u64 {
+    pub fn on_pay(&self, army: &mut Army, registry: &GameInfo) -> u64 {
         if self.is_free {
             return 0;
         }
-        self.unit.info.cost
+        self.unit.get_info(&registry.units).cost
     }
     pub fn on_hour(&self, army: &mut Army) -> bool {
         true
     }
-    pub fn on_battle_end(&mut self) {
+    pub fn on_battle_end(&mut self, registry: &GameInfo) {
         let unit = &mut self.unit;
         let mut i = 0;
         loop {
             if i + 1 >= unit.effects.len() {
                 break;
             }
-            if unit.effects[i].on_battle_end() && unit.effects[i].is_dead() {
-                let mut effect = unit.effects.remove(i);
-                effect.kill(unit);
-                i -= 1;
-            };
+			// TODO
             if i + 1 >= unit.effects.len() {
                 break;
             }
             i += 1;
         }
-        unit.recalc();
+        unit.recalc(registry);
     }
     pub fn is_dead(&self) -> bool {
         self.unit.is_dead()
-    }
-    pub fn empty() -> Self {
-        Self {
-            was_payed: true,
-            is_free: false,
-            is_main: false,
-            pos: UnitPos::from_index(0),
-            custom_name: None,
-            unit: Unit {
-                stats: UnitStats::empty(),
-                modified: UnitStats::empty(),
-                info: UnitInfo::empty(),
-                lvl: UnitLvl::empty(),
-                inventory: UnitInventory::empty(),
-                army: 0,
-                modify: ModifyUnitStats::default(),
-                bonus: Bonus::NoBonus,
-                effects: vec![],
-            },
-        }
     }
 }
 impl Display for Troop {
@@ -93,7 +71,8 @@ impl Display for Troop {
             None => "".into(),
         };
         let unitdata = &self.unit;
-        let unit_name = &unitdata.info.name;
+        //let unit_name = &unitdata.info.name;
+		let unit_name = "net";
         let name = format!("{}-{}", custom_name, unit_name);
         let stats = &self.unit.modified;
         write!(f, "| {name} |\n| {hp}/{maxhp}ХП ({is_dead}) |\n| {hand_attack} ближнего урона; {ranged_attack} дальнего урона; {magic_attack} магии |\n| {hand_def} ближней защиты.-{ranged_def} дальней защиты. |\n| Защита от магии: {magic_def_percent}|\n|Регенерация {regen_percent}% |\n| Вампиризм {vamp_percent}% |\n| {speed} инициативы |\n| {moves}/{max_moves} ходов |", name=name,

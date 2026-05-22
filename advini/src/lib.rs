@@ -1,15 +1,13 @@
 #![feature(associated_type_defaults)]
-
+use nom::{Err, Finish, IResult, Parser as NomParser, branch::alt, bytes::complete::{is_a, is_not, tag, tag_no_case, take_till, take_until, take_while, take_while1}, character::complete::digit1, combinator::{consumed, map_res, not, opt, recognize, rest, value}, error::{Error, ErrorKind, ParseError}, number::{self, complete::{double, float}}, sequence::{preceded, terminated}};
 pub use advini_derive::*;
 use ini_core::{Item, Parser};
-use num::Num;
+use num::{Num, Zero};
 use std::{
-    collections::HashMap,
-    fmt::{Debug, Display},
-    str::Chars,
+	error::Error as ErrorTrait, fmt::{Debug, Display}
 };
-
-pub fn parse_for_sections(ini_doc: &str) -> Vec<(String, HashMap<String, String>)> {
+use indexmap::IndexMap;
+pub fn parse_for_sections(ini_doc: &str) -> Vec<(String, IndexMap<String, String>)> {
     parse_for_sections_with(
         ini_doc,
         |(prop, v, _s)| (prop.to_lowercase(), v.to_string()),
@@ -20,19 +18,19 @@ pub fn parse_for_sections_with<'a, S>(
     ini_doc: &'a str,
     with: fn((&'a str, &'a str, &mut S)) -> (String, String),
     s: &mut S,
-) -> Vec<(String, HashMap<String, String>)> {
+) -> Vec<(String, IndexMap<String, String>)> {
     let mut result = Vec::new();
     let mut old_sec = "";
     let mut last_prop = "".into();
-    let mut props: HashMap<String, String> = HashMap::new();
+    let mut props: IndexMap<String, String> = IndexMap::new();
     let parser = Parser::new(&*ini_doc).auto_trim(true);
     for item in parser {
         match item {
             Item::Section(sec) => {
                 if !old_sec.is_empty() {
                     result.push((old_sec.into(), props));
-                    props = HashMap::new();
-                    old_sec = sec;
+                    props = IndexMap::new();
+                   old_sec = sec;
                 } else {
                     old_sec = sec
                 }
@@ -54,122 +52,104 @@ pub fn parse_for_sections_with<'a, S>(
     result.push((old_sec.into(), props));
     result
 }
-pub const SEPARATOR: char = ',';
-pub fn parse_string_from_string(mut chars: Chars) -> Result<(String, Chars), IniParseError> {
-    let mut level = (0, false);
-    let mut initial_level = 0;
-    let mut result_string = String::new();
-    loop {
-        if let Some(chr) = chars.next() {
-            match (level.1, chr) {
-                (false, '"') => {
-                    level.0 += 1;
-                    initial_level = level.0;
-                    continue;
-                }
-                (false, _) => {
-                    level.1 = true;
-                }
-                (true, '"') => {
-                    level.0 -= 1;
-                    if let Some(chr) = chars.next() {
-                        if chr == '"' {
-                            if level.0 == 0 {
-                                result_string.push('"');
-                            }
-                            level.0 = 0.max(level.0 - 1);
-                        } else {
-                            if chr == SEPARATOR && level.0 == 0 {
-                                break;
-                            } else {
-                                result_string.push('"');
-                                result_string.push(chr);
-                                level.0 = initial_level;
-                            }
-                        }
-                        continue;
-                    }
-                    continue;
-                }
-                (true, SEPARATOR) => {
-                    if level.0 == 0 {
-                        break;
-                    }
-                }
-                (_, _) => {}
-            }
-            result_string.push(chr);
-        } else {
-            if result_string.is_empty() {
-                return Err(IniParseError::Empty(chars));
-            } else {
-                break;
-            };
-        }
-    }
-    Ok((result_string, chars))
+
+pub fn trim_separator(input: &str) -> IResult<&str, (), Error<&str>> {
+	if let Ok((rest, _)) = tag::<_, _, Error<&str>>(",")(input) {
+		Ok((rest, ()))
+	} else { Err(nom::Err::Error(Error::new(input, ErrorKind::Tag))) }
 }
 
-#[derive(Debug)]
-pub enum IniParseError<'a> {
-    Error(&'a str),
-    Empty(Chars<'a>),
+fn parse_string_from_string(input: &str) -> IResult<&str, &str, Error<&str>> {
+	if let Ok((rest, _)) = trim_separator(input) {
+		return Ok((rest, ""));
+	}
+	let mut opening = consumed(
+		opt( alt( [is_a("\""), is_a("\'")] ) )
+	);
+	let (inner, (opening, _)) = opening.parse(input)?;
+	let (opening, ends_with_separator) = match opening {
+		"" => (",", true),
+		x => (x, false)
+	};
+	if ends_with_separator {
+		terminated(
+			take_until(opening).or(rest),
+			opt(tag(",")))
+			.parse(inner)
+	} else {
+		terminated(
+			take_until(opening).or(rest),
+			opt(take_while(|ch| matches!(ch, '\"' | '\'')))
+		).parse(inner)
+ 	}
 }
-impl From<IniParseError<'static>> for &'static str {
-    fn from(value: IniParseError<'static>) -> Self {
-        match value {
-            IniParseError::Error(string) => string,
-            IniParseError::Empty(_) => "just no chars",
-        }
-    }
+
+pub const SEPARATOR: char = ',';
+
+#[derive(Debug, PartialEq)]
+pub enum IniParseError {
+    Error(String),
+    Empty,
 }
-impl Display for IniParseError<'_> {
+impl From<Err<Error<&str>>> for IniParseError {
+	fn from(value: Err<Error<&str>>) -> Self {
+		IniParseError::Error(value.to_string())
+	}
+}
+impl ErrorTrait for IniParseError {}
+impl Display for IniParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             IniParseError::Error(string) => string,
-            IniParseError::Empty(_) => "just no chars",
+            IniParseError::Empty => "just no chars",
         })
     }
 }
-impl From<&'static str> for IniParseError<'_> {
+impl From<&'static str> for IniParseError {
     fn from(value: &'static str) -> Self {
-        Self::Error(value)
+        Self::Error(value.to_owned())
     }
 }
-pub trait Sections
+pub trait Sections<'z>
 where
     Self: Sized,
 {
-    fn from_section(
-        sec: HashMap<String, String>,
-    ) -> Result<(Self, HashMap<String, String>), &'static str>;
-    fn to_section(&self) -> HashMap<String, String>;
+	type Arg;
+    fn from_section<'a>(
+        sec: IndexMap<String, String>,
+		_additional: Self::Arg
+    ) -> Result<(Self, IndexMap<String, String>), String>;
+    fn to_section<'a>(&self, _addtional: Self::Arg) -> IndexMap<String, String>;
 }
-impl<T: Sections> Sections for Option<T> {
-    fn from_section(
-        sec: HashMap<String, String>,
-    ) -> Result<(Self, HashMap<String, String>), &'static str> {
-        T::from_section(sec).and_then(|res| Ok((Some(res.0), res.1)))
+impl<'z, T: Sections<'z>> Sections<'z> for Option<T> {
+	type Arg = <T as Sections<'z>>::Arg;
+	fn from_section<'a>(
+        sec: IndexMap<String, String>,
+		_additional: Self::Arg
+    ) -> Result<(Self, IndexMap<String, String>), String> {
+        T::from_section(sec, _additional).and_then(|res| Ok((Some(res.0), res.1)))
     }
-    fn to_section(&self) -> HashMap<String, String> {
+    fn to_section(&self, _addtional: Self::Arg) -> IndexMap<String, String> {
         let Some(data) = self else {
-            return HashMap::new();
+            return IndexMap::new();
         };
-        data.to_section()
+        data.to_section(_addtional)
     }
 }
-pub trait Ini
+pub trait Ini<'b>
 where
     Self: Sized,
 {
-    fn eat(chars: Chars) -> Result<(Self, Chars), IniParseError>;
-    fn vomit(&self) -> String;
+	type Arg = ();
+    fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError>;
+    fn vomit(&self, _additional: Self::Arg) -> String;
 }
-impl Ini for String {
-    fn eat(chars: Chars) -> Result<(Self, Chars), IniParseError> {
-        parse_string_from_string(chars)
+impl Ini<'_> for String {
+	fn eat<'a>(input: &'a str, _: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+        parse_string_from_string(input).map(|x| (x.0, x.1.to_owned()))
+			.map_err(Into::into)
     }
-    fn vomit(&self) -> String {
+    fn vomit(&self, _: Self::Arg) -> String {
         let amount = self
             .chars()
             .fold((0, 0, false), |acc, chr| match (chr, acc.2) {
@@ -186,22 +166,30 @@ impl Ini for String {
         res
     }
 }
-impl Ini for bool {
-    fn eat(mut chars: Chars) -> Result<(Self, Chars), IniParseError> {
-        loop {
-            if let Some(chr) = chars.next() {
-                match chr {
-                    SEPARATOR => break Err(IniParseError::Empty(chars)),
-                    't' | 'y' | '1' => break Ok((true, chars)),
-                    'f' | 'n' | '0' => break Ok((false, chars)),
-                    _ => continue,
-                }
-            } else {
-                break Err(IniParseError::Empty(chars));
-            }
-        }
-    }
-    fn vomit(&self) -> String {
+impl Ini<'_> for bool {
+    fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+		if let Ok((rest, _)) = trim_separator(input) {
+			return Ok((rest, false));
+		}
+		
+		terminated(
+			alt([
+				value(true, alt([
+					tag_no_case("y"),
+					tag_no_case("t"),
+					tag_no_case("1")
+				])),
+				value(false, alt([
+					tag_no_case("f"),
+					tag_no_case("n"),
+					tag_no_case("0")
+				])),
+			]),
+			take_till(|ch| ch == ',')
+		)
+			.parse(input).map_err(Into::into)
+		}
+    fn vomit(&self, _additional: Self::Arg) -> String {
         if *self {
             "true".into()
         } else {
@@ -209,99 +197,34 @@ impl Ini for bool {
         }
     }
 }
-impl<T: Ini> Ini for Option<T> {
-    fn eat(chars: Chars) -> Result<(Self, Chars), IniParseError> {
-        T::eat(chars).map(|x| (Some(x.0), x.1))
+impl<'b, T: Ini<'b>> Ini<'b> for Option<T> {
+	type Arg = T::Arg;
+	fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+		if let Ok((rest, _)) = trim_separator(input) {
+			return Ok((rest, None));
+		};
+		let res = T::eat(input, _additional)?;
+		Ok((res.0, Some(res.1)))
     }
-    fn vomit(&self) -> String {
+	fn vomit(&self, _additional: Self::Arg) -> String {
         match self {
-            Some(v) => v.vomit(),
-            None => "None".to_string(),
+            Some(v) => v.vomit(_additional),
+            None => "".to_string(),
         }
-    }
-}
-// impl<'b> Ini for &'b str {
-// 	fn eat<'a>(chars: Chars<'a>) -> Result<(Self, Chars<'a>), IniParseError> {
-// 		match parse_string_from_string(chars) {
-// 			Ok(v) => Ok((v.0.as_str(), v.1)),
-// 			Err(a) => Err(a)
-// 		}
-// 	}
-// 	fn vomit(&self) -> String {
-// 		let amount = self
-// 			.chars()
-// 			.fold((0, 0, false), |acc, chr|
-// 				  match (chr, acc.2) {
-// 					  ('"', true) => {
-// 						  (acc.0, acc.1 + 1, true)
-// 					  },
-// 					  (_, true) => {
-// 						  (acc.1, 0, false)
-// 					  },
-// 					  ('"', false) => {
-// 						  (acc.0, 1, true)
-// 					  },
-// 					  (_,_) => { acc }
-// 				  }
-// 			).0;
-// 		let beginning = (0..=amount).map(|_| "\"").collect::<Vec<&str>>().concat();
-// 		let mut res = beginning.clone();
-// 		res.push_str(self);
-// 		res.push_str(beginning.as_str());
-// 		res
-// 	}
-// }
-impl Ini for char {
-    fn eat(mut chars: Chars) -> Result<(Self, Chars), IniParseError> {
-        Ok((
-            {
-                let chr = match chars.next() {
-                    Some(v) => v,
-                    None => return Err(IniParseError::Empty(chars)),
-                };
-                if chars.next() != Some(SEPARATOR) {
-                    return Err("problems with your char".into());
-                }
-                chr
-            },
-            chars,
-        ))
-    }
-    fn vomit(&self) -> String {
-        self.to_string()
     }
 }
 
 macro_rules! impl_for_num {
     ($ty:ty) => {
-        impl Ini for $ty {
-            fn eat(mut chars: Chars) -> Result<(Self, Chars), IniParseError> {
-                let mut str_repr = String::new();
-                loop {
-                    if let Some(chr) = chars.next() {
-                        if chr != SEPARATOR {
-                            str_repr.push(chr);
-                        } else {
-                            return Ok((
-                                Num::from_str_radix(&str_repr.trim(), 10)
-                                    .map_err(|_| "Parsing of num failed")?,
-                                chars,
-                            ));
-                        }
-                    } else {
-                        return if str_repr.is_empty() {
-                            Err(IniParseError::Empty(chars))
-                        } else {
-                            Ok((
-                                Num::from_str_radix(&str_repr.trim(), 10)
-                                    .map_err(|_| "Parsing of num failed")?,
-                                chars,
-                            ))
-                        };
-                    }
-                }
+        impl Ini<'_> for $ty {
+            fn eat<'a>(input: &'a str, _: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+				if let Ok((rest, _)) = trim_separator(input) {
+					return Ok((rest, <Self as Zero>::zero()));
+				}
+				let (rest, res) = digit1(input)?;
+                Ok((rest, Num::from_str_radix(res, 10).map_err(|_| IniParseError::Empty)?))
             }
-            fn vomit(&self) -> String {
+            fn vomit(&self, _: Self::Arg) -> String {
                 self.to_string()
             }
         }
@@ -317,10 +240,32 @@ impl_for_num!(u64);
 impl_for_num!(u32);
 impl_for_num!(u16);
 impl_for_num!(u8);
-impl_for_num!(f32);
-impl_for_num!(f64);
 impl_for_num!(usize);
 impl_for_num!(isize);
+
+impl Ini<'_> for f32 {
+	fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+		if let Ok((rest, _)) = trim_separator(input) {
+			return Ok((rest, <Self as Zero>::zero()));
+		};
+		Ok(float(input)?)
+	}
+	fn vomit(&self, _additional: Self::Arg) -> String {
+		self.to_string()
+	}
+}
+impl Ini<'_> for f64 {
+	fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+		if let Ok((rest, _)) = trim_separator(input) {
+			return Ok((rest, <Self as Zero>::zero()));
+		};
+		Ok(double(input)?)
+	}
+	fn vomit(&self, _additional: Self::Arg) -> String {
+		self.to_string()
+	}
+}
+
 
 macro_rules! tuple_impls {
     () => {};
@@ -329,30 +274,34 @@ macro_rules! tuple_impls {
         tuple_impls!($( ($nidx => $ntyp), )*); // invoke macro on tail
     };
      ([$(($accIdx: tt, $accTyp: ident);)+]  ($idx:tt => $typ:ident), $( ($nidx:tt => $ntyp:ident), )*) => {
-      tuple_impls!([($idx, $typ); $(($accIdx, $accTyp); )*] $( ($nidx => $ntyp), ) *);
+		 tuple_impls!([($idx, $typ); $(($accIdx, $accTyp); )*] $( ($nidx => $ntyp), ) *);
     };
 
     ([($idx:tt, $typ:ident); $( ($nidx:tt, $ntyp:ident); )*]) => {
-		impl<$typ : Ini, $( $ntyp : Ini),*> Ini for ($typ, $( $ntyp ),*) {
-			fn eat(mut chars: Chars) -> Result<(Self, Chars), IniParseError> {
+		impl<'z, T: 'z + Copy, $typ : Ini<'z, Arg=T>, $( $ntyp : Ini<'z, Arg=T>),*> Ini<'z> for ($typ, $( $ntyp ),*) {
+			type Arg = T;
+			fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+				let mut rest = input;
 				let result = (
 					{
 						let res;
-						(res, chars) = <$typ as Ini>::eat(chars)?;
+						(rest, res) = <$typ as Ini>::eat(rest, _additional)?;
+						(rest, _) = tag(",").parse(rest)?; 
 						res
 					},
 					$(
 						{
 							let res;
-							(res, chars) = <$ntyp as Ini>::eat(chars)?;
+							(rest, res) = <$ntyp as Ini>::eat(rest, _additional)?;
+							(rest, _) = tag(",").parse(rest)?;	
 							res
 						},
 					)*
 				);
-				Ok((result, chars))
+				Ok((rest, result))
 			}
-			fn vomit(&self) -> String {
-				[self.$idx.vomit(), $( self.$nidx.vomit() ), *].join(",")
+			fn vomit(&self, _additional: Self::Arg) -> String {
+				[self.$idx.vomit(_additional), $( self.$nidx.vomit(_additional) ), *].join(",")
 			}
 		}
 	}
@@ -370,38 +319,37 @@ tuple_impls!(
     (0 => A),
 );
 
-impl<T: Ini> Ini for Vec<T> {
-    fn eat(mut chars: Chars) -> Result<(Self, Chars), IniParseError> {
+impl<'z, T: Ini<'z>> Ini<'z> for Vec<T> where T::Arg: Copy {
+	type Arg = T::Arg;
+    fn eat<'a>(mut input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
         let mut new = Vec::new();
-        loop {
-            let value;
-            let res = T::eat(chars);
-            (value, chars) = match res {
-                Ok(v) => v,
-                Err(IniParseError::Empty(chars)) => return Ok((new, chars)),
-                err => return Err(err.err().unwrap()),
-            };
-            new.push(value);
-        }
+		loop {
+			if input.is_empty() {
+				break;
+			}
+			let (rest, value) = T::eat(input, _additional)?;
+			input = tag(",")(rest)?.0;
+			new.push(value);
+		}
+		Ok((input, new))
+		
     }
-    fn vomit(&self) -> String {
+    fn vomit(&self, _additional: Self::Arg) -> String {
         self.iter()
-            .fold(String::new(), |acc, el| acc + &el.vomit() + ",")
+            .fold(String::new(), |acc, el| acc + &el.vomit(_additional) + ",")
     }
 }
-pub type Section = HashMap<String, String>;
-pub type SectionError = &'static str;
+pub type Section = IndexMap<String, String>;
+pub type SectionError = String;
 
 pub fn parse_for_props(ini_doc: &str) -> Vec<(String, String)> {
     let mut props: Vec<(String, String)> = Vec::new();
     let parser = Parser::new(ini_doc).auto_trim(true);
-    let mut last_prop = "".to_string();
     for item in parser {
         match item {
             Item::Section(_) => {}
             Item::Property(k, v) => {
-                props.push((k.to_lowercase().into(), v.into()));
-                last_prop = k.into();
+                props.push((k.to_lowercase(), v.into()));
             }
             Item::Blank | Item::Comment(_) => {}
             Item::Action(v) => {
@@ -413,4 +361,31 @@ pub fn parse_for_props(ini_doc: &str) -> Vec<(String, String)> {
         }
     }
     props
+}
+
+
+#[test]
+pub fn test_string_parsing() {
+	for quote in ["'", "\""] {
+		for i in 0..=10 {
+			let term = quote.repeat(i);
+			let input = &format!("{term}хихишки{term}");
+			assert_eq!(String::eat(input, ()), Ok(("", "хихишки".to_owned())));
+		}
+	}
+	for i in 1..=10 {
+		let input = &",тест".repeat(i);
+		let output: &str = &input[1..];
+		assert_eq!(String::eat(input, ()), Ok((output, String::new())));
+	}
+	assert_eq!(String::eat("тест", ()), Ok(("", "тест".to_owned())));
+	assert_eq!(String::eat("тест,", ()), Ok(("", "тест".to_owned())));
+	assert_eq!(String::eat(",", ()), Ok(("", "".to_owned())));
+}
+
+#[test]
+pub fn test_vec() {
+	let v = vec![1; 10];
+	let output = "1,".repeat(10);
+	assert_eq!(v.vomit(()), output);
 }

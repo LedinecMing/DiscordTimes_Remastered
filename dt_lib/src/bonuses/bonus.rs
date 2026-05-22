@@ -1,409 +1,424 @@
 use crate::{
-    battle::{army::Army, battlefield::BattleInfo},
-    effects::effect::*,
-    time::time::Time,
-    units::{
-        unit::{MagicType, Power, Unit, UnitPos, UnitType},
+    battle::{BattleUnit, HitMap, MAX_LINES, Troop, TroopType, army::Army, battlefield::BattleInfo}, effects::effect::*, map::event::Cmp, registry::{self, GameInfo, Units}, time::time::Time, units::{
+        unit::{AttackSettings, MagicType, Power, Unit, UnitPos, UnitType},
         unitstats::{Modify, ModifyDefence, *},
-    },
+    }
 };
 use alkahest::alkahest;
 use dyn_clone::DynClone;
+use indexmap::IndexMap;
+use itertools::Itertools;
 use math_thingies::Percent;
-use std::{cmp::min, fmt::Debug};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_with::{serde_as, FromInto};
+use std::{cmp::min, collections::HashMap, default, fmt::Debug, ops::{Index, IndexMut}};
 
-pub struct BonusInfo {
-    pub piercing: Option<Percent>,
-    pub true_damage: Option<usize>,
-    pub attacks_from_reserve: bool,
-    pub attacks_back: bool,
-    pub stats_on_first_move: Option<ModifyUnitStats>,
-    pub stats_in_garrison: Option<ModifyUnitStats>,
-    pub stats_on_block: Option<ModifyUnitStats>,
-    pub stats_on_kill: Option<ModifyUnitStats>,
-    pub kills_on_death: bool,
-    pub hand_defence: Option<Percent>,
-    pub ranged_defence: Option<Percent>,
-    pub magic_defence: Option<Percent>,
-    pub multiple_targets: bool,
-    pub flank_multiplier: f32,
-    pub trading_multiplier: f32,
-    pub poison: bool,
-    pub global_healing: Option<Percent>,
-}
-#[derive(Copy, Debug, Clone, PartialEq, Eq)]
-#[repr(u32)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, serde::Deserialize, serde::Serialize, JsonSchema)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub enum Bonus {
-    DefencePiercing,
-    Dodging,
-    Fast,
-    DeadDodging,
-    FastDead,
-    VampiresGist,
-    AncientVampiresGist,
-    Berserk,
-    Block,
-    PoisonAttack,
-    FireAttack,
-    Invulnerable,
-    GodAnger,
-    GodStrike,
-    Ghost,
-    DeathCurse,
-    Artillery,
-    Counterblow,
-    Garrison,
-    Stealth,
-    DeadRessurect,
-    SpearDefence,
-    ManyTargets,
-    FlankStrike,
-    Merchant,
-    ArmyMedic,
-    Custom = { u32::MAX - 1 },
-    NoBonus = u32::MAX,
+#[repr(u8)]
+pub enum AbilityCondition {
+	BattleStart = 0,
+	Turn = 1,
+	BattleEnd = 2,
+	Kill = 3,
+	Attacked = 4,
+	Attacking = 5,
+	Moves = 6,
+	Skips = 7,
 }
-impl Bonus {
-    pub fn on_attacked(
-        &self,
-        damage: Power,
-        receiver: &mut Unit,
-        receiver_hitmap: &Vec<Option<usize>>,
-        sender: &mut Unit,
-        receiver_pos: UnitPos,
-        sender_pos: UnitPos,
-        battle: &BattleInfo,
-    ) -> Power {
-        match self {
-            Self::AncientVampiresGist
-            | Self::VampiresGist
-            | Self::DeadDodging
-            | Self::Dodging
-            | Self::Garrison => {
-                let percent_70 = Percent::new(66);
-                Power {
-                    magic: percent_70.calc(damage.magic),
-                    ranged: percent_70.calc(damage.ranged),
-                    hand: percent_70.calc(damage.hand),
-                }
-            }
-            Self::Invulnerable => Power {
-                hand: min(1, damage.hand),
-                ranged: min(1, damage.ranged),
-                magic: damage.magic,
-            },
-            Self::Ghost => {
-                let mut corrected_damage_units =
-                    damage.magic + damage.ranged.min(1) + damage.hand.min(1);
-                if corrected_damage_units == 0 {
-                    corrected_damage_units = 1;
-                }
-                if (receiver.stats.hp - corrected_damage_units as i64) < 1 {
-                    if sender.modified.defence.death_magic.get()
-                        <= 30 * (sender.modified.max_moves as i16)
-                    {
-                        sender.kill();
-                    }
-                }
-                Power {
-                    magic: damage.magic,
-                    ranged: damage.ranged.min(1),
-                    hand: damage.hand.min(1),
-                }
-            }
-            Self::DeathCurse => {
-                let mut corrected_damage_units = damage.magic + damage.ranged + damage.hand;
-                if corrected_damage_units == 0 {
-                    corrected_damage_units = 1;
-                }
-                if (receiver.modified.hp as i64 - corrected_damage_units as i64) < 1 {
-                    sender.kill();
-                }
-                damage
-            }
-            Self::DeadRessurect => {
-                let mut corrected_damage_units = damage.magic + damage.hand + damage.ranged;
-                if corrected_damage_units == 0 {
-                    corrected_damage_units = 1;
-                }
-                if (receiver.modified.hp - corrected_damage_units as i64) < 1
-                    && !receiver.has_effect_kind(EffectKind::Fire)
-                {
-                    let hp = receiver.modified.hp;
-                    receiver.add_effect(RessurectedEffect::new());
-                    Power {
-                        hand: hp as u64,
-                        ..Power::empty()
-                    }
-                } else {
-                    damage
-                }
-            }
-            Self::Counterblow => {
-                if sender.get_bonus() != Bonus::Counterblow {
-                    receiver.attack(
-                        sender,
-                        sender_pos,
-                        receiver_pos,
-                        battle,
-                        receiver_hitmap,
-                        true,
-                    );
-                }
-                damage
-            }
-            Self::Stealth => {
-                if receiver.modified.moves == receiver.modified.max_moves {
-                    Power::empty()
-                } else {
-                    damage
-                }
-            }
-            _ => damage,
-        }
-    }
-    pub fn on_attacking(
-        &self,
-        damage: Power,
-        receiver: &mut Unit,
-        sender: &mut Unit,
-        receiver_pos: UnitPos,
-        sender_pos: UnitPos,
-    ) -> Power {
-        match self {
-            Self::DefencePiercing
-            | Self::VampiresGist
-            | Self::AncientVampiresGist
-            | Self::Artillery => pierce(sender),
-            Self::PoisonAttack => {
-                if !receiver.has_effect_kind(EffectKind::Poison)
-                    && receiver.info.unit_type != UnitType::Undead
-                {
-                    if damage.ranged > 1 || damage.hand > 1 {
-                        receiver.add_effect(Poison::default());
-                    }
-                }
-                damage
-            }
-            Self::FireAttack => {
-                if !receiver.has_effect_kind(EffectKind::Fire) {
-                    if damage.ranged > 1 || damage.hand > 1 {
-                        receiver.add_effect(Fire::default());
-                    } else if damage.magic > 1
-                        && matches!(
-                            sender.info.magic_info.and_then(|x| Some(x.0)),
-                            Some(MagicType::Elemental)
-                        )
-                    {
-                        receiver.add_effect(Fire::new(sender.modified.damage.magic as i64));
-                    } else if damage.magic > 1 {
-                        receiver.add_effect(Fire::new(sender.modified.damage.magic as i64 / 2));
-                    }
-                }
-                damage
-            }
-            Self::GodAnger => {
-                damage
-                    + Power {
-                        hand: 10,
-                        ..Power::empty()
-                    }
-            }
-            Self::GodStrike => {
-                damage
-                    + Power {
-                        hand: 20,
-                        ..Power::empty()
-                    }
-            }
-            Self::FlankStrike => {
-                if damage.hand > 0 && receiver_pos.0.abs_diff(sender_pos.0) > 1 {
-                    Power {
-                        hand: { damage.hand * 2 },
-                        ..Power::empty()
-                    }
-                } else {
-                    damage
-                }
-            }
-            _ => damage,
-        }
-    }
-    pub fn on_kill(&self, receiver: &mut Unit, sender: &mut Unit) -> bool {
-        match self {
-            Self::Berserk => {
-                let percent_10 = Percent::new(10);
-                sender.add_effect(ToEndEffect {
-                    info: EffectInfo { lifetime: i32::MAX },
-                    modify: ModifyUnitStats {
-                        damage: ModifyPower {
-                            hand: *Modify::default().percent_add(percent_10),
-                            ranged: *Modify::default().percent_add(percent_10),
-                            magic: *Modify::default().percent_add(percent_10),
-                        },
-                        ..Default::default()
-                    },
-                });
-                true
-            }
-            _ => false,
-        }
-    }
-    pub fn on_tick(&self, unit: &mut Unit) -> bool {
-        match self {
-            _ => false,
-        }
-    }
-    pub fn on_12_hour(&self, army: &Army) -> bool {
-        match self {
-            Self::ArmyMedic => true,
-            _ => false,
-        }
-    }
-    pub fn on_battle_start(&self, unit: &mut Unit, battle: &BattleInfo) -> bool {
-        match self {
-            Self::Fast | Self::FastDead | Self::AncientVampiresGist => {
-                unit.add_effect(MoreMoves::default());
-                true
-            }
-            Self::Artillery => {
-                unit.add_effect(ArtilleryEffect {
-                    info: EffectInfo { lifetime: 1 },
-                });
-                true
-            }
-            Self::Garrison => unit.add_effect(ToEndEffect {
-                info: EffectInfo { lifetime: i32::MAX },
-                modify: ModifyUnitStats {
-                    damage: ModifyPower {
-                        ranged: *Modify::default().percent_add(Percent::new(100)),
-                        hand: *Modify::default().percent_add(Percent::new(100)),
-                        ..Default::default()
-                    },
-                    defence: ModifyDefence {
-                        ranged_units: *Modify::default().percent_add(Percent::new(100)),
-                        hand_units: *Modify::default().percent_add(Percent::new(100)),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            }),
-            Self::SpearDefence => unit.add_effect(SpearEffect {
-                info: EffectInfo { lifetime: 1 },
-            }),
-            _ => false,
-        }
-    }
-    pub fn on_move_skip(&self, unit: &mut Unit) -> bool {
-        match self {
-            Self::Block => {
-                unit.add_effect(BlockEffect {
-                    info: EffectInfo { lifetime: 1 },
-                });
-                true
-            }
-            _ => false,
-        }
-    }
-    pub fn can_trade(&self) -> bool {
-        match self {
-            Self::Merchant => true,
-            _ => false,
-        }
-    }
-    pub fn can_attack_from_reserve(&self) -> bool {
-        match self {
-            Self::Ghost => true,
-            _ => false,
-        }
-    }
-    pub fn locale_id(&self) -> (&'static str, &'static str) {
-        match self {
-            Self::Artillery => ("bonus_artillery", "bonus_artillery_desc"),
-            Self::AncientVampiresGist => ("bonus_oldvampiresgist", "bonus_oldvampiresgist_desc"),
-            Self::VampiresGist => ("bonus_vampiresgist", "bonus_vampiresgist_desc"),
-            Self::SpearDefence => ("bonus_speardefense", "bonus_speardefense_desc"),
-            Self::ArmyMedic => ("bonus_armymedic", "bonus_armymedic_desc"),
-            Self::Berserk => ("bonus_berserk", "bonus_berserk_desc"),
-            Self::Block => ("bonus_block", "bonus_block_desc"),
-            Self::Counterblow => ("bonus_counterblow", "bonus_counterblow_desc"),
-            Self::DeadDodging => ("bonus_deaddodging", "bonus_deaddodging_desc"),
-            Self::DeadRessurect => ("bonus_deadressurect", "bonus_deadressurect_desc"),
-            Self::DeathCurse => ("bonus_deathcurse", "bonus_deathcurse_desc"),
-            Self::DefencePiercing => ("bonus_defencepiercing", "bonus_defencepiercing_desc"),
-            Self::Dodging => ("bonus_dodging", "bonus_dodging_desc"),
-            Self::Fast => ("bonus_fastgoing", "bonus_fastgoing_desc"),
-            Self::FastDead => ("bonus_fastdead", "bonus_fastdead_desc"),
-            Self::FireAttack => ("bonus_fire", "bonus_fire_desc"),
-            Self::Garrison => ("bonus_garrison", "bonus_garrison_desc"),
-            Self::Ghost => ("bonus_ghost", "bonus_ghost_desc"),
-            Self::GodAnger => ("bonus_godanger", "bonus_godanger_desc"),
-            Self::GodStrike => ("bonus_godstrike", "bonus_godstrike_desc"),
-            Self::Invulnerable => ("bonus_invulnerable", "bonus_invulnerable_desc"),
-            Self::ManyTargets => ("bonus_manytargets", "bonus_manytargets_desc"),
-            Self::Merchant => ("bonus_merchant", "bonus_merchant"),
-            Self::PoisonAttack => ("bonus_poison", "bonus_poison_desc"),
-            Self::Stealth => ("bonus_stealth", "bonus_stealth_desc"),
-            Self::FlankStrike => ("bonus_flankstrike", "bonus_flankstrike_desc"),
-            Self::NoBonus | Self::Custom => ("", ""),
-        }
-    }
+pub const MAX_ABILITY: usize = AbilityCondition::Skips as u8 as usize + 1;
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, JsonSchema)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub enum RelativeUnit {
+	ByAbilityUnit(AbilityUnit),
+	Absolute {
+		index: usize,
+		my_army: bool,
+	},
+	ByRelativePosition {
+		pos: isize,
+		my_army: bool,
+	},
+	ByRow {
+		my_army: bool,
+		row: usize
+	},
+	ByArmy {
+		my_army: bool
+	}
+}
+impl RelativeUnit {
+	fn get_army_index(my_army: bool) -> usize {
+		if my_army {
+			0
+		} else {
+			1
+		}
+	}
+	pub fn get<'a>(&self, my_pos: usize, hitmap: &'a [&HitMap; 2], troops: &'a [&Vec<TroopType>; 2], ability_units: &Vec<BattleUnit>) -> Vec<&'a TroopType> {
+		use RelativeUnit::*;
+		match self {
+			ByAbilityUnit(ability_unit) => {
+				if let Some(res) = ability_units.get(*ability_unit as usize).and_then(|unit| troops[unit.army].get(unit.index)) {
+					vec![res]
+				} else {
+					vec![]
+				}
+			},
+			Absolute { index, my_army } => {
+				if let Some(res) = troops[Self::get_army_index(*my_army)].get(*index) {
+					vec![res]
+				} else {
+					vec![]
+				}
+			},
+			ByRelativePosition {
+				pos,
+				my_army,
+			} => {
+				let army = Self::get_army_index(*my_army);
+				if let Some(res) = hitmap[army].get((my_pos as isize + *pos + hitmap.len() as isize) as usize % hitmap.len()).and_then(|hit| hit.and_then(|hit| troops[army].get(hit))) {
+					vec![res]
+				} else {
+					vec![]
+				}
+			},
+			ByRow { my_army, row } => {
+				let army = Self::get_army_index(*my_army);
+				hitmap[army].iter().skip(row * 6 ).take(6).filter_map(|x| x.and_then(|x| troops[army].get(x))).collect()
+			},
+			ByArmy { my_army } => {
+				let army = Self::get_army_index(*my_army);
+				hitmap[army].iter().filter_map(|x| x.and_then(|x| troops[army].get(x))).collect()
+			},
+		}
+	}
 }
 
-impl From<&str> for Bonus {
-    fn from(value: &str) -> Self {
-        // Bonus=[{отсутствие строки}
-        // Dead, Fire,
-        // Ghost, Block, Poison,
-        // Evasive, Berserk,
-        // Merchant, GodAnger, Garrison, FastDead,
-        // ArmyMedic, GodStrike, Artillery,
-        // DeathCurse, AddPayment,
-        // HorseAttack, ArmorIgnore, Unvulnerabe, VampirsGist, Counterblow, FlankStrike,
-        // Stealth, DeadRessurect,
-        // SpearDefense,
-        // OldVampirsGist
-        let bonus = match value {
-            "DefencePiercing" | "ArmorIgnore" => Self::DefencePiercing,
-            "Dodging" | "Evasive" => Self::Dodging,
-            "Fast" | "FastGoing" | "HorseAttack" | "HorseAtack" => Self::Fast,
-            "DeadDodging" | "Dead" => Self::DeadDodging,
-            "FastDead" => Self::FastDead,
-            "VampiresGist" | "VampirsGist" => Self::VampiresGist,
-            "AncientVampiresGist" | "OldVampirsGist" | "OldVampiresGist" => {
-                Self::AncientVampiresGist
-            }
-            "Berserk" => Self::Berserk,
-            "Block" => Self::Block,
-            "PoisonAttack" | "Poison" => Self::PoisonAttack,
-            "FireAttack" | "Fire" => Self::FireAttack,
-            "Invulnerable" | "Unvulnerabe" => Self::Invulnerable,
-            "GodAnger" => Self::GodAnger,
-            "GodStrike" => Self::GodStrike,
-            "Ghost" => Self::Ghost,
-            "DeathCurse" => Self::DeathCurse,
-            "Artillery" => Self::Artillery,
-            "Counterblow" => Self::Counterblow,
-            "Garrison" => Self::Garrison,
-            "Stealth" => Self::Stealth,
-            "DeadRessurect" => Self::DeadRessurect,
-            "SpearDefence" | "SpearDefense" => Self::SpearDefence,
-            "ManyTargets" => Self::ManyTargets,
-            "Merchant" => Self::Merchant,
-            "ArmyMedic" => Self::ArmyMedic,
-            "FlankStrike" => Self::FlankStrike,
-            "Custom" => Self::Custom,
-            "NoBonus" | "" => Self::NoBonus,
-            _ => {
-                dbg!(value);
-                Self::NoBonus
-            }
-        };
-        bonus
-    }
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize, JsonSchema)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub struct RemoveEffect {
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub force: bool,
+	pub amount: usize,
+	pub id: String,
+}
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize, JsonSchema)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub struct AddEffect {
+	pub id: String,
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub force: bool,
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub internal: bool,
+	pub lifetime: EffectLifetime,
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub power: usize,
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub added_modify: Option<ModifyUnitStats>,
+}
+pub type PowerScale = usize;
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize, JsonSchema)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub enum AbilityTowardsTroop {
+	Kill,
+	Heal(Modify<i64>), // * max_hp
+	Damage(Modify<i64>), // * max_hp
+	AddEffects(Vec<AddEffect>),
+  	AddEffectModify {
+		modify: ModifyUnitStats,
+		lifetime: EffectLifetime
+	},
+	// Only for effects
+	ModifyStats {
+		modify: ModifyUnitStats,
+	},
+	RemoveEffects(Vec<RemoveEffect>),
+	Attack { times: usize},
+	SetRules {
+		#[serde(default, skip_serializing_if = "is_default")]
+	 	attack_size: Option<(usize, usize)>,
+		#[serde(default, skip_serializing_if = "is_default")]
+	 	attacks_from_reserve: Option<bool>,
+	}
+}
+impl AbilityTowardsTroop {
+	// TODO: probably should add animations here
+	pub fn apply(
+		&self,
+		unit: &mut Unit,
+		power: usize,
+		registry: &GameInfo,
+	) -> (Option<ModifyUnitStats>, usize) {
+		use AbilityTowardsTroop::*;
+		let stats = unit.modified;
+		match self {
+			Kill => unit.kill(registry),
+			Heal(heal) => {
+				unit.heal(heal.apply(stats.max_hp) * power as i64);
+			},
+			Damage(damage) => {
+				unit.hp -= damage.apply(stats.max_hp) * power as i64;
+				unit.recalc(registry);
+			},
+			AddEffects(effects) => {
+				for effect in effects.iter() {
+					if let Some(id) = registry.effects.str_to_id(&effect.id) {
+						unit.add_effect(StatusEffect {
+							id,
+							added_modify: effect.added_modify,
+							internal: effect.internal,
+							power: 1,
+							lifetime: effect.lifetime,
+						}.with_times(effect.power, registry), registry);
+					}
+				}
+			},
+			RemoveEffects(remove) => {
+				for effect in remove.iter() {
+					let mut effect = effect.clone();
+					effect.amount *= power;
+					unit.remove_effect(effect, registry);
+				}
+			},
+			AddEffectModify { modify, lifetime } => {
+				add_modify_effect_ex(unit, *modify * power, 0, *lifetime, registry);
+				unit.recalc(registry);
+				return (Some(*modify), 0);
+			},
+			ModifyStats { modify } => {
+				unit.modify += *modify;
+				unit.recalc(registry);
+				return (Some(*modify), 0);
+			}
+			Attack { times } => {
+				return (None, power * times);
+			},
+			SetRules { attack_size, attacks_from_reserve } => {
+				if let Some(attack_size) = attack_size {
+					unit.settings.attack_size = *attack_size;
+				}
+				if let Some(attacks_from_reserve) = attacks_from_reserve {
+					unit.settings.attacks_from_reserve = *attacks_from_reserve;
+				}
+			}
+		}
+		(None, 0)
+	}
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize, JsonSchema)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub enum UnitStat {
+	Hp,
+	MaxHp,
+	Speed,
+	Moves,
+	MaxMoves,
+	HandAttack,
+	HandDefence,
+	RangedAttack,
+	RangedDefence,
+	MagicPower,
+	ElementalDefence,
+	DeathDefence,
+	LifeDefence,
+	Vamp,
+	Regen
+}
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize, JsonSchema)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+#[repr(u8)]
+pub enum AbilityUnit {
+	Myself = 0,
+	Actor = 1,
+	Affected = 2
+}
+#[derive(Default, Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub enum MechanicCondition {
+	HasEffect {
+		id: String,
+		ability_unit: AbilityUnit
+	},
+	HasEffectKind {
+		kind: String,
+		ability_unit: AbilityUnit
+	},
+	IsUnitType {
+		unit_type: UnitType,
+		ability_unit: AbilityUnit
+	},
+	IsEnemy {
+		ability_unit: AbilityUnit
+	},
+	IsInGarrison,
+	Cmp {
+		cmp: Cmp<i64>,
+		stat: UnitStat,
+		ability_unit: AbilityUnit
+	},
+	All(Vec<MechanicCondition>),
+	Any(Vec<MechanicCondition>),
+	None(Vec<MechanicCondition>),
+	#[default]
+	True,
+	False
+}
+impl MechanicCondition {
+	// ability_list - 1. me 2. who hit 2. who got hit
+	pub fn calc(&self, battle_info: &Option<BattleInfo>, ability_list: &Vec<&(Unit, BattleUnit)>, registry: &GameInfo) -> bool {
+		use MechanicCondition::*;
+		match self {
+			True => true,
+			False => false,
+			// TODO
+			IsInGarrison => {
+				if let Some(b) = battle_info {
+					b.battle_ter == 0
+				} else { false }
+			},
+		 	HasEffect { id, ability_unit } => {
+				registry.effects.str_to_id(id).is_some_and(|x| ability_list[*ability_unit as usize].0.has_effect_id(x))
+			},
+			HasEffectKind { kind, ability_unit } => {
+				ability_list[*ability_unit as usize].0.has_effect_kind(kind, &registry.effects)
+			}
+			IsUnitType { unit_type, ability_unit } => {
+				ability_list[*ability_unit as usize].0.get_info(&registry.units).unit_type == *unit_type
+			},
+			IsEnemy { ability_unit } => {
+				ability_list[*ability_unit as usize].1.army != ability_list[0].1.army
+			}
+			Cmp { cmp, stat, ability_unit } => {
+				let unit = &ability_list[*ability_unit as usize].0;
+				use UnitStat::*;
+				match stat {        
+					Hp => cmp.check(unit.hp),
+					Moves => cmp.check(unit.moves),
+					_ => cmp.check(unit.modified.get_stat(stat.clone()))
+				}
+			},
+			All(all) => {
+				all.iter().all(|x| x.calc(battle_info, ability_list, registry))
+			},
+			Any(any) => {
+				any.iter().any(|x| x.calc(battle_info, ability_list, registry))
+			},
+			None(none) => {
+				!none.iter().any(|x| x.calc(battle_info, ability_list, registry))
+			}
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Default, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub enum ListenTo {
+	#[default]
+	Myself,
+	MyArmy(bool),
+ 	Everyone,
+}
+
+/// When a condition is met applies Abilities towards all RelativeUnit
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, JsonSchema)]
+pub struct Mechanic {
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub affects: Vec<RelativeUnit>,
+	
+	pub affects_self: bool,
+
+	#[serde(default)]
+	pub conditions: MechanicCondition,
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub ability: Vec<AbilityTowardsTroop>,
+	#[serde(default, skip_serializing_if = "is_false")]
+	pub works_after_death: bool,
+}
+impl Mechanic {
+	pub fn check_conditions(&self, battle_info: &Option<BattleInfo>, ability_units: &Vec<BattleUnit>, troops: &[Vec<TroopType>; 2], registry: &GameInfo) -> bool {
+		let mut units = ability_units.clone();
+		units.dedup();
+		let units = units.into_iter().map(|x| (troops[x.army][x.index].get().unit.clone(), x)).collect_vec();
+		let ability = ability_units.iter().filter_map(|x| units.iter().find(|v| v.1==*x)).collect_vec();
+		self.conditions.calc(battle_info, &ability, &registry)
+	}
+	pub fn apply(&self, power: usize, my_index: usize, my_pos: usize, hitmaps: &[&HitMap; 2], troops: &[&Vec<TroopType>; 2], ability_units: &Vec<BattleUnit>, battle_info: &BattleInfo, registry: &GameInfo) -> ModifyUnitStats {
+		
+		let res = self.affects.iter().map(|x| x.get(my_pos, hitmaps, troops, ability_units));
+		let mut attacks = vec![];
+		let mut res_modify = ModifyUnitStats::default();
+		for troops in res {
+			for troop in troops {
+				let unit = &mut troop.get().unit;
+				for ability in &self.ability {
+					let (modify, attack_times) = ability.apply(unit, power, registry);
+					
+					if let Some(modify) = modify {
+						res_modify += modify;
+					}
+					if attack_times > 0 {
+						attacks.push((troop, attack_times));
+					}
+				}
+			}
+		}
+		for attack in attacks {
+			let target = &mut attack.0.get();
+			let target_pos = target.pos;
+			let target_unit = &mut target.unit;
+			let me = &mut troops[0][my_index].get().unit;
+			me.attack(target_unit, target_pos, UnitPos::from_index(my_pos), battle_info, &hitmaps[1], true, registry);
+		}
+		res_modify
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Default, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct Rules {
+	pub rules: [(Vec<Mechanic>, ListenTo); MAX_ABILITY],
+}
+impl Index<usize> for Rules {
+	type Output = (Vec<Mechanic>, ListenTo);
+	fn index(&self, index: usize) -> &Self::Output {
+		&self.rules[index]
+	}
+}
+
+#[serde_as]
+#[derive(Debug, Clone, PartialEq, Default, serde::Deserialize, serde::Serialize, JsonSchema)]
+pub struct BonusInfo {
+	pub id: String,
+	pub name: String,
+	pub desc: String,
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub attack_settings: AttackSettings,
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub add_modify: ModifyUnitStats,
+
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub rules: IndexMap<AbilityCondition, (ListenTo, Vec<Mechanic>)>
+}
+impl BonusInfo {
+	pub fn added(&self, unit: &mut Unit) {
+		unit.modify += self.add_modify;
+		unit.settings = self.attack_settings;
+	}
+	pub fn removed(&self, unit: &mut Unit, registry: &GameInfo) {
+		unit.modify -= self.add_modify;
+		unit.settings = unit.get_info(&registry.units).settings;
+	}
+	pub fn apply_rules(&self, rule: AbilityCondition, BattleUnit { army, index }: BattleUnit, my_pos: usize, armies: &Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
+		let (army1, army2) = if army == battle.army1 { (battle.army1, battle.army2) } else { (battle.army1, battle.army2) };
+		let armies = [&armies[army1], &armies[army2]];
+		let troops = armies.map(|x| &x.troops);
+		let hitmaps = armies.map(|x| &x.hitmap);
+		for mechanic in &self.rules[&rule].1 {
+			mechanic.apply(1, index, my_pos, &hitmaps, &troops, ability_units, battle, registry);
+		}
+	}
+}
 fn pierce(sender: &mut Unit) -> Power {
     let sender_damage: Power = sender.modified.damage;
     if sender_damage.magic > sender_damage.ranged && sender_damage.magic > sender_damage.hand {

@@ -2,26 +2,22 @@ use crate::{
     battle::{
         control::{Player, PlayerId, Players},
         troop::Troop,
-    },
-    items::Item,
-    map::map::GameMap,
-    mutrc::SendMut,
-    time::time::Time,
-    units::unit::{Unit, UnitPos},
+    }, items::Item, map::map::GameMap, mutrc::SendMut, registry::{self, GameInfo}, time::time::Time, units::unit::{Unit, UnitPos}
 };
 use advini::{Ini, IniParseError, Section, SectionError, Sections, SEPARATOR};
 use alkahest::*;
+use num::{Num, Zero};
+use num_enum;
+use schemars::JsonSchema;
 use serde;
 use std::{collections::HashMap, path::Path};
-use struct_field_names_as_array::FieldNamesAsArray;
+use nom::{Parser, branch::alt, bytes::complete::tag, character::complete::digit1, combinator::{consumed, value}, sequence::pair};
 
 #[allow(dead_code)]
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, JsonSchema)]
 pub enum Cmp<V: Ord> {
     L(V),
     G(V),
-    LE(V),
-    GE(V),
     E(V),
 }
 impl<V: Ord> Cmp<V> {
@@ -29,90 +25,42 @@ impl<V: Ord> Cmp<V> {
         match self {
             Cmp::L(cmp_v) => v < *cmp_v,
             Cmp::G(cmp_v) => v > *cmp_v,
-            Cmp::LE(cmp_v) => v <= *cmp_v,
-            Cmp::GE(cmp_v) => v >= *cmp_v,
             Cmp::E(cmp_v) => v == *cmp_v,
         }
     }
 }
-impl<V: Ord + Ini> Ini for Cmp<V> {
-    fn eat<'a>(
-        mut chars: std::str::Chars<'a>,
-    ) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
-        match (chars.next(), chars.next()) {
-            (Some(chr), Some(chr1)) => match (chr, chr1) {
-                ('=', '<') | ('<', '=') => {
-                    let v = match <V as Ini>::eat(chars) {
-                        Ok(v) => v,
-                        Err(err) => {
-                            return Err(err);
-                        }
-                    };
-                    Ok((Self::LE(v.0), v.1))
-                }
-                ('=', '>') | ('>', '=') => {
-                    let v = match <V as Ini>::eat(chars) {
-                        Ok(v) => v,
-                        Err(err) => {
-                            return Err(err);
-                        }
-                    };
-                    Ok((Self::GE(v.0), v.1))
-                }
-                ('>', value) => {
-                    let mut res_string = String::new();
-                    res_string.push(value);
-                    let v = match <V as Ini>::eat(chars) {
-                        Ok(v) => v,
-                        Err(err) => {
-                            return Err(err);
-                        }
-                    };
-                    Ok((Self::G(v.0), v.1))
-                }
-                ('<', value) => {
-                    let mut res_string = String::new();
-                    res_string.push(value);
-                    let v = match <V as Ini>::eat(chars) {
-                        Ok(v) => v,
-                        Err(err) => {
-                            return Err(err);
-                        }
-                    };
-                    Ok((Self::L(v.0), v.1))
-                }
-                ('=', value) => {
-                    let mut res_string = String::new();
-                    res_string.push(value);
-                    while let Some(chr) = chars.next() {
-                        if chr == SEPARATOR {
-                            break;
-                        } else {
-                            res_string.push(chr);
-                        }
-                    }
-                    let v = match <V as Ini>::eat(chars) {
-                        Ok(v) => v,
-                        Err(err) => {
-                            return Err(err);
-                        }
-                    };
-                    Ok((Self::E(v.0), v.1))
-                }
-                (_, _) => Err(IniParseError::Error("oops")),
-            },
-            (_, _) => Err(IniParseError::Empty(chars)),
-        }
-    }
-    fn vomit(&self) -> String {
-        match self {
-            Self::E(v) => "=".to_string() + &v.vomit(),
-            Self::G(v) => ">".to_string() + &v.vomit(),
-            Self::GE(v) => ">=".to_string() + &v.vomit(),
-            Self::L(v) => "<".to_string() + &v.vomit(),
-            Self::LE(v) => "<=".to_string() + &v.vomit(),
-        }
-    }
+impl<'z, V: Ord + Num + Ini<'z, Arg = ()>> Ini<'z> for Cmp<V> {
+	type Arg = <V as Ini<'z>>::Arg;
+	fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+		let (input, res) = pair(
+			consumed(alt([
+				tag("="),
+				tag(">"),
+				tag("<"),
+			])),
+			digit1).parse(input)?;
+		let num = Num::from_str_radix(res.0.0, 10).ok().unwrap_or(<V as Zero>::zero());
+		let res = match res.0.0 {
+			v if v == "=" => {
+				Cmp::E(num)
+			},
+			v if v == ">" => {
+				Cmp::G(num)
+			}
+			v if v == "<" => {
+				Cmp::L(num)
+			},
+			_ => { Cmp::E(num) }
+		};
+		Ok((input, res))
+	}
+	fn vomit(&self, additional: Self::Arg) -> String {
+		match self {
+			Self::E(v) => "=".to_string() + &v.vomit(additional),
+			Self::G(v) => ">".to_string() + &v.vomit(additional),
+			Self::L(v) => "<".to_string() + &v.vomit(additional),
+		}
+	}
 }
 
 #[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
@@ -124,31 +72,31 @@ pub enum Location {
     Quest,
     Talks, // building id
 }
-impl Ini for Location {
-    fn eat<'a>(chars: std::str::Chars<'a>) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
-        let (res, chars) = match <String as Ini>::eat(chars) {
+impl Ini<'_> for Location {
+	fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+        let (input, res) = match <String as Ini>::eat(input, ()) {
             Ok(v) => v,
             Err(err) => return Err(err),
         };
         match &*res {
             "Global" => {
-                return Ok((Self::Global, chars));
+                return Ok((input, Self::Global));
             }
-            "Local" => match <usize as Ini>::eat(chars) {
-                Ok(v) => Ok((Self::Local, v.1)),
+            "Local" => match <usize as Ini>::eat(input, ()) {
+                Ok(v) => Ok((v.0, Self::Local)),
                 Err(err) => Err(err),
             },
             "Quest" => {
-                return Ok((Self::Quest, chars));
+                return Ok((input, Self::Quest));
             }
-            "Talks" => match <usize as Ini>::eat(chars) {
-                Ok(v) => Ok((Self::Talks, v.1)),
+            "Talks" => match <usize as Ini>::eat(input, ()) {
+                Ok(v) => Ok((v.0, Self::Talks)),
                 Err(err) => Err(err),
             },
-            _ => Err(IniParseError::Error("netu")),
+            _ => Err(IniParseError::Error("netu".to_owned())),
         }
     }
-    fn vomit(&self) -> String {
+	fn vomit(&self, _additional: Self::Arg) -> String {
         match self {
             Location::Global => "Global".into(),
             Location::Place => "Place".to_string(),
@@ -177,10 +125,9 @@ pub type EventId = usize;
     Sections,
     serde::Serialize,
     serde::Deserialize,
-    FieldNamesAsArray,
 )]
 pub struct Conditions {
-    #[default_value = "false"]
+   #[default_value = "false"]
     pub relative_time: bool,
     #[default_value = "None"]
     pub repeat: Option<Time>,
@@ -209,6 +156,7 @@ pub struct Conditions {
 
     #[default_value = "None"]
     pub items_check: Option<Vec<(ItemCheck, usize)>>,
+	
     #[default_value = "None"]
     pub if_event_not_executed: Option<Vec<usize>>,
     #[default_value = "None"]
@@ -242,7 +190,6 @@ pub struct Conditions {
     Default,
     serde::Serialize,
     serde::Deserialize,
-    FieldNamesAsArray,
     Sections,
 )]
 pub struct EventResult {
@@ -304,6 +251,10 @@ pub struct EventResult {
 pub type Events = Vec<Event>;
 #[derive(Clone, Debug, PartialEq, Default, Sections, serde::Serialize, serde::Deserialize)]
 pub struct Event {
+	// FIX?
+	#[default_value = "0usize"]
+	#[unused]
+	pub id: EventId,	
     #[default_value = "String::new()"]
     pub name: String,
     #[default_value = "vec![0]"]
@@ -333,6 +284,7 @@ impl Event {
             conditions,
             result,
             message,
+			id: 0
         }
     }
 }
@@ -341,8 +293,8 @@ pub fn execute_event(
     players: &mut Players,
     gamemap: &mut GameMap,
     events: &mut Vec<Event>,
-    units: &Vec<Unit>,
     executed_as_sub: bool,
+	registry: &GameInfo,
 ) -> Option<Executions> {
     {
         let Event {
@@ -352,6 +304,7 @@ pub fn execute_event(
             conditions,
             result,
             message,
+			..
         } = &events[event];
         let mut sub = false;
         if conditions.sub || *location == Location::Quest {
@@ -423,6 +376,7 @@ pub fn execute_event(
         }
     }
     let Event {
+		id,
         name,
         player,
         location,
@@ -440,7 +394,9 @@ pub fn execute_event(
             gamemap,
             &mut players[*player],
             *player,
-            units,
+			executed_as_sub,
+			*id,
+			registry
         ) {
             res.extend(events);
         };
@@ -455,7 +411,9 @@ pub fn execute_event_as_player(
     gamemap: &mut GameMap,
     player: &mut Player,
     player_id: usize,
-    units: &Vec<Unit>,
+	executed_as_sub: bool,
+	event_id: EventId,
+	registry: &GameInfo,
 ) -> Option<Executions> {
     let time = if conds.relative_time {
         gamemap.time - gamemap.time
@@ -471,26 +429,26 @@ pub fn execute_event_as_player(
             .gold_req
             .as_ref()
             .is_none_or(|req| req.check(player_army.stats.gold)))
-        && conds
+        && (conds
         .army_req
         .as_ref()
-        .is_none_or(|req| req.check(player_army.troops.len() as u64))
+        .is_none_or(|req| req.check(player_army.troops.len() as u64)))
 		// TODO archetype check
-		&& conds.archetype_req.is_none_or(|arch| arch == 1)
+		&& (conds.archetype_req.is_none_or(|arch| arch == 1))
 		//TODO
-        && conds
+        && (conds
             .mana_req
             .as_ref()
-            .is_none_or(|req| req.check(player_army.stats.mana))
-		&&	conds.army_meet.is_none_or(|army| false)
+            .is_none_or(|req| req.check(player_army.stats.mana)))
+		&&	(conds.army_meet.is_none_or(|army| false))
 		// TODO defeated armies check 
-		&& conds
+		&& (conds
 		.armies_defeated_by_player
 		.as_ref()
-		.is_none_or(|req| req.iter().all(|&x| false))
+		.is_none_or(|req| req.iter().all(|&x| false)))
 		// TODO power check
         && (conds.power_req.as_ref().is_none_or(|req| true))
-        && (conds.hero_has_1_hp && player_army.troops[0].get().unit.modified.hp == 1)
+        && (!conds.hero_has_1_hp || player_army.troops[0].get().unit.modified.hp == 1)
 		&& (conds
 			.items_check
 			.as_ref()
@@ -502,10 +460,11 @@ pub fn execute_event_as_player(
 				}
 			})))
 		// TODO
-		&& conds.building_ownership.as_ref().is_none_or(|reqs| reqs.iter().all(|x| false))
+		&& (conds.building_ownership.as_ref().is_none_or(|reqs| reqs.iter().all(|x| false)))
         && (conds
             .in_building
             .is_none_or(|building| player_army.building == building.into()))
+		|| executed_as_sub
     {
         let repeat = conds.repeat;
         // Player army items change
@@ -541,13 +500,13 @@ pub fn execute_event_as_player(
                 add_units.iter().for_each(|unit| {
                     player_army
                         .add_troop(SendMut::new(Troop {
-                            unit: units[*unit].clone(),
+                            unit: (registry.units[*unit].clone(), &registry.bonuses).into(),
                             custom_name: None,
                             is_free: true,
                             was_payed: true,
                             is_main: false,
                             pos: UnitPos::from_index(0),
-                        }))
+                        }), &registry.units)
                         .ok();
                 });
             }
@@ -559,6 +518,8 @@ pub fn execute_event_as_player(
                 Execute::Message(Message {
                     text: q.0.clone(),
                     variants: q.1.clone(),
+					corresponding_event_id: Some(event_id),					
+					..Default::default()
                 }),
                 player_id,
             ));
@@ -568,6 +529,8 @@ pub fn execute_event_as_player(
                 Execute::Message(Message {
                     text,
                     variants: vec![],
+					corresponding_event_id: Some(event_id),
+					..Default::default()
                 }),
                 player_id,
             ));
@@ -599,7 +562,7 @@ pub fn execute_event_as_player(
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct DelayedEvent {
     pub time: Time,
-    pub event: usize,
+    pub event: EventId,
 }
 impl DelayedEvent {
     pub fn new(time: Time, event: usize) -> Self {
@@ -611,35 +574,45 @@ impl DelayedEvent {
         events: &mut Vec<Event>,
         players: &mut Players,
         player: usize,
-        units: &Vec<Unit>,
+		registry: &GameInfo,
     ) -> Option<()> {
         if self.time <= gamemap.time {
-            execute_event(self.event, players, gamemap, events, units, false);
+            execute_event(self.event, players, gamemap, events, false, registry);
         }
         None
     }
 }
-impl Ini for DelayedEvent {
-    fn eat(chars: std::str::Chars<'_>) -> Result<(Self, std::str::Chars<'_>), IniParseError> {
-        <(Time, usize) as Ini>::eat(chars).map(|res| {
+impl Ini<'_> for DelayedEvent {
+    fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+        <(Time, usize) as Ini>::eat(input, _additional).map(|res| {
             (
-                Self {
-                    time: res.0 .0,
-                    event: res.0 .1,
+                res.0,
+				Self {
+                    time: res.1.0,
+                    event: res.1.1,
                 },
-                res.1,
             )
         })
     }
-    fn vomit(&self) -> String {
-        <(Time, usize) as Ini>::vomit(&(self.time, self.event))
+	fn vomit(&self, additional: Self::Arg) -> String {
+        <(Time, usize) as Ini>::vomit(&(self.time, self.event), additional)
     }
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Message {
     pub text: String,
     pub variants: Vec<String>,
+	pub corresponding_event_id: Option<EventId>,
+}
+impl Message {
+	pub fn from_event(event: &Event, event_id: EventId) -> Self {
+		Self {
+			text: event.message.clone().unwrap_or_default(),
+			variants: event.result.question.as_ref().and_then(|x| Some(x.1.clone())).unwrap_or_default(),
+			corresponding_event_id: Some(event_id)
+		}
+	}
 }
 pub type Executions = Vec<(Execute, PlayerId)>;
 #[derive(Debug, Clone, PartialEq)]

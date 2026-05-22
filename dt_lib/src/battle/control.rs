@@ -14,26 +14,26 @@ pub struct Relations {
     pub neighbour: u8,
     pub enemy: u8,
 }
-impl Ini for Relations {
-    fn eat(chars: std::str::Chars) -> Result<(Self, std::str::Chars), IniParseError> {
-        match <(u8, u8, u8, u8) as Ini>::eat(chars) {
+impl Ini<'_> for Relations {
+    fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+        match <(u8, u8, u8, u8) as Ini>::eat(input, ()) {
             Ok(v) => Ok({
-                let rels = v.0;
+                let rels = v.1;
                 (
+					v.0,
                     Self {
                         player: rels.0,
                         ally: rels.1,
                         neighbour: rels.2,
                         enemy: rels.3,
                     },
-                    v.1,
                 )
             }),
             Err(err) => Err(err),
         }
     }
-    fn vomit(&self) -> String {
-        (self.player, self.ally, self.neighbour, self.enemy).vomit()
+    fn vomit(&self, _additional: Self::Arg) -> String {
+        (self.player, self.ally, self.neighbour, self.enemy).vomit(())
     }
 }
 impl Default for Relations {
@@ -53,27 +53,27 @@ pub enum Control {
     PC,
     Player(PlayerId),
 }
-impl Ini for Control {
-    fn eat<'a>(chars: std::str::Chars<'a>) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
-        let (tag, chars) = match <u8 as Ini>::eat(chars) {
+impl Ini<'_> for Control {
+	fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+        let (input, tag) = match <u8 as Ini>::eat(input, ()) {
             Ok(v) => Ok(v),
             Err(err) => Err(err),
         }?;
         match tag {
-            0 => Ok((Control::PC, chars)),
+            0 => Ok((input, Control::PC)),
             _ => {
-                let (v, chars) = match <usize as Ini>::eat(chars) {
+                let (input, v) = match <usize as Ini>::eat(input, ()) {
                     Ok(v) => Ok(v),
                     Err(err) => Err(err),
                 }?;
-                Ok((Control::Player(v - 1), chars))
+                Ok((input, Control::Player(v - 1)))
             }
         }
     }
-    fn vomit(&self) -> String {
+    fn vomit(&self, _additional: Self::Arg) -> String {
         match self {
-            Control::PC => 0_u8.vomit(),
-            Control::Player(n) => (*n + 1).vomit(),
+            Control::PC => 0_u8.vomit(()),
+            Control::Player(n) => (*n + 1).vomit(()),
         }
     }
 }

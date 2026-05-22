@@ -1,4 +1,3 @@
-use log::error;
 /*
 [GlobalIndex Name]
 
@@ -114,7 +113,8 @@ d-Vampirizm=[{отсутствие строки}/1-100] — +вампиризм
  */
 use math_thingies::add_opt;
 use num::{integer::Roots, Num};
-
+use indexmap::IndexMap;
+use log::error;
 use super::{
     battle::{control::Control, troop::Troop},
     bonuses::*,
@@ -136,9 +136,7 @@ use crate::{
     battle::{
         army::{Army, ArmyStats},
         control::Relations,
-    },
-    items,
-    map::{deco::MapDeco, map::TileMap, object::BuildingVariant},
+    }, effects::{EffectInfo, EffectLifetime, StatusEffect}, items, map::{deco::MapDeco, map::TileMap, object::BuildingVariant}, registry::{GameInfo, Items, Objects, Settings, Units}, units::unitstats::Modify
 };
 use advini::*;
 use ini_core::{Item as IniItem, Parser};
@@ -146,7 +144,6 @@ use math_thingies::Percent;
 use once_cell::sync::Lazy;
 use std::{
     any::type_name,
-    collections::HashMap,
     default,
     fmt::{Debug, Display},
     io::Read,
@@ -160,7 +157,7 @@ use tracing_mutex::stdsync::TracingMutex as Mutex;
 //#[cfg(target_arch = "wasm32")]
 //use wasm_bindgen_futures::spawn_local;
 pub fn read_file(path: &str) -> Vec<u8> {
-    std::fs::read(path.clone()).unwrap()
+    std::fs::read(path).unwrap_or_else(|x| panic!("{}/{}", x.to_string(), path))
 }
 
 trait CollectInplace {
@@ -244,320 +241,58 @@ pub fn match_magictype(
     }
 }
 
+pub async fn parse_bonuses<Reader: FileAccess>(
+    path: Option<&str>,
+	registry: &mut GameInfo
+) -> Result<(&'static str, Vec<String>), String> {
+	let mut bonus = BonusInfo::default();
+	
+	let reg = json5::from_str::<Vec<BonusInfo>>(&Reader::read_as_string("bonuses.json5").await).unwrap();
+	std::fs::write("bonuses.json5", json5::to_string(&reg).unwrap());
+	let schema = schemars::schema_for!(BonusInfo);
+	for bonus in reg {
+		let id = bonus.id.clone();
+		registry.bonuses.register(bonus, id);
+	}
+	std::fs::write("schema.json", json5::to_string(&schema).unwrap());
+	Ok(("", vec![]))
+}
+
+pub async fn parse_effects<Reader: FileAccess>(
+    path: Option<&str>,
+	registry: &mut GameInfo
+) -> Result<(&'static str, Vec<String>), String> {
+
+	let reg = &mut registry.effects;
+	let reg = json5::from_str::<Vec<EffectInfo>>(&Reader::read_as_string(path.unwrap_or("effects.json5")).await).unwrap();
+	std::fs::write(path.unwrap_or("effects.json5"), json5::to_string(&reg).unwrap());
+	Ok(("", vec![]))
+}
 pub async fn parse_units<Reader: FileAccess>(
     path: Option<&str>,
-) -> Result<(Vec<Unit>, (&'static str, Vec<String>)), String> {
-    let mut units = vec![];
+	registry: &mut GameInfo
+) -> Result<(&'static str, Vec<String>), String> {
+
     let sections = parse_for_sections::<Reader>(path.unwrap_or("Units.ini")).await;
     let mut error_collector: Vec<String> = Vec::new();
     let mut req_assets = Vec::new();
-    let mut upgrades: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut upgrades: IndexMap<usize, Vec<String>> = IndexMap::new();
 
     for (_, prop) in sections.iter() {
-        let mut counter = None;
-        let mut bonus_name = "";
-        let mut magic_type = "";
-        let mut magic_direction = "";
-        let mut nature = "";
-        let mut name = "";
-        let mut description = "";
-
-        let mut cost_hire = None;
-        let mut size = None;
-        let mut surrender = None;
-        let mut _icon_index = None;
-
-        let mut hp = None;
-
-        let mut max_xp = None;
-        let mut xp_up = None;
-
-        let mut damage_hand = Some(0);
-        let mut damage_ranged = Some(0);
-        let mut damage_magic = Some(0);
-
-        let mut defence_hand = Some(0);
-        let mut defence_ranged = Some(0);
-        let mut defence_magic = Some(0);
-
-        let mut defence_hand_percent = Some(0);
-        let mut defence_ranged_percent = Some(0);
-        let mut defence_death_magic = Some(0);
-        let mut defence_life_magic = Some(0);
-        let mut defence_elemental_magic = Some(0);
-
-        let mut moves = Some(0);
-        let mut speed = Some(0);
-        let mut vamp = Some(0);
-        let mut regen = Some(0);
-
-        let mut next_unit: Vec<String> = Vec::new();
-        for (k, value) in prop.iter() {
-            let v = &**value;
-            match &**k {
-                "name" => name = v,
-                "descript" => description = v,
-                "nature" => nature = v,
-                "iconindex" => {
-                    _icon_index = handle_parse::<usize>(v, &mut error_collector, "iconindex")
-                }
-                "cost" => cost_hire = handle_parse::<u64>(v, &mut error_collector, "cost_hire"),
-                "surrender" => {
-                    surrender = handle_parse::<u64>(v, &mut error_collector, "surrender")
-                }
-                "hits" => hp = handle_parse::<i64>(v, &mut error_collector, "hp"),
-                "attackblow" | "attackhand" => {
-                    damage_hand = handle_parse::<u64>(v, &mut error_collector, "damage_hand")
-                }
-                "attackshot" | "attackranged" => {
-                    damage_ranged = handle_parse::<u64>(v, &mut error_collector, "damage_ranged")
-                }
-                "magicpower" => {
-                    damage_magic = handle_parse::<u64>(v, &mut error_collector, "magic_power")
-                }
-                "magic" | "attackmagic" => {
-                    magic_type = v;
-                }
-                "defenceblow" | "defencehand" => {
-                    defence_hand = handle_parse::<u64>(v, &mut error_collector, "defence_hand");
-                }
-                "defenceshot" | "defenceranged" => {
-                    defence_ranged = handle_parse::<u64>(v, &mut error_collector, "defence_ranged");
-                }
-                "defencemagic" => {
-                    defence_magic = handle_parse::<u64>(v, &mut error_collector, "defence_magic");
-                }
-                "protectdeath" => {
-                    defence_death_magic =
-                        handle_parse::<i16>(v, &mut error_collector, "defence_death_magic");
-                }
-                "protectlife" => {
-                    defence_life_magic =
-                        handle_parse::<i16>(v, &mut error_collector, "defence_life_magic");
-                }
-                "protectelemental" => {
-                    defence_elemental_magic =
-                        handle_parse::<i16>(v, &mut error_collector, "defence_elemental_magic");
-                }
-                "protectblow" | "protecthand" => {
-                    defence_hand_percent =
-                        handle_parse::<i16>(v, &mut error_collector, "defence_hand_percent");
-                }
-                "protectshot" | "protectranged" => {
-                    defence_ranged_percent =
-                        handle_parse::<i16>(v, &mut error_collector, "defence_ranged_percent");
-                }
-                "magicdirection" => {
-                    magic_direction = v;
-                }
-                "manevres" | "moves" => {
-                    moves = handle_parse::<i64>(v, &mut error_collector, "moves");
-                }
-                "initiative" | "speed" => {
-                    speed = handle_parse::<i64>(v, &mut error_collector, "speed");
-                }
-                "vampirizm" => {
-                    vamp = handle_parse::<i16>(v, &mut error_collector, "vamp");
-                }
-                "regen" => {
-                    regen = handle_parse::<i16>(v, &mut error_collector, "regen");
-                }
-                "levelmultipler" => {
-                    xp_up = handle_parse::<i16>(v, &mut error_collector, "levelmultipler");
-                }
-                "startexpirience" => {
-                    max_xp = handle_parse::<u64>(v, &mut error_collector, "max_xp");
-                }
-                "nextunit1" | "nextunit2" | "nextunit3" => {
-                    next_unit.push(v.into());
-                }
-                "size" => {
-                    size = collect_errors(
-                        parse_duo_tuple(v),
-                        &mut error_collector,
-                        "Field size is incorrect",
-                    );
-                }
-                "bonus" => {
-                    bonus_name = v;
-                }
-                "globalindex" => {
-                    counter = handle_parse::<usize>(v, &mut error_collector, "globalindex");
-                }
-                _ => (),
-            }
-        }
-
-        let magic_direction = match magic_direction {
-            "ToAll" => ToAll,
-            "ToAlly" => ToAlly,
-            "ToEnemy" => ToEnemy,
-            "CurseOnly" => CurseOnly,
-            "CureOnly" => CureOnly,
-            "BlessOnly" => BlessOnly,
-            "StrikeOnly" => StrikeOnly,
-            "" => ToAll,
-            _ => {
-                collect_errors(
-                    MATCH_ERR,
-                    &mut error_collector,
-                    &*format!("Field MagicDirection is invalid: {}", magic_direction),
-                );
-                ToAll
-            }
-        };
-        let magic_type = match_magictype(&mut error_collector, magic_type, magic_direction);
-        let bonus = Bonus::from(bonus_name);
-        let unit_type = match nature {
-            "People" | "" => UnitType::People,
-            "Rogue" => UnitType::Rogue,
-            "Undead" => UnitType::Undead,
-            "Hero" => UnitType::Hero,
-            "Mecha" => UnitType::Mecha,
-            _ => {
-                collect_errors(
-                    MATCH_ERR,
-                    &mut error_collector,
-                    &*format!("Field Nature is invalid: {}", nature),
-                );
-                UnitType::People
-            }
-        };
-        let hp = hp.unwrap_or(1);
-        let xp_up = xp_up.unwrap_or(1);
-        let max_xp = max_xp.unwrap_or(1);
-
-        let cost_hire = cost_hire.unwrap_or(1);
-        let cost = if cost_hire <= 50 {
-            cost_hire / 8
-        } else if cost_hire > 50 && cost_hire <= 100 {
-            cost_hire / 4
-        } else if cost_hire > 100 && cost_hire <= 150 {
-            (cost_hire as f64 / 2.65) as u64
-        } else {
-            cost_hire / 2
-        };
-        let stats = UnitStats {
-            hp,
-            max_hp: hp,
-            damage: Power {
-                magic: damage_magic.unwrap_or(0),
-                ranged: damage_ranged.unwrap_or(0),
-                hand: damage_hand.unwrap_or(1),
-            },
-            defence: Defence {
-                death_magic: Percent::new(defence_death_magic.unwrap_or(0)),
-                elemental_magic: Percent::new(defence_elemental_magic.unwrap_or(0)),
-                life_magic: Percent::new(defence_life_magic.unwrap_or(0)),
-                hand_percent: Percent::new(defence_hand_percent.unwrap_or(0)),
-                ranged_percent: Percent::new(defence_ranged_percent.unwrap_or(0)),
-                magic_units: defence_magic.unwrap_or(0),
-                hand_units: defence_hand.unwrap_or(0),
-                ranged_units: defence_ranged.unwrap_or(0),
-            },
-            moves: moves.unwrap_or(1),
-            max_moves: moves.unwrap_or(1),
-            speed: speed.unwrap_or(1),
-            vamp: Percent::new(vamp.unwrap_or(0)),
-            regen: Percent::new(regen.unwrap_or(0)),
-        };
-        let unit = Unit {
-            stats,
-            modified: stats,
-            modify: ModifyUnitStats::default(),
-            info: UnitInfo {
-                name: name.into(),
-                descript: description.into(),
-                cost,
-                cost_hire,
-                icon_index: counter.unwrap() - 1,
-                unit_type,
-                next_unit: Vec::new(),
-                magic_info: magic_type.and_then(|x| Some((x, magic_direction))),
-                size: size.unwrap_or((1, 1)),
-                surrender,
-                lvl: LevelUpInfo {
-                    stats: ModifyUnitStats::default(),
-                    xp_up,
-                    max_xp,
-                },
-            },
-            lvl: UnitLvl {
-                lvl: 0,
-                max_xp,
-                xp: 0,
-            },
-            inventory: UnitInventory {
-                items: vec![None; 4],
-            },
-            army: 0,
-            bonus,
-            effects: vec![],
-        };
-        req_assets.push(format!("unit_{}.png", counter.unwrap() - 1));
-        units.push((counter.unwrap(), unit));
-        for (index, up) in upgrades.iter() {
-            let upgrade = up
-                .iter()
-                .map(|name| {
-                    units
-                        .iter()
-                        .filter(|unit| unit.1.info.name == *name)
-                        .map(|unit| unit.0)
-                        .next()
-                        .unwrap()
-                })
-                .collect();
-            units[*index].1.info.next_unit = upgrade;
-        }
-    }
-    units.sort_by_key(|v| v.0);
-    let units = units.into_iter().map(|v| v.1).collect::<Vec<Unit>>();
-    if let Ok(mut units_write) = UNITS.write() {
-        units_write.append(&mut units.clone());
-    };
+		let unit = UnitInfo::from_section(prop.clone(), Default::default()).unwrap_or_else(|err| {
+			panic!("{err}: {:?}", prop.clone());
+		});
+		dbg!(&unit);
+		let name = unit.0.name.clone();
+		req_assets.push(format!("unit_{}.png", unit.0.icon_index - 1));
+		registry.units.register(unit.0, name);
+	}
     if error_collector.is_empty() {
-        Ok((units, ("assets/Icons", req_assets)))
+        Ok(("assets/Icons", req_assets))
     } else {
         Err(error_collector.join("\n"))
     }
 }
-
-#[derive(Clone, Debug)]
-pub struct Settings {
-    pub max_troops: usize,
-    pub locale: String,
-    pub additional_locale: String,
-    pub fullscreen: bool,
-    pub init_size: (u32, u32),
-    pub ip: IpAddr,
-    pub port: u64,
-}
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            max_troops: 12,
-            locale: String::new(),
-            additional_locale: String::new(),
-            fullscreen: true,
-            init_size: (1600, 1200),
-            ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            port: 0,
-        }
-    }
-}
-
-pub static mut SETTINGS: Settings = Settings {
-    max_troops: 12,
-    locale: String::new(),
-    additional_locale: String::new(),
-    fullscreen: true,
-    init_size: (1600, 1200),
-    ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-    port: 0,
-};
-pub static LOCALE: Lazy<RwLock<Locale>> =
-    Lazy::new(|| RwLock::new(Locale::new("Rus".into(), "Eng".into())));
 
 pub async fn parse_settings<Reader: FileAccess>() -> Settings {
     let sections = parse_for_sections::<Reader>("Settings.ini").await;
@@ -565,7 +300,6 @@ pub async fn parse_settings<Reader: FileAccess>() -> Settings {
     let mut locale = String::new();
     let mut additional_locale = String::new();
     let mut fullscreen = false;
-    let mut init_size = None;
     let mut port = 0;
     let mut ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
     for (sec, prop) in sections.iter() {
@@ -579,13 +313,6 @@ pub async fn parse_settings<Reader: FileAccess>() -> Settings {
                 "locale" => locale = value.clone(),
                 "additional_locale" => additional_locale = value.clone(),
                 "fullscreen" => fullscreen = str_bool(value.to_string()),
-                "init_size" => {
-                    let mut parsed = value.split(",");
-                    init_size = Some((
-                        parsed.next().unwrap().parse().unwrap(),
-                        parsed.next().unwrap().parse().unwrap(),
-                    ));
-                }
                 "port" => {
                     port = value.parse::<u64>().unwrap();
                 }
@@ -595,17 +322,12 @@ pub async fn parse_settings<Reader: FileAccess>() -> Settings {
         }
     }
     let settings = Settings {
-        max_troops,
         locale,
         additional_locale,
         fullscreen,
-        init_size: init_size.unwrap(),
         ip,
         port,
     };
-    unsafe {
-        SETTINGS = settings.clone();
-    }
     settings
 }
 
@@ -621,8 +343,8 @@ impl FileAccess for StupidReader {
         read_file(path)
     }
 }
-async fn parse_for_props<Reader: FileAccess>(path: &str) -> HashMap<String, String> {
-    let mut props = HashMap::new();
+async fn parse_for_props<Reader: FileAccess>(path: &str) -> IndexMap<String, String> {
+    let mut props = IndexMap::new();
     let ini_doc = Reader::read_as_string(path).await;
     let parser = Parser::new(&*ini_doc).auto_trim(true);
     for item in parser {
@@ -639,13 +361,11 @@ async fn parse_for_props<Reader: FileAccess>(path: &str) -> HashMap<String, Stri
 }
 async fn parse_for_sections<Reader: FileAccess>(
     path: &str,
-) -> Vec<(String, HashMap<String, String>)> {
+) -> Vec<(String, IndexMap<String, String>)> {
     let ini_doc = Reader::read_as_string(path).await;
     advini::parse_for_sections(&ini_doc)
 }
-pub type Objects = Vec<ObjectInfo>;
-pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec<String>)) {
-    let mut objects = Vec::new();
+pub async fn parse_objects<Reader: FileAccess>(registry: &mut GameInfo) -> (&'static str, Vec<String>) {
     let mut req_assets = Vec::new();
     let sections = parse_for_sections::<Reader>("Objects.ini").await;
     for (sec, prop) in sections.iter() {
@@ -746,11 +466,10 @@ pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec
             panic!("{}", error_collector.join("\n"));
         }
 
-        objects.push((
-            index.unwrap(),
+        registry.objects.register(
             ObjectInfo {
                 category,
-                name,
+                name: name.clone(),
                 obj_type: obj_type.expect("Cant find Type key!"),
                 index: index.expect("Cant find Index key!"),
                 size: (
@@ -775,13 +494,10 @@ pub async fn parse_objects<Reader: FileAccess>() -> (Objects, (&'static str, Vec
                     }
                 },
             },
-        ));
+			name
+        );
     }
-    objects.sort_by(|(id, _), (oth_id, _)| id.cmp(oth_id));
-    (
-        objects.into_iter().map(|(_, object)| object).collect(),
-        ("assets/Objects", req_assets),
-    )
+    ("assets/Objects", req_assets)
 }
 fn match_magic_variants(magic_type: String) -> MagicVariants {
     match &*magic_type {
@@ -800,234 +516,18 @@ fn match_magic_variants(magic_type: String) -> MagicVariants {
 pub async fn parse_items<Reader: FileAccess>(
     path: Option<&str>,
     lang: &String,
+	registry: &mut GameInfo
 ) -> (&'static str, Vec<String>) {
     let mut error_collector: Vec<String> = Vec::new();
-    let mut items = vec![];
     let mut req_assets = Vec::new();
 
     let secs = parse_for_sections::<Reader>(path.unwrap_or("Rus_Artefacts.ini")).await;
     for (sec, props) in secs {
-        let mut cost: Option<i64> = None;
-        let mut description = None;
-        let mut name = None;
-        let mut itemtype = None;
-        let mut modify = ModifyUnitStats::default();
-        let direction = MagicDirection::ToAll;
-        let mut icon = None;
-        let mut magic = MagicVariants::Any;
-        let mut index: Option<u64> = None;
-        let mut bonus = None;
-        let itemtype_name = "";
-        for (k, value) in props.iter() {
-            let value = &**value;
-            match &**k {
-                "globalindex" => index = handle_parse(value, &mut error_collector, "globalindex"),
-                "name" => name = Some(value),
-                "descript" => description = Some(value),
-                "icon" => {
-                    icon = Some(value);
-                    req_assets.push(value.to_string());
-                }
-                "cost" => cost = handle_parse(value, &mut error_collector, "cost"),
-                "magic" => {
-                    magic = match_magic_variants(value.into());
-                }
-                "type" => {
-                    let itemtype_name = value;
-                    itemtype = match value {
-                        "Staff" => ArtifactType::Weapon(WeaponType::Magic),
-                        "ShotWeapon" => ArtifactType::Weapon(WeaponType::Ranged),
-                        "BlowWeapon" => ArtifactType::Weapon(WeaponType::Hand),
-                        "Ring" => ArtifactType::Ring,
-                        "Armor" => ArtifactType::Armor,
-                        "Helm" | "Helmet" => ArtifactType::Helmet,
-                        "Shield" => ArtifactType::Shield,
-                        "Amulet" => ArtifactType::Amulet,
-                        "Item" => ArtifactType::Item,
-                        "Potion" => ArtifactType::Potion,
-                        _ => panic!("Wrong Item Type - {}!", value),
-                    }
-                    .into()
-                }
-                "d-hits" => {
-                    modify.max_hp.add = add_opt(modify.max_hp.add, value.parse::<i64>().ok());
-                    //modify.hp.add = add_opt(modify.hp.add, value.parse::<i64>().ok());
-                }
-                "d-attackblow" => {
-                    modify.damage.hand.add = add_opt(modify.damage.hand.add, value.parse().ok())
-                }
-                "d-attackshot" => {
-                    modify.damage.ranged.add = add_opt(modify.damage.ranged.add, value.parse().ok())
-                }
-                "d-magicpower" => {
-                    modify.damage.magic.add = add_opt(modify.damage.magic.add, value.parse().ok())
-                }
-                "d-defenceblow" => {
-                    modify.defence.hand_units.add =
-                        add_opt(modify.defence.hand_units.add, value.parse().ok())
-                }
-                "d-defenceshot" => {
-                    modify.defence.ranged_units.add =
-                        add_opt(modify.defence.ranged_units.add, value.parse().ok())
-                }
-                "d-defencemagic" => {
-                    modify.defence.magic_units.add =
-                        add_opt(modify.defence.magic_units.add, value.parse().ok())
-                }
-                "d-manevres" => {
-                    modify.max_moves.add = add_opt(modify.max_moves.add, value.parse().ok());
-                    //modify.moves.add = add_opt(modify.moves.add, value.parse().ok());
-                }
-                "d-initiative" => modify.speed.add = add_opt(modify.speed.add, value.parse().ok()),
-                "d-vampirizm" => modify.vamp.add = add_opt(modify.vamp.add, value.parse().ok()),
-                "d-regen" => modify.regen.add = add_opt(modify.regen.add, value.parse().ok()),
-
-                "p-hits" => {
-                    modify.max_hp.percent_add = add_opt(
-                        modify.max_hp.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    );
-                    // modify.hp.percent_add = add_opt(
-                    //     modify.hp.percent_add,
-                    //     Percent::new(value.parse().unwrap()).into(),
-                    // );
-                }
-                "p-attackblow" => {
-                    modify.damage.hand.percent_add = add_opt(
-                        modify.damage.hand.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-attackshot" => {
-                    modify.damage.ranged.percent_add = add_opt(
-                        modify.damage.ranged.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-magicpower" => {
-                    modify.damage.magic.percent_add = add_opt(
-                        modify.damage.magic.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-defenceblow" => {
-                    modify.defence.hand_units.percent_add = add_opt(
-                        modify.defence.hand_units.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-defenceshot" => {
-                    modify.defence.ranged_units.percent_add = add_opt(
-                        modify.defence.ranged_units.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-defencemagic" => {
-                    modify.defence.magic_units.percent_add = add_opt(
-                        modify.defence.magic_units.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-protectlife" => {
-                    modify.defence.life_magic.percent_add = add_opt(
-                        modify.defence.life_magic.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-protectdeath" => {
-                    modify.defence.death_magic.percent_add = add_opt(
-                        modify.defence.death_magic.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-protectelemental" => {
-                    modify.defence.elemental_magic.percent_add = add_opt(
-                        modify.defence.elemental_magic.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-manevres" => {
-                    modify.max_moves.percent_add = add_opt(
-                        modify.max_moves.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    );
-                }
-                "p-initiative" => {
-                    modify.speed.percent_add = add_opt(
-                        modify.speed.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-vampirizm" => {
-                    modify.vamp.percent_add = add_opt(
-                        modify.vamp.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-                "p-regen" => {
-                    modify.regen.percent_add = add_opt(
-                        modify.regen.percent_add,
-                        Percent::new(value.parse().unwrap()).into(),
-                    )
-                }
-
-                "f-hits" => {
-                    modify.max_hp.set = value.parse::<i64>().ok();
-                }
-                "f-attackblow" => modify.damage.hand.set = value.parse().ok(),
-                "f-attackshot" => modify.damage.ranged.set = value.parse().ok(),
-                "f-magicpower" => modify.damage.magic.set = value.parse().ok(),
-                "f-defenceblow" => modify.defence.hand_units.set = value.parse().ok(),
-                "f-defenceshot" => modify.defence.ranged_units.set = value.parse().ok(),
-                "f-defencemagic" => modify.defence.magic_units.set = value.parse().ok(),
-                "f-manevres" => {
-                    modify.max_moves.set = value.parse().ok();
-                }
-                "f-initiative" => modify.speed.set = value.parse().ok(),
-                "f-vampirizm" => modify.vamp.set = value.parse().ok(),
-                "f-regen" => modify.regen.add = value.parse().ok(),
-                "bonus" => bonus = Some(Bonus::from(value)),
-                _ => {}
-            }
-        }
-        items.push((
-            index.unwrap(),
-            ItemInfo {
-                name: name.expect("No name field").into(),
-                description: description.expect("No description field").into(),
-                cost: {
-                    let cost = cost.expect("No cost field");
-                    if cost > 0 {
-                        cost as u64
-                    } else {
-                        0
-                    }
-                },
-                magic_req: magic,
-                icon: icon.expect("No icon key").into(),
-                sells: cost.unwrap() > 0,
-                bonus,
-                itemtype: itemtype.expect(&*format!("{name}", name = name.unwrap())),
-                modify,
-            },
-        ));
+        let Some((item, rest)) = ItemInfo::from_section(props.clone(), ()).ok() else { continue; };
+		let name = item.name.clone();
+		registry.items.register(item, name);
     }
-    items.sort_by_key(|x| x.0);
-    ITEMS
-        .write()
-        .unwrap()
-        .extend(items.iter().map(|(_, v)| v.clone()));
-    assert!(ITEMS.read().unwrap().len() > 0);
     ("assets/Items", req_assets)
-}
-
-trait IsRus {
-    fn is_rus_alphabet(&self) -> bool;
-}
-impl IsRus for char {
-    fn is_rus_alphabet(&self) -> bool {
-        matches!(*self, 'А'..='Я' | 'а'..='я' | 'ё' | 'Ё')
-    }
 }
 
 fn split_and_parse<N: Num>(string: String) -> Vec<N> {
@@ -1037,20 +537,6 @@ fn split_and_parse<N: Num>(string: String) -> Vec<N> {
         .collect()
 }
 
-fn parse_cmp<V: Ord + FromStr>(v: String) -> Cmp<V>
-where
-    <V as FromStr>::Err: Debug,
-{
-    match v {
-        v if v.starts_with("<=") => Cmp::LE(v.split_at(2).1.parse().unwrap()),
-        v if v.starts_with(">=") => Cmp::GE(v.split_at(2).1.parse().unwrap()),
-        v if v.starts_with("<") => Cmp::L(v.split_at(1).1.parse().unwrap()),
-        v if v.starts_with(">") => Cmp::G(v.split_at(1).1.parse().unwrap()),
-        v if v.starts_with("=") => Cmp::E(v.split_at(1).1.parse().unwrap()),
-        _ => Cmp::E(v.parse().unwrap()),
-    }
-}
-
 fn str_bool(v: String) -> bool {
     match &*v.to_lowercase() {
         "true" | "1" | "t" | "y" => true,
@@ -1058,10 +544,10 @@ fn str_bool(v: String) -> bool {
     }
 }
 
-async fn parse_events<Reader: FileAccess>(path: String, locale: &mut Locale) -> Vec<Event> {
+async fn parse_events<Reader: FileAccess>(path: String, locale: &mut Locale, registry: &GameInfo) -> Vec<Event> {
     let mut events = Vec::new();
     for (sec, props) in parse_for_sections_localised::<Reader>(&*path, locale).await {
-        let event = <Event as Sections>::from_section(props).unwrap();
+        let event = <Event as Sections>::from_section(props, ()).unwrap();
         events.push(event.0);
     }
     events
@@ -1069,9 +555,8 @@ async fn parse_events<Reader: FileAccess>(path: String, locale: &mut Locale) -> 
 
 async fn parse_mapdata<Reader: FileAccess>(
     path: String,
-    units: &Vec<Unit>,
     locale: &mut Locale,
-    objects: &Objects,
+	registry: &GameInfo,
 ) -> (
     TileMap<usize>,
     Vec<MapDeco>,
@@ -1098,7 +583,7 @@ async fn parse_mapdata<Reader: FileAccess>(
                                 TileMap::new(tilemap)
                             });
                         }
-                        "decomap" => decomap = { Vec::<MapDeco>::eat(prop.1.chars()).unwrap().0 },
+                        "decomap" => decomap = { Vec::<MapDeco>::eat(&prop.1, ()).unwrap().1 },
                         _ => {}
                     }
                 }
@@ -1141,9 +626,7 @@ async fn parse_mapdata<Reader: FileAccess>(
                                     (num.parse::<usize>().unwrap(), lvl.parse::<i64>().unwrap())
                                 })
                                 .map(|(num, _)| {
-                                    let mut troop = Troop::empty();
-                                    troop.unit = units[num].clone();
-                                    troop.unit.army = armys.len();
+                                    let mut troop = Troop::new((registry.units[num].clone(), &registry.bonuses).into());
                                     SendMut::new(troop)
                                 })
                                 .collect()
@@ -1155,8 +638,7 @@ async fn parse_mapdata<Reader: FileAccess>(
                             let troop = Troop {
                                 unit: {
                                     let mut unit =
-                                        units[things.0.parse::<usize>().unwrap()].clone();
-                                    unit.army = armys.len();
+                                        (registry.units[things.0.parse::<usize>().unwrap()].clone(), &registry.bonuses).into();
                                     unit
                                 },
                                 is_main: true,
@@ -1175,7 +657,7 @@ async fn parse_mapdata<Reader: FileAccess>(
 
                 armys.push((
                     id.unwrap(),
-                    Army::new(troops, stats, inv, pos, active, control),
+                    Army::new(troops, stats, inv, pos, active, control, registry),
                 ));
             }
             x if x.starts_with("Building") => {
@@ -1264,8 +746,8 @@ async fn parse_mapdata<Reader: FileAccess>(
                         group: 0,
                         mana_income: 0,
                         relations: Relations::default(),
-                        id: objects
-                            .into_iter()
+                        id: registry.objects.inner
+                            .iter()
                             .position(|obj| obj.name == object_name)
                             .unwrap(),
                         name,
@@ -1301,10 +783,9 @@ async fn parse_mapdata<Reader: FileAccess>(
 }
 
 pub async fn parse_story<Reader: FileAccess>(
-    units: &Vec<Unit>,
-    objects: &Objects,
     lang: &String,
     additional_lang: &String,
+	registry: &GameInfo,
 ) -> (GameMap, Vec<Event>) {
     let mut err_coll = Vec::new();
     let map_dir = "map/";
@@ -1365,13 +846,12 @@ pub async fn parse_story<Reader: FileAccess>(
     }
     let mapdata = parse_mapdata::<Reader>(
         format!("{map_dir}{}", mapdata_path.unwrap()),
-        units,
         &mut locale,
-        objects,
+        registry
     )
     .await;
     let events =
-        parse_events::<Reader>(format!("{map_dir}{}", events_path.unwrap()), &mut locale).await;
+        parse_events::<Reader>(format!("{map_dir}{}", events_path.unwrap()), &mut locale, registry).await;
 
     let gamemap = GameMap {
         armys: mapdata.3,

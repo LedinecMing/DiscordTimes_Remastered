@@ -17,6 +17,7 @@ use crate::{
 use advini::{Ini, IniParseError, Section, SectionError, Sections};
 use alkahest::alkahest;
 use itertools::Itertools;
+use nom::{Parser, bytes::complete::tag};
 use num::integer::Roots;
 use std::fs;
 
@@ -26,6 +27,29 @@ pub type Tilemap<T> = [[T; MAP_SIZE]; MAP_SIZE];
 pub struct TileMap<T> {
     pub inner: Vec<T>,
     pub size: usize,
+}
+impl<'z, T: Ini<'z, Arg = ()>> Ini<'z> for TileMap<T> {
+	fn eat<'a>(mut input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+		let mut tiles = vec![];
+		loop {
+			let (rest, res ) = T::eat(input, _additional)?;
+			input = rest;
+			tiles.push(res);
+			input = tag(",").parse(input)?.0;
+		}
+		Ok((input, Self {
+			inner: tiles,
+			size: tiles.len().sqrt()
+		}))
+	}
+	fn vomit(&self, additional: Self::Arg) -> String {
+		let mut res = String::new();
+		for v in &self.inner {
+			res.push_str(&v.vomit(additional));
+		}
+		res
+	}
+	
 }
 impl<T> TileMap<T> {
     pub fn new(iter: impl Iterator<Item = T>) -> Self {
@@ -78,7 +102,7 @@ impl Default for HitboxTile {
     fn default() -> Self {
         HitboxTile {
             deco_blocked: false,
-            passable: true,
+            passable: false,
             need_transport: false,
             building: None,
             army: None,
@@ -148,28 +172,28 @@ pub struct StartStats {
     #[alias([start_time])]
     pub time: Time,
 }
-#[derive(Clone, Debug, Sections)]
+#[derive(Clone, Debug)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct GameMap {
-    #[inline_parsing]
+    //#[inline_parsing]
     pub start: StartStats,
-    #[unused]
+    //#[unused]
     pub time: Time,
-    #[unused]
+    //#[unused]
     pub tilemap: TileMap<usize>,
-    #[unused]
+    //#[unused]
     pub decomap: Vec<MapDeco>,
-    #[unused]
+	//#[unused]
     pub eventmap: TileMap<Vec<usize>>,
-    #[unused]
+    //#[unused]
     pub hitmap: TileMap<HitboxTile>,
-    #[unused]
+    //#[unused]
     pub buildings: Vec<MapBuildingdata>,
-    #[unused]
+    //#[unused]
     pub armys: Vec<Army>,
-    #[inline_parsing]
+    //#[inline_parsing]
     pub relations: FractionsRelations,
-    #[unused]
+    //#[unused]
     pub pause: bool,
 }
 impl Default for GameMap {
@@ -201,6 +225,10 @@ impl GameMap {
     pub fn calc_hitboxes(&mut self, objects: &[ObjectInfo]) {
         for (i, _) in &mut self.tilemap.inner.iter().enumerate() {
             self.hitmap.inner[i].need_transport = TILES[self.tilemap.inner[i]].need_transport();
+			self.hitmap.inner[i].passable = TILES
+                [self.tilemap.inner[i]]
+                .walkspeed
+                != 0;
         }
         self.recalc_armies_hitboxes();
         for (i, building) in self.buildings.iter().enumerate() {
@@ -245,7 +273,7 @@ pub fn export(events: &Events, to: &'static str) {
                 "[Event {}]\n{}\n",
                 event.name,
                 event
-                    .to_section()
+                    .to_section(Default::default())
                     .iter()
                     .map(|(k, v)| format!("{k}={v}"))
                     .join("\n")

@@ -1,11 +1,10 @@
 use crate::{
     battle::{
-        control::{Control, Relations},
-        Army, ArmyStats, Troop,
-    }, items::{Item, ITEMS}, map::{
+        Army, ArmyStats, Troop, control::{Control, Relations}
+    }, items::Item, map::{
         event::Location,
         object::{BuildingVariant, Village},
-    }, mutrc::SendMut, parse::Objects, time::time::{Data, Time}, units::unit::{Unit, UNITS}
+    }, mutrc::SendMut, registry::{self, GameInfo, Objects, Units}, time::time::{Data, Time}, units::unit::Unit
 };
 
 use super::{
@@ -29,7 +28,7 @@ use std::{
     path::Path,
     usize,
 };
-use zerocopy::{FromBytes, FromZeros, IntoBytes, Unaligned};
+use zerocopy::{FromBytes, FromZeros, IntoBytes, Unaligned, Immutable};
 
 pub trait ToBool {
     fn to_bool(self) -> bool;
@@ -57,46 +56,46 @@ pub enum MapModel {
     Ghost,
     Zombie,
 }
-#[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct UnitData {
     pub id: u8,
     pub level: u8,
 }
-#[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(packed(1))]
 pub struct ManyUnitsData {
     pub id: u8,
     pub level: u8,
     pub amount: u8,
 }
-#[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(packed(1))]
 pub struct RecruitUnitData {
     pub id: u8,
     pub amount: u8,
     pub max_amount: u8,
 }
-#[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(packed(1))]
 pub struct GarrisonUnit {
     pub id: u8,
     pub level: u8,
     pub count: u8,
 }
-#[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(packed(1))]
 pub struct ArmyTroopsData {
     pub main: UnitData,
     pub troops: [ManyUnitsData; 6],
 }
-#[derive(FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct PatrolData {
     pub exists: u8,
     pub radius: u8,
 }
-#[derive(FromBytes, Unaligned, Debug, Copy, Clone)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct RelationsData {
     pub a: u8,
@@ -119,7 +118,7 @@ pub enum ActionModel {
     Keeper = 3,
     Trading = 4,
 }
-#[derive(FromBytes, Unaligned, Debug)]
+#[derive(IntoBytes, Immutable, FromBytes, Clone, Unaligned, Debug, PartialEq, Eq)]
 #[repr(packed(1))]
 pub struct ArmyData {
     pub x: u16,                          // широта  2
@@ -160,11 +159,11 @@ pub struct ArmyData {
     pub not_interested_in_buildings: u8, // не заинтересован в зданиях 82
     pub garrison_power_in_buildings: u8, // сила гарнизона в зданиях 83
     pub revive_everyone: u8,             // возрождение всего отряда 84
-    pub applied_spell: u8,               // примененное заклинание 85
+	pub applied_spell: u8,               // примененное заклинание 85
     pub action_model: u8,                // модель поведения 86
     pub _empty6: [u8; 3],                // 3 пустых байта 89
 }
-#[derive(FromBytes, Unaligned, Debug)]
+#[derive(IntoBytes, Immutable, FromBytes, Clone, Unaligned, Debug, PartialEq, Eq)]
 #[repr(packed(1))]
 pub struct EventData {
     pub event_color: u8,                       // 1
@@ -246,7 +245,7 @@ pub struct EventData {
     pub _empty5: [u8; 5],              // 166-171
 }
 #[repr(packed(1))]
-#[derive(FromBytes, Unaligned, Debug, Clone)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug, Clone, PartialEq, Eq)]
 pub struct BuildingData {
     pub x: u16,                            // широта 2
     pub y: u16,                            // долгота 4
@@ -287,7 +286,7 @@ pub struct BuildingData {
     pub all_start_building: u8, // общее стартовое строение 357
     pub garrison_only_pc: u8, // гарнизон только для ии? 358
 }
-#[derive(FromBytes, Unaligned, PartialEq, Eq, Debug, Copy, Clone)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, PartialEq, Eq, Debug, Copy, Clone)]
 #[repr(packed(1))]
 pub struct HeroInfoData {
     pub _empty1: [u8; 6],             // 6
@@ -306,9 +305,8 @@ pub struct HeroInfoData {
     pub _empty4: [u8; 1],             // 50
 }
 impl HeroInfoData {
-	fn convert(&self, main: usize) -> Army {
+	fn convert(&self, main: usize, registry: &GameInfo) -> Army {
 		// TODO: remove dependence on local copy of units
-		let units = UNITS.read().unwrap();
 		let control = Control::PC;
 		let stats = ArmyStats {
 			gold: self.gold as u64,
@@ -316,13 +314,18 @@ impl HeroInfoData {
 			army_name: "Армия героя (нет имени)".to_string()
 		};
 		let mut troops = vec![];
-		troops.push(units.get(main));
+		troops.push(Some(registry.units[main].clone()));
 		for troop in self.army_data.iter().filter(|troop| !troop.id.is_zero()) {
-			troops.extend([convert_id(troop.id).and_then(|id| units.get(id))].into_iter().cycle().take(troop.amount as usize))
+			troops.extend([convert_id(troop.id).and_then(|id| Some(registry.units[id].clone()))].into_iter().cycle().take(troop.amount as usize))
 		};
         let troops = troops
-            .iter()
-            .filter_map(|x| x.and_then(|x| Some(SendMut::new(Troop::new(<Unit as Clone>::clone(x))))));
+            .into_iter()
+            .filter_map(|x| x.and_then(|x| Some(
+				SendMut::new(
+					Troop::new(
+						Unit::from((x, &registry.bonuses))
+					)))
+			));
 		let active = false;
 		let inventory: Vec<_> = convert_ids(&self.items)
 			.into_iter()
@@ -333,10 +336,10 @@ impl HeroInfoData {
             })
             .collect();
 		let pos = (self.x as usize, self.y as usize);
-		Army::new(troops.collect(), stats, inventory, pos, active, Control::PC)
+		Army::new(troops.collect(), stats, inventory, pos, active, Control::PC, registry)
 	}
 }
-#[derive(FromBytes, Unaligned, Debug, Copy, Clone)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(packed(1))]
 pub struct FractionRelationsData {
     pub a: RelationsData,
@@ -344,7 +347,7 @@ pub struct FractionRelationsData {
     pub c: RelationsData,
     pub d: RelationsData,
 }
-#[derive(FromBytes, Unaligned, Debug, Clone, Copy)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(packed(1))]
 pub struct SettingsData {
     pub size_x: u32,                             // 4
@@ -383,7 +386,7 @@ pub struct SettingsData {
     pub _empty4: [u8; 3],     // 280
     pub map_version: u16,     // кол-во сохранений в редакторе 282
 }
-#[derive(Debug, Clone, Copy, FromBytes)]
+#[derive(Debug, Clone, Copy, IntoBytes, Immutable, FromBytes, PartialEq, Eq)]
 #[repr(packed(1))]
 pub struct LightOrEvent {
     pub x: u16,
@@ -394,13 +397,14 @@ pub struct LightOrEvent {
     pub light_radius: u8,
     pub _empty1: [u8; 60],
 }
-#[derive(FromBytes, Unaligned, PartialEq, Eq, Debug, Copy, Clone)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, PartialEq, Eq, Debug, Copy, Clone)]
 #[repr(packed(1))]
 pub struct Decoration {
     pub x: u16,
     pub y: u16,
     pub id: u16,
 }
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub struct MapData {
     pub settings: SettingsData,
     pub buildings: Vec<BuildingData>,
@@ -638,17 +642,16 @@ pub fn parse_dtm_texts(
 
     ((name, desc), (comp, next), buildings, armies, events)
 }
-pub trait FromDtm {
+pub trait FromDtm<'z> {
     type From;
-    type Additional;
-    type Texts;
-    fn from_dtm(from: &Self::From, texts: &mut Self::Texts, additional: &Self::Additional) -> Self;
-}
-impl FromDtm for Relations {
     type Additional = ();
+    type Texts;
+    fn from_dtm<'a>(from: &Self::From, texts: &mut Self::Texts, additional: Self::Additional) -> Self;
+}
+impl FromDtm<'_> for Relations {
     type From = RelationsData;
     type Texts = ();
-    fn from_dtm(from: &Self::From, _: &mut Self::Texts, _: &Self::Additional) -> Self {
+	fn from_dtm<'a>(from: &Self::From, texts: &mut Self::Texts, additional: Self::Additional) -> Self {
         Self {
             player: from.a,
             ally: from.b,
@@ -657,21 +660,25 @@ impl FromDtm for Relations {
         }
     }
 }
-impl FromDtm for Army {
-    type Additional = usize;
+impl<'z> FromDtm<'z> for Army {
+    type Additional = (usize, &'z GameInfo);
     type From = ArmyData;
     type Texts = Vec<(String, String, String)>;
 
-    fn from_dtm(army: &Self::From, armies_texts: &mut Self::Texts, id: &Self::Additional) -> Self {
-        let units = UNITS.read().unwrap();
+	fn from_dtm<'a>(army: &Self::From, armies_texts: &mut Self::Texts, add: Self::Additional) -> Self {
         let (army_name, _, _) = armies_texts.remove(0);
-		let mut troops = vec![convert_id(army.troops.main.id).and_then(|x| Some(&units[x]))];
+		let mut troops = vec![convert_id(army.troops.main.id).and_then(|x| Some(add.1.units[x].clone()))];
 		for troop in army.troops.troops.iter().filter(|troop| !troop.id.is_zero()) {
-			troops.extend([convert_id(troop.id).and_then(|id| units.get(id))].into_iter().cycle().take(troop.amount as usize))
+			troops.extend([convert_id(troop.id).and_then(|id| Some(add.1.units[id].clone()))].into_iter().cycle().take(troop.amount as usize))
 		};
         let troops = troops
-            .iter()
-            .filter_map(|x| x.and_then(|x| Some(SendMut::new(Troop::new(<Unit as Clone>::clone(x))))));
+            .into_iter()
+            .filter_map(|x| x.and_then(|x| Some(
+				SendMut::new(
+					Troop::new(
+						(x, &add.1.bonuses).into()
+					)))
+			));
         let stats = ArmyStats {
             gold: 0,
             mana: 0,
@@ -688,15 +695,15 @@ impl FromDtm for Army {
         let pos = pos_from_dtm((army.x as usize, army.y as usize));
         let active = army.activity.to_bool();
         let control = Control::PC;
-        Army::new(troops.collect(), stats, inventory, pos, active, control)
+        Army::new(troops.collect(), stats, inventory, pos, active, control, add.1)
     }
 }
-impl FromDtm for Event {
+impl FromDtm<'_> for Event {
     type Additional = usize;
     type From = EventData;
     type Texts = Vec<(String, String, String)>;
 
-    fn from_dtm(from: &Self::From, texts: &mut Self::Texts, id: &Self::Additional) -> Self {
+    fn from_dtm(from: &Self::From, texts: &mut Self::Texts, id: Self::Additional) -> Self {
         // Handle location type
         let location = match from.event_type {
             1 => Location::Global,
@@ -715,7 +722,7 @@ impl FromDtm for Event {
             (String::new(), String::new(), String::new())
         };
         if from.enemy_defeat_checkmark.to_bool() {
-            dbg!(from.defeat_army_id, id);
+            //dbg!(from.defeat_army_id, id);
         }
 
         let (flag_check, flag_change) = {
@@ -738,7 +745,14 @@ impl FromDtm for Event {
                 })
                 .unwrap_or((None, None))
         };
-
+		fn to_cmp(v: i16) -> Option<Cmp<u64>> {
+			let v = v as u64;
+			match v {
+				v if v < 0 => Some(Cmp::L(v)),
+				v if v > 0 => Some(Cmp::G(v)),
+				_ => None
+			}
+		}
         let conditions = Conditions {
             sub: from.subordinate_event_checkmark.to_bool(),
             executed: false,
@@ -823,43 +837,23 @@ impl FromDtm for Event {
                 .then(|| convert_ids(&from.defeat_army_id)),
             xp_req: {
                 let cp = from.current_level;
-                match cp {
-                    x if x > 0 => Some(Cmp::GE(x as u64)),
-                    x if x < 0 => Some(Cmp::LE(x as u64)),
-                    _ => None,
-                }
+                to_cmp(cp)
             },
             gold_req: {
                 let cp = from.current_gold;
-                match cp {
-                    x if x > 0 => Some(Cmp::GE(x as u64)),
-                    x if x < 0 => Some(Cmp::LE(x as u64)),
-                    _ => None,
-                }
+                to_cmp(cp)
             },
             mana_req: {
                 let cp = from.current_mana;
-                match cp {
-                    x if x > 0 => Some(Cmp::GE(x as u64)),
-                    x if x < 0 => Some(Cmp::LE(x as u64)),
-                    _ => None,
-                }
+                to_cmp(cp)
             },
             army_req: {
                 let cp = from.unit_in_squad_amount;
-                match cp {
-                    x if x > 0 => Some(Cmp::GE(x as u64)),
-                    x if x < 0 => Some(Cmp::LE(x as u64)),
-                    _ => None,
-                }
+                to_cmp(cp)
             },
             power_req: {
                 let cp = from.army_strength;
-                match cp {
-                    x if x > 0 => Some(Cmp::GE(x as u64)),
-                    x if x < 0 => Some(Cmp::LE(x as u64)),
-                    _ => None,
-                }
+                to_cmp(cp)
             },
             hero_has_1_hp: from.hero_have_only_1hp_checkmark.to_bool(),
             archetype_req: match from.hero_archetype {
@@ -955,7 +949,7 @@ impl FromDtm for Event {
             question: from
                 .confirm_question
                 .to_bool()
-                .then_some((question, vec!["Yes".into(), "No".into()])),
+                .then_some((question, vec!["$yes".into(), "$no".into()])),
         };
 
         Event {
@@ -965,19 +959,16 @@ impl FromDtm for Event {
             conditions,
             result,
             message: if !text.is_empty() { Some(text) } else { None },
+			id
         }
     }
 }
-impl FromDtm for MapBuildingdata {
-    type Additional = Objects;
+impl<'z> FromDtm<'z> for MapBuildingdata {
+    type Additional = &'z Objects;
     type From = BuildingData;
     type Texts = Vec<(String, String, String)>;
 
-    fn from_dtm(
-        building: &Self::From,
-        building_texts: &mut Self::Texts,
-		object_infos: &Self::Additional,
-    ) -> Self {
+	fn from_dtm<'a>(building: &Self::From, building_texts: &mut Self::Texts, additional: Self::Additional) -> Self {
         let pos = pos_from_dtm((building.x as usize, building.y as usize));
         let size = pos_from_dtm((building.size_x as usize, building.size_y as usize));
 		let event_ids = building.event_ids;
@@ -1022,7 +1013,7 @@ impl FromDtm for MapBuildingdata {
             _ => BuildingVariant::Ruins(items.clone()),
         };
 		let id = {
-			object_infos.iter().find_map(|obj| {
+			additional.inner.iter().find_map(|obj| {
 				match obj.obj_type {
 					ObjectType::Bridge { group, variant } | ObjectType::Building { group, variant } => {
 						((group, variant) == (building.picture_variant, building.picture_number)).then_some(obj.index)
@@ -1055,18 +1046,18 @@ impl FromDtm for MapBuildingdata {
         };
 		let recruits = building
             .recruits
-            .iter().filter_map(|x| (x.id > 0 && x.max_amount > 0).then_some(RecruitUnit {
+            .iter().filter(|x| x.id > 0 && x.max_amount > 0).map(|x| RecruitUnit {
                 unit: x.id as usize - 1,
                 count: x.amount as usize,
-            })).collect::<Vec<_>>();
+            }).collect::<Vec<_>>();
 		let recruitment = (recruits.len() > 0).then_some({
 			Recruitment::new(recruits, 1.)
 		});
         let mut garrison = vec![];
         for unit in building.garrison_units {
 			if let (Some(id), Some(count)) = (convert_id(unit.id), convert_id(unit.count)) {
-				let units = [UNITS.read().unwrap()[id.min(100) as usize].clone()];
-				let units = units
+				let units = id.min(100) as usize;
+				let units = [units]
 					.iter()
 					.cycle()
 					.take(count)
@@ -1092,14 +1083,14 @@ impl FromDtm for MapBuildingdata {
             owner,
             pos,
             spells_to_learn,
-            relations: Relations::from_dtm(&building.relations, &mut (), &()),
+            relations: Relations::from_dtm(&building.relations, &mut (), ()),
         }
     }
 }
 pub fn pos_from_dtm(pos: (usize, usize)) -> (usize, usize) {
     (pos.0, pos.1)
 }
-pub fn convert_dtm_map(mut data: MapData, objects: &Objects) -> (GameMap, Vec<Event>) {
+pub fn convert_dtm_map(mut data: MapData, registry: &GameInfo) -> (GameMap, Vec<Event>) {
     let (
         (name, description),
         (company_name, next_map),
@@ -1123,15 +1114,14 @@ pub fn convert_dtm_map(mut data: MapData, objects: &Objects) -> (GameMap, Vec<Ev
             y: x.y as usize,
         })
         .collect();
-
-    let eventmap = TileMap::new(
-        data.lanterns
-            .iter()
-            .filter_map(|event| (event.map_model == 9).then(|| convert_ids(&event.events))),
-    );
-    // for lantern in data.lanterns {
-
-    // }
+	
+	let mut eventmap: TileMap<Vec<usize>> = TileMap::new([0].repeat(tilemap.size*tilemap.size).iter().map(|_| vec![]));
+	for lantern in data.lanterns {
+		let pos = (lantern.x as usize, lantern.y as usize);
+		if lantern.map_model == 9 {
+			eventmap[pos] = convert_ids(&lantern.events);
+		}
+    }
 
     let time = data.settings.start_time;
     let seed = data.settings.seed as usize;
@@ -1147,25 +1137,25 @@ pub fn convert_dtm_map(mut data: MapData, objects: &Objects) -> (GameMap, Vec<Ev
         .buildings
         .iter()
         .enumerate()
-        .map(|(id, b)| MapBuildingdata::from_dtm(&b, &mut buildings_text, &objects))
+        .map(|(id, b)| MapBuildingdata::from_dtm(&b, &mut buildings_text, &registry.objects))
         .collect();
-
+	let units = &registry.units;
     let mut armies: Vec<_> = data
         .armies
         .iter()
         .enumerate()
-        .map(|(id, a)| Army::from_dtm(&a, &mut armies_text, &id))
+        .map(|(id, a)| Army::from_dtm(&a, &mut armies_text, (id, registry)))
         .collect();
 	armies.extend_from_slice(&[
-		data.settings.knight_data.convert(0),
-		data.settings.mage_data.convert(1),
-		data.settings.ranger_data.convert(2),
+		data.settings.knight_data.convert(0, registry),
+		data.settings.mage_data.convert(1, registry),
+		data.settings.ranger_data.convert(2, registry),
 	]);
     let events = data
         .events
         .iter()
         .enumerate()
-        .map(|(id, event)| Event::from_dtm(&event, &mut events_text, &id))
+        .map(|(id, event)| Event::from_dtm(&event, &mut events_text, id))
         .collect();
     (
         GameMap {
@@ -1192,7 +1182,7 @@ pub fn convert_dtm_map(mut data: MapData, objects: &Objects) -> (GameMap, Vec<Ev
     )
 }
 
-#[derive(FromBytes, Unaligned, Debug)]
+#[derive(IntoBytes, Immutable, FromBytes, Unaligned, Debug)]
 #[repr(packed(1))]
 struct ObjectData {
     pub group: u16,
@@ -1233,21 +1223,29 @@ mod test {
         os,
         path::Path,
     };
+    use advini::Sections;
     use bytes::Bytes;
     use itertools::Itertools;
 
     use super::convert_dtm_map;
-    use crate::parse::{parse_objects, parse_units, StupidReader};
+    use crate::{map::dtm_writer, parse::{StupidReader, parse_objects, parse_units}, registry::GameInfo};
     use tokio;
     #[tokio::test]
     async fn test() {
+		let mut registry = GameInfo::new();
         let buf = include_bytes!("../../../dt/Maps_Rus/Другой берег.DTm");
         let _ = parse_units::<StupidReader>(
             "/home/ledinec/Projects/DiscordTimes_Remastered/dt/Units.ini".into(),
+			&mut registry
         )
 			.await;
-		let objects = parse_objects::<StupidReader>().await.0;
+		let _ = parse_objects::<StupidReader>(&mut registry).await.0;
         let data = super::parse_dtm_map_by_bytes(Bytes::copy_from_slice(buf)).unwrap();
-        let (mapa, events) = convert_dtm_map(data, &objects);
+        let (mapa, events) = convert_dtm_map(data.clone(), &registry);
+		let conv_data = dtm_writer::gamemap_to_mapdata(&mapa, &events, &registry);
+		let (mapa1, events1) = convert_dtm_map(conv_data.unwrap().clone(), &registry);
+		// TODO
+		// assert_eq!(mapa1.to_section(()), mapa.to_section(()));
+		assert_eq!(events1, events);
     }
 }

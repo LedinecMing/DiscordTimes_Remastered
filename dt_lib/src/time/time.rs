@@ -3,7 +3,8 @@ use std::ops::{Sub, SubAssign};
 use advini::{Ini, IniParseError, SEPARATOR};
 use alkahest::alkahest;
 use derive_more::{Add, AddAssign};
-use serde;
+use nom::{Parser, bytes::complete::take, character::complete::digit1, combinator::map_res, multi::many0, sequence::terminated};
+use serde::{self, de::value};
 
 const HOUR: u64 = 60;
 const DAY: u64 = 24;
@@ -38,55 +39,11 @@ pub enum Data {
 pub struct Time {
     pub minutes: u64,
 }
-impl Ini for Time {
-    fn eat<'a>(
-        mut chars: std::str::Chars<'a>,
-    ) -> Result<(Self, std::str::Chars<'a>), IniParseError> {
-        let mut times = Vec::new();
-        let mut res_str = String::new();
-        loop {
-            if let Some(chr) = chars.next() {
-                match chr {
-                    chr if chr.is_ascii_digit() => {
-                        res_str.push(chr);
-                    }
-                    SEPARATOR => {
-                        if !res_str.is_empty() {
-                            times.push(
-                                res_str
-                                    .parse::<u64>()
-                                    .map_err(|_| IniParseError::Error("bado thingo"))?,
-                            );
-                        }
-                        break;
-                    }
-                    _ => {
-                        if res_str.is_empty() {
-                            continue;
-                        }
-                        times.push(
-                            res_str
-                                .parse::<u64>()
-                                .map_err(|_| IniParseError::Error("bado thingo"))?,
-                        );
-                        res_str = String::new();
-                    }
-                }
-            } else {
-                if !res_str.is_empty() {
-                    times.push(
-                        res_str
-                            .parse::<u64>()
-                            .map_err(|_| IniParseError::Error("bado thingo"))?,
-                    );
-                }
-                break;
-            }
-        }
-        if times.is_empty() {
-            return Err(IniParseError::Empty(chars));
-        }
-
+impl Ini<'_> for Time {
+    fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+		let (rest, times) = many0(
+			terminated(map_res(digit1, |x: &str| x.parse::<u64>()), take(1usize))
+		).parse(input)?;
         let len = times.len().min(5);
         let value = times
             .iter()
@@ -99,9 +56,9 @@ impl Ini for Time {
                 _ => 0,
             })
             .sum();
-        Ok((Time::new(value), chars))
+        Ok((rest, Time::new(value)))
     }
-    fn vomit(&self) -> String {
+	fn vomit(&self, additional: Self::Arg) -> String {
         if self.get_years() > 0 {
             self.to_data([Data::YEAR, Data::MONTH, Data::DAY, Data::HOUR], ":")
         } else if self.get_months() > 0 {

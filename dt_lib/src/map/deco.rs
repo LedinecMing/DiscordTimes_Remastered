@@ -13,21 +13,21 @@ impl MapDeco {
         Self { index, x, y }
     }
 }
-impl Ini for MapDeco {
-    fn eat(chars: std::str::Chars) -> Result<(Self, std::str::Chars), advini::IniParseError> {
-        match <(usize, usize, usize)>::eat(chars) {
+impl Ini<'_> for MapDeco {
+	fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), advini::IniParseError> {
+        match <(usize, usize, usize)>::eat(input, ()) {
             Ok(v) => Ok((
+				v.0,
                 Self {
-                    index: v.0 .0,
-                    x: v.0 .1,
-                    y: v.0 .2,
-                },
-                v.1,
+                    index: v.1.0,
+                    x: v.1.1,
+                    y: v.1.2,
+                }
             )),
             Err(err) => Err(err),
         }
     }
-    fn vomit(&self) -> String {
-        (self.index, self.x, self.y).vomit()
+    fn vomit(&self, _additional: Self::Arg) -> String {
+        (self.index, self.x, self.y).vomit(())
     }
 }

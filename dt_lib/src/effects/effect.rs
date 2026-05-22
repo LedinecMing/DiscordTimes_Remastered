@@ -1,636 +1,169 @@
-use crate::units::{
+use crate::{battle::{Army, BattleInfo, BattleUnit}, bonuses::{AbilityCondition, AbilityTowardsTroop, ListenTo, MAX_ABILITY, Mechanic, RemoveEffect, Rules}, registry::{Effects, GameInfo}, units::{
     unit::{Unit, *},
     unitstats::*,
-};
+}};
+use indexmap::IndexMap;
+use schemars::JsonSchema;
+use serde_with::{FromInto, serde_as};
+use advini::{Sections, Ini};
 use alkahest::alkahest;
 use dyn_clone::DynClone;
 use enum_dispatch::enum_dispatch;
-use math_thingies::Percent;
+use math_thingies::{Percent, add_opt};
 use std::fmt::Debug;
 
-#[derive(PartialEq)]
+pub type EffectId = usize;
+
+#[derive(Clone, Copy, Debug, PartialEq, Default, serde::Deserialize, serde::Serialize, JsonSchema)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub struct EffectLifetime {
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub lifetime: Option<usize>,
+	pub decay: usize,
+	pub remove_on_battle_end: bool,
+}
+impl EffectLifetime {
+	pub fn tick(&mut self) {
+		if let Some(lifetime) = &mut self.lifetime {
+			*lifetime -= self.decay;
+		}
+	}
+}
+
+#[derive(Clone, Debug, PartialEq, Default, serde::Deserialize, serde::Serialize)]
+pub struct EffectInfo {
+	pub id: String,
+	pub name: String,
+	pub desc: String,
+
+	pub kind: String,
+	
+	pub lifetime: EffectLifetime,
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub stacks: bool,
+
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub added_modify: ModifyUnitStats,
+
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub rules: IndexMap<AbilityCondition, (ListenTo, Vec<Mechanic>)>,
+
+	#[serde(default)]
+	pub power_scales: bool,
+	#[serde(default)]
+	pub power_scales_with_lifetime: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Default, serde::Deserialize, serde::Serialize, JsonSchema)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub struct StatusEffect {
+	pub id: EffectId,
+
+	pub internal: bool,
+	pub lifetime: EffectLifetime,
+	pub power: usize,
+
+	pub added_modify: Option<ModifyUnitStats>,
+}
+impl StatusEffect {
+	pub fn new(id: EffectId, lifetime: Option<EffectLifetime>, power: usize, registry: &Effects) -> Self {
+		Self { id, lifetime: lifetime.unwrap_or(registry[id].lifetime.clone()), power, ..Default::default() }
+	}
+	pub fn with_times(self, power: usize, registry: &GameInfo) -> Self {
+		let mut new = self.clone();
+		let effect_info = &registry.effects[self.id];
+		if !effect_info.stacks {
+			return new;
+		}
+		let old_power = self.get_power(effect_info);
+		if effect_info.power_scales {
+			new.power += power;
+		}
+		if let Some(lifetime) = &mut new.lifetime.lifetime {
+			*lifetime += power;
+		}
+		new
+	}
+	pub fn get_power(&self, info: &EffectInfo) -> usize {
+		if info.power_scales_with_lifetime {
+			self.power * self.lifetime.lifetime.unwrap_or(1)
+		} else {
+			self.power
+		}
+	}
+	pub fn is_dead(&self) -> bool {
+		self.lifetime.lifetime.is_some_and(|x| x==0) && !self.lifetime.remove_on_battle_end
+	}
+	pub fn removal(&self, unit: &mut Unit, registry: &GameInfo) {
+		if let Some(modify) = self.added_modify {
+			unit.modify -= modify;
+		}
+	}
+	fn add_modify(&mut self, modify: Option<ModifyUnitStats>) {
+		self.added_modify = add_opt(self.added_modify, modify);
+	}
+	// TODO: probably should add animations here
+	fn apply_ability(&mut self, abilities: &Vec<Mechanic>, unit_army: usize, unit_index: usize, unit_pos: usize, armies: &Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
+		let info = &registry.effects[self.id];
+		let (army1, army2) = if unit_army == battle.army1 { (battle.army1, battle.army2) } else { (battle.army1, battle.army2) };
+		let armies = [&armies[army1], &armies[army2]];
+		let troops = armies.map(|x| &x.troops);
+		let hitmaps = armies.map(|x| &x.hitmap);
+		for mechanic in abilities {
+			let to_add = mechanic.apply(self.get_power(info), unit_index, unit_pos, &hitmaps, &troops, ability_units, battle, registry);
+			self.add_modify(Some(to_add));
+		}
+	}
+	pub fn apply_rule(&mut self, rule: AbilityCondition, BattleUnit { army, index }: BattleUnit, unit_pos: usize, armies: &Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
+		let info = &registry.effects[self.id];
+		let abilities = &info.rules[&rule];
+		self.apply_ability(&abilities.1, army, index, unit_pos, armies, ability_units, battle, registry);
+	}
+	pub fn on_tick(&mut self, unit_info: BattleUnit, unit_pos: usize, armies: &Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
+		let info = &registry.effects[self.id];
+		if let Some(lifetime) = &mut self.lifetime.lifetime {
+			*lifetime = lifetime.saturating_sub(self.lifetime.decay);
+		}
+		self.apply_rule(AbilityCondition::Turn, unit_info, unit_pos, armies, ability_units, battle, registry);
+	}
+}
+
+pub fn add_modify_effect(unit: &mut Unit, modify: ModifyUnitStats, id: usize, registry: &GameInfo) -> bool{
+	unit.modify += modify;
+	unit.add_effect(StatusEffect {
+		id,
+		internal: true,
+		lifetime: EffectLifetime {
+			lifetime: Some(1),
+			decay: 1,
+			remove_on_battle_end: true
+		},
+		power: 1,
+		added_modify: Some(modify)
+	}, registry)
+}
+
+pub fn add_modify_effect_ex(unit: &mut Unit, modify: ModifyUnitStats, id: usize, lifetime: EffectLifetime, registry: &GameInfo) -> bool{
+	unit.modify += modify;
+	unit.add_effect(StatusEffect {
+		id,
+		internal: true,
+		lifetime,
+		power: 1,
+		added_modify: Some(modify)
+	}, registry)
+}
+
+
+#[derive(Clone, Debug, PartialEq, Default, serde::Deserialize, serde::Serialize)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum EffectKind {
     MageCurse,
     MageSupport,
+	#[default]
     Bonus,
     Item,
     Potion,
     Poison,
     Fire,
-}
-
-#[enum_dispatch]
-#[derive(Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub enum Effect {
-    MoreMoves(MoreMoves),
-    HealMagic(HealMagic),
-    DisableMagic(DisableMagic),
-    ElementalSupport(ElementalSupport),
-    AttackMagic(AttackMagic),
-    Poison(Poison),
-    Fire(Fire),
-    ArtilleryEffect(ArtilleryEffect),
-    RessurectedEffect(RessurectedEffect),
-    SpearEffect(SpearEffect),
-    ItemEffect(ItemEffect),
-    ToEndEffect(ToEndEffect),
-    BlockEffect(BlockEffect),
-}
-
-dyn_clone::clone_trait_object!(EffectTrait);
-#[enum_dispatch(Effect)]
-pub trait EffectTrait: DynClone + Debug + Send + Sync {
-    fn update_stats(&mut self, unit: &mut Unit);
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        false
-    }
-    fn on_battle_end(&mut self) -> bool {
-        false
-    }
-    fn kill(&mut self, unit: &mut Unit) {}
-    fn is_dead(&self) -> bool {
-        false
-    }
-    fn get_kind(&self) -> EffectKind {
-        EffectKind::Bonus
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct EffectInfo {
-    pub lifetime: i32,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct MoreMoves {
-    pub info: EffectInfo,
-}
-impl Default for MoreMoves {
-    fn default() -> Self {
-        Self {
-            info: EffectInfo { lifetime: 1 },
-        }
-    }
-}
-impl EffectTrait for MoreMoves {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        unit.modify.max_moves += *Modify::default().add(1);
-    }
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        self.info.lifetime -= 1;
-        true
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        unit.modify.max_moves -= *Modify::default().add(1);
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct HealMagic {
-    pub info: EffectInfo,
-    pub magic_power: u64,
-    pub magic_type: MagicType,
-}
-impl HealMagic {
-    pub fn new(magic_power: u64, magic_type: MagicType) -> Self {
-        let mut magic = Self::default();
-        magic.magic_power = magic_power;
-        magic.magic_type = magic_type;
-        magic
-    }
-}
-impl Default for HealMagic {
-    fn default() -> Self {
-        Self {
-            info: EffectInfo { lifetime: 1 },
-            magic_power: 15,
-            magic_type: MagicType::Life,
-        }
-    }
-}
-impl EffectTrait for HealMagic {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        let unitstats = unit.stats;
-        let damage = unitstats.damage;
-        let defence = unitstats.defence;
-        let magic = self.magic_power as i64;
-        let mut add_attack = (self.magic_power / 5) as i64;
-        let mut add_defence = (self.magic_power / 10) as i64;
-        match self.magic_type {
-            MagicType::Death => {
-                add_attack = 1 + magic / 6;
-                add_defence = magic / 12;
-            }
-            MagicType::Life => {
-                add_attack = magic / 8;
-                add_defence = 1 + magic / 4;
-            }
-            _ => {}
-        }
-        if damage.hand > 0 {
-            unit.modify.damage.hand += *Modify::default().add(add_attack);
-        }
-        if damage.ranged > 0 {
-            unit.modify.damage.ranged += *Modify::default().add(add_attack);
-        }
-
-        unit.modify.defence.hand_units += *Modify::default().add(add_defence);
-        unit.modify.defence.ranged_units += *Modify::default().add(add_defence);
-    }
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        self.info.lifetime -= 1;
-        true
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        let unitstats = unit.stats;
-        let damage = unitstats.damage;
-        let defence = unitstats.defence;
-        let magic = self.magic_power as i64;
-        let mut add_attack = (self.magic_power / 5) as i64;
-        let mut add_defence = (self.magic_power / 10) as i64;
-        match self.magic_type {
-            MagicType::Death => {
-                add_attack = 1 + magic / 6;
-                add_defence = magic / 12;
-            }
-            MagicType::Life => {
-                add_attack = magic / 8;
-                add_defence = 1 + magic / 4;
-            }
-            _ => {}
-        }
-        if damage.hand > 0 {
-            unit.modify.damage.hand -= *Modify::default().add(add_attack);
-        }
-        if damage.ranged > 0 {
-            unit.modify.damage.ranged -= *Modify::default().add(add_attack);
-        }
-
-        unit.modify.defence.hand_units -= *Modify::default().add(add_defence);
-        unit.modify.defence.ranged_units -= *Modify::default().add(add_defence);
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-    fn get_kind(&self) -> EffectKind {
-        EffectKind::MageSupport
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct DisableMagic {
-    pub info: EffectInfo,
-    pub magic_power: u64,
-}
-impl DisableMagic {
-    pub fn new(magic_power: u64) -> Self {
-        let mut magic = Self::default();
-        magic.magic_power = magic_power;
-        magic
-    }
-}
-impl Default for DisableMagic {
-    fn default() -> Self {
-        Self {
-            info: EffectInfo { lifetime: 1 },
-            magic_power: 15,
-        }
-    }
-}
-impl EffectTrait for DisableMagic {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        if self.magic_power < 20 {
-            return;
-        }
-        let add_moves = match self.magic_power {
-            0..20 => 0,
-            20..45 => 1,
-            45..100 => 2,
-            100..256 => 3,
-            _ => 3 + (self.magic_power - 256) / 50 / 5,
-        } as i64;
-        unit.stats.moves -= add_moves;
-        unit.modify.max_moves -= *Modify::default().add(add_moves);
-    }
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        self.info.lifetime -= 1;
-        true
-    }
-    fn on_battle_end(&mut self) -> bool {
-        self.info.lifetime = 0;
-        true
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        if self.magic_power < 20 {
-            return;
-        }
-        let add_moves = match self.magic_power {
-            0..20 => 0,
-            20..45 => 1,
-            45..100 => 2,
-            100..256 => 3,
-            _ => 3 + (self.magic_power - 256) / 50 / 5,
-        } as i64;
-        unit.stats.moves += add_moves;
-        unit.modify.max_moves += *Modify::default().add(add_moves);
-    }
-    fn get_kind(&self) -> EffectKind {
-        EffectKind::MageCurse
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct ElementalSupport {
-    pub info: EffectInfo,
-    pub magic_power: u64,
-}
-impl ElementalSupport {
-    pub fn new(magic_power: u64) -> Self {
-        let mut magic = Self::default();
-        magic.magic_power = magic_power;
-        magic
-    }
-}
-impl Default for ElementalSupport {
-    fn default() -> Self {
-        Self {
-            info: EffectInfo { lifetime: 1 },
-            magic_power: 15,
-        }
-    }
-}
-impl EffectTrait for ElementalSupport {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        if self.magic_power < 20 {
-            return;
-        }
-        let add_moves = match self.magic_power {
-            0..=19 => 0,
-            20..=44 => 1,
-            45..=99 => 2,
-            100..=255 => 3,
-            _ => self.magic_power as i64 / 64,
-        };
-        unit.stats.moves += add_moves;
-        unit.modify.max_moves += *Modify::default().add(add_moves);
-    }
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        self.info.lifetime -= 1;
-        true
-    }
-    fn on_battle_end(&mut self) -> bool {
-        self.info.lifetime = 0;
-        true
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        if self.magic_power < 20 {
-            return;
-        }
-        let add_moves = match self.magic_power {
-            0..=19 => 0,
-            20..=44 => 1,
-            45..=99 => 2,
-            100..=255 => 3,
-            _ => self.magic_power as i64 / 64,
-        };
-        unit.stats.moves -= add_moves;
-        unit.modify.max_moves -= *Modify::default().add(add_moves);
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-    fn get_kind(&self) -> EffectKind {
-        EffectKind::MageSupport
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct AttackMagic {
-    pub info: EffectInfo,
-    pub magic_power: u64,
-    pub magic_type: MagicType,
-}
-impl AttackMagic {
-    pub fn new(magic_power: u64) -> Self {
-        let mut magic = Self::default();
-        magic.magic_power = magic_power;
-        magic
-    }
-}
-impl Default for AttackMagic {
-    fn default() -> Self {
-        Self {
-            info: EffectInfo { lifetime: 1 },
-            magic_power: 15,
-            magic_type: MagicType::Death,
-        }
-    }
-}
-impl EffectTrait for AttackMagic {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        let stats = unit.stats;
-        let damage = stats.damage;
-        let defence = stats.defence;
-        let magic = self.magic_power as i64;
-        let mut minus_attack = 1 + (magic / 10);
-        let mut minus_defence = 1 + (magic / 5);
-        match self.magic_type {
-            MagicType::Death => {
-                minus_defence = magic / 10;
-                minus_attack = 1 + magic / 5;
-            }
-            MagicType::Life => {
-                minus_defence = 1 + magic / 3;
-                minus_attack = magic / 10;
-            }
-            _ => {}
-        }
-        if damage.hand > 0 {
-            unit.modify.damage.hand -= *Modify::default().add(minus_attack);
-        }
-        if damage.ranged > 0 {
-            unit.modify.damage.ranged -= *Modify::default().add(minus_attack);
-        }
-
-        unit.modify.defence.hand_units -= *Modify::default().add(minus_defence);
-        unit.modify.defence.ranged_units -= *Modify::default().add(minus_defence);
-    }
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        self.info.lifetime -= 1;
-        true
-    }
-    fn on_battle_end(&mut self) -> bool {
-        self.info.lifetime = 0;
-        true
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        let stats = unit.stats;
-        let damage = stats.damage;
-        let defence = stats.defence;
-        let magic = self.magic_power as i64;
-        let mut minus_attack = 1 + (magic / 10);
-        let mut minus_defence = 1 + (magic / 5);
-        match self.magic_type {
-            MagicType::Death => {
-                minus_defence = magic / 10;
-                minus_attack = 1 + magic / 5;
-            }
-            MagicType::Life => {
-                minus_defence = 1 + magic / 3;
-                minus_attack = magic / 10;
-            }
-            _ => {}
-        }
-        if damage.hand > 0 {
-            unit.modify.damage.hand += *Modify::default().add(minus_attack);
-        }
-        if damage.ranged > 0 {
-            unit.modify.damage.ranged += *Modify::default().add(minus_attack);
-        }
-
-        unit.modify.defence.hand_units += *Modify::default().add(minus_defence);
-        unit.modify.defence.ranged_units += *Modify::default().add(minus_defence);
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-    fn get_kind(&self) -> EffectKind {
-        EffectKind::MageCurse
-    }
-}
-
-const POISON_PERCENT: Percent = Percent::const_new(15);
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct Poison {
-    pub info: EffectInfo,
-}
-impl EffectTrait for Poison {
-    fn update_stats(&mut self, unit: &mut Unit) {}
-    fn on_battle_end(&mut self) -> bool {
-        self.info.lifetime = 0;
-        true
-    }
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        unit.stats.hp -= POISON_PERCENT.calc(unit.modified.max_hp);
-        true
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-    fn get_kind(&self) -> EffectKind {
-        EffectKind::Poison
-    }
-}
-
-impl Default for Poison {
-    fn default() -> Self {
-        Self {
-            info: EffectInfo { lifetime: 1 },
-        }
-    }
-}
-
-const FIRE_PERCENT: Percent = Percent::const_new(10);
-const FIRE_SLOWNESS_PERCENT: Percent = Percent::const_new(10);
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct Fire {
-    pub info: EffectInfo,
-    addition_speed: i64,
-    additional_power: i64,
-}
-impl EffectTrait for Fire {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        self.addition_speed =
-            FIRE_SLOWNESS_PERCENT.calc(unit.modified.speed) + self.additional_power / 10;
-        unit.modify.speed -= *Modify::default().add(self.addition_speed);
-    }
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        unit.stats.hp -= (FIRE_PERCENT + Percent::new(self.additional_power as i16 / 5))
-            .calc(unit.modified.max_hp)
-            * ((unit.info.unit_type == UnitType::Mecha) as i64 + 1);
-        self.info.lifetime -= 1;
-        true
-    }
-    fn on_battle_end(&mut self) -> bool {
-        self.info.lifetime = 0;
-        true
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        unit.modify.speed += *Modify::default().add(self.addition_speed);
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-    fn get_kind(&self) -> EffectKind {
-        EffectKind::Fire
-    }
-}
-const STANDART_FIRE_LONG: i32 = 5;
-impl Fire {
-    pub fn new(additional_power: i64) -> Self {
-        Self {
-            info: EffectInfo {
-                lifetime: STANDART_FIRE_LONG + additional_power as i32 / 25,
-            },
-            addition_speed: 0,
-            additional_power,
-        }
-    }
-}
-impl Default for Fire {
-    fn default() -> Self {
-        Self {
-            info: EffectInfo { lifetime: 5 },
-            addition_speed: 0,
-            additional_power: 0,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct ArtilleryEffect {
-    pub info: EffectInfo,
-}
-impl EffectTrait for ArtilleryEffect {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        unit.modify.speed += *Modify::default().add(30);
-    }
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        self.info.lifetime -= 1;
-        true
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        unit.modify.speed -= *Modify::default().add(30);
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct RessurectedEffect {}
-impl EffectTrait for RessurectedEffect {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        unit.stats.hp += Percent::new(25).calc(unit.modified.max_hp);
-    }
-    fn get_kind(&self) -> EffectKind {
-        EffectKind::Fire
-    }
-    fn is_dead(&self) -> bool {
-        false
-    }
-}
-impl RessurectedEffect {
-    pub fn new() -> Self {
-        RessurectedEffect {}
-    }
-}
-
-const SPEAR_PERCENT: Percent = Percent::const_new(200);
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct SpearEffect {
-    pub info: EffectInfo,
-}
-impl EffectTrait for SpearEffect {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        unit.modify.defence.hand_units += *Modify::default().percent_add(SPEAR_PERCENT);
-        unit.modify.defence.ranged_units += *Modify::default().percent_add(SPEAR_PERCENT);
-    }
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        self.info.lifetime -= 1;
-        true
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        unit.modify.defence.hand_units -= *Modify::default().percent_add(SPEAR_PERCENT);
-        unit.modify.defence.ranged_units -= *Modify::default().percent_add(SPEAR_PERCENT);
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-}
-
-const BLOCK_PERCENT: Percent = Percent::const_new(100);
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct BlockEffect {
-    pub info: EffectInfo,
-}
-impl EffectTrait for BlockEffect {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        unit.modify.defence.hand_units += *Modify::default().percent_add(BLOCK_PERCENT);
-        unit.modify.defence.ranged_units += *Modify::default().percent_add(BLOCK_PERCENT);
-    }
-    fn on_tick(&mut self, unit: &mut Unit) -> bool {
-        self.info.lifetime -= 1;
-        true
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        unit.modify.defence.hand_units -= *Modify::default().percent_add(BLOCK_PERCENT);
-        unit.modify.defence.ranged_units -= *Modify::default().percent_add(BLOCK_PERCENT);
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct ItemEffect {
-    pub info: EffectInfo,
-    pub modify: ModifyUnitStats,
-}
-impl EffectTrait for ItemEffect {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        unit.modify += self.modify;
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        unit.modify -= self.modify;
-    }
-    fn get_kind(&self) -> EffectKind {
-        EffectKind::Item
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
-pub struct ToEndEffect {
-    pub info: EffectInfo,
-    pub modify: ModifyUnitStats,
-}
-impl EffectTrait for ToEndEffect {
-    fn update_stats(&mut self, unit: &mut Unit) {
-        unit.modify += self.modify;
-    }
-    fn on_battle_end(&mut self) -> bool {
-        self.info.lifetime = 0;
-        true
-    }
-    fn kill(&mut self, unit: &mut Unit) {
-        unit.modify -= self.modify;
-    }
-    fn is_dead(&self) -> bool {
-        self.info.lifetime < 1
-    }
-    fn get_kind(&self) -> EffectKind {
-        EffectKind::Bonus
-    }
 }

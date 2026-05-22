@@ -8,6 +8,7 @@ pub type RoomCode = String;
 // Some(None, None) => Room empty
 // Some(Some(..), None) => Room half-full (or half-empty smh)
 // The rest is unreachable
+
 pub struct Hotel(pub HashMap<RoomCode, Option<(Option<WsSocket>, Option<WsSocket>)>>);
 
 impl Hotel {

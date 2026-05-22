@@ -1,17 +1,13 @@
 use crate::{
-    battle::{
-        army::{find_path, Army, TroopType},
-        battlefield::{handle_action, BattleInfo},
+    Menu, battle::{
+        army::{Army, TroopType, find_path},
+        battlefield::{BattleInfo, handle_action},
         troop::Troop,
-    },
-    map::{
-        event::{execute_event, execute_event_as_player, Event, Execute},
+    }, map::{
+        event::{Event, Execute, execute_event, execute_event_as_player},
         map::GameMap,
         object::ObjectInfo,
-    },
-    parse::SETTINGS,
-    units::unit::{Unit, UnitInfo, UnitInventory, UnitLvl, UnitStats},
-    Menu,
+    }, registry::GameInfo, units::unit::{Unit, UnitInfo, UnitInventory, UnitLvl, UnitStats}
 };
 use alkahest::*;
 use log;
@@ -91,7 +87,7 @@ pub const HOST_CLIENT_ID: ClientId = ClientId::from_raw(1);
 pub const PROTOCOL_ID: u64 = 228;
 pub const ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
 pub static SERVER: once_cell::sync::Lazy<SocketAddr> = once_cell::sync::Lazy::new(|| {
-    format!("127.0.0.1:{}", unsafe { &SETTINGS }.port)
+    "127.0.0.1:80"
         .parse()
         .unwrap()
 });
@@ -171,8 +167,7 @@ impl GameServer {
         gamemap: &mut GameMap,
         battle: &mut Option<BattleInfo>,
         gameevents: &mut Vec<Event>,
-        units: &Vec<Unit>,
-        objects: &Vec<ObjectInfo>,
+		registry: &GameInfo,
     ) {
         match message {
             ClientMessage::Action(v) => {
@@ -182,7 +177,7 @@ impl GameServer {
                 if Some(client_id.and_then(|v| self.auth.get(&v)).unwrap_or(&0usize))
                     == battle.active_unit.and_then(|v| Some(v.army)).as_ref()
                 {
-                    handle_action(v, battle, &mut gamemap.armys);
+                    handle_action(v, battle, &mut gamemap.armys, registry);
                     let message = ServerMessage::State((Some(battle.clone()), gamemap.clone()));
                     let size = serialized_size::<ServerMessage, _>(&message);
                     let mut output = vec![0u8; size.0];
@@ -230,7 +225,7 @@ impl GameServer {
                         };
                         army.pos
                     };
-                    let path = find_path(&*gamemap, objects, army_pos, goal, false);
+                    let path = find_path(&*gamemap, army_pos, goal, false, registry);
                     let Some(army) = gamemap.armys.get_mut(army_index) else {
                         return;
                     };
@@ -249,8 +244,7 @@ impl GameServer {
         gamemap: &mut GameMap,
         battle: &mut Option<BattleInfo>,
         gameevents: &mut Vec<Event>,
-        units: &Vec<Unit>,
-        objects: &Vec<ObjectInfo>,
+		registry: &GameInfo,
     ) -> Result<(), io::Error> {
         self.server.update(duration);
         self.transport.update(duration, &mut self.server).unwrap();
@@ -312,7 +306,7 @@ impl GameServer {
                             if self.auth.get(&client_id)
                                 == battle.active_unit.and_then(|v| Some(v.army)).as_ref()
                             {
-                                handle_action(v, battle, &mut gamemap.armys);
+                                handle_action(v, battle, &mut gamemap.armys, registry);
                                 let message =
                                     ServerMessage::State((Some(battle.clone()), gamemap.clone()));
                                 let size = serialized_size::<ServerMessage, _>(&message);
@@ -359,7 +353,7 @@ impl GameServer {
                                     };
                                     army.pos
                                 };
-                                let path = find_path(&*gamemap, objects, army_pos, goal, false);
+                                let path = find_path(&*gamemap, army_pos, goal, false, registry);
                                 let Some(army) = gamemap.armys.get_mut(army_index) else {
                                     continue;
                                 };
@@ -487,8 +481,7 @@ pub struct ConnectionManager {
 impl ConnectionManager {
     pub fn updates(
         &mut self,
-        units: &Vec<Unit>,
-        objects: &Vec<ObjectInfo>,
+		registry: &GameInfo,
     ) -> (Option<usize>, Option<String>) {
         let now = Instant::now();
         let duration = now - self.last_updated;
@@ -531,8 +524,7 @@ impl ConnectionManager {
                     &mut self.gamemap,
                     &mut self.battle,
                     &mut self.events,
-                    units,
-                    objects,
+					registry
                 ) {
                     dbg!(e);
                 };
@@ -543,11 +535,10 @@ impl ConnectionManager {
     pub fn send_message_to_server(
         &mut self,
         message: ClientMessage,
-        units: &Vec<Unit>,
-        objects: &Vec<ObjectInfo>,
+		registry: &GameInfo,
     ) {
         match &mut self.con {
-            Connection::Client(ref mut conn) => {
+            Connection::Client(conn) => {
                 let size = serialized_size::<ClientMessage, _>(&message);
                 let mut output = vec![0u8; size.0];
                 serialize::<ClientMessage, ClientMessage>(message, &mut output).ok();
@@ -556,15 +547,14 @@ impl ConnectionManager {
                     renet::Bytes::copy_from_slice(&output),
                 );
             }
-            Connection::Host(ref mut conn) => {
+            Connection::Host(conn) => {
                 conn.handle_client_message(
                     None,
                     message,
                     &mut self.gamemap,
                     &mut self.battle,
                     &mut self.events,
-                    units,
-                    objects,
+					registry
                 );
             }
         }

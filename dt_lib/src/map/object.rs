@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    battle::{army::Army, control::Relations, troop::Troop},
-    items::{item::ITEMS, Item},
-    units::unit::Unit,
+    battle::{army::Army, control::Relations, troop::Troop}, items::Item, registry::{GameInfo, Items, UnitId, Units}, units::unit::{Unit, UnitPos}
 };
 use advini::*;
 use alkahest::alkahest;
@@ -43,14 +41,15 @@ pub struct Village {
     pub max_gold: u64,
     pub max_mana: u64,
 }
-impl Ini for Village {
-    fn eat(chars: std::str::Chars) -> Result<(Self, std::str::Chars), IniParseError> {
-        let (max_gold, chars) = u64::eat(chars)?;
-        let (max_mana, chars) = u64::eat(chars)?;
-        Ok((Self { max_gold, max_mana }, chars))
+impl Ini<'_> for Village {
+	type Arg = ();
+	fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+        let (input, max_gold) = u64::eat(input, _additional)?;
+        let (input, max_mana) = u64::eat(input, _additional)?;
+        Ok((input, Self { max_gold, max_mana }))
     }
-    fn vomit(&self) -> String {
-        [self.max_gold.vomit(), self.max_mana.vomit()].join(",")
+    fn vomit(&self, _additional: Self::Arg) -> String {
+        [self.max_gold.vomit(_additional), self.max_mana.vomit(_additional)].join(",")
     }
 }
 #[derive(Clone, Debug, Ini, PartialEq)]
@@ -83,7 +82,7 @@ pub struct MapBuildingdata {
 
     pub id: usize,
 	
-    #[default_value = "vec![]"]
+    #[default_value = "Vec::<usize>::new()"]
     pub events: Vec<usize>,
     #[default_value = "BuildingVariant::Castle"]
     pub variant: BuildingVariant,
@@ -96,8 +95,8 @@ pub struct MapBuildingdata {
     #[default_value = "None"]
     pub owner: Option<usize>,
 
-    #[default_value = "vec![]"]
-    pub garrison: Vec<Unit>,
+    #[default_value = "Vec::<usize>::new()"]
+    pub garrison: Vec<UnitId>,
     #[default_value = "0u64"]
     pub additional_defense: u64,
 
@@ -106,7 +105,7 @@ pub struct MapBuildingdata {
     #[default_value = "0u64"]
     pub mana_income: u64,
 
-    #[default_value = "vec![]"]
+    #[default_value = "Vec::<usize>::new()"]
     pub spells_to_learn: Vec<usize>,
 
     pub relations: Relations,
@@ -129,10 +128,10 @@ impl Market {
             max_items,
         }
     }
-    fn update(&mut self) {
+    fn update(&mut self, items: &Items) {
         for _ in self.max_items - self.items.len()..0 {
-            let items = ITEMS.read().unwrap();
             let nice_items = items
+                .inner
                 .iter()
                 .enumerate()
                 .filter(|(_, item)| {
@@ -147,23 +146,23 @@ impl Market {
             );
         }
     }
-    fn buy(&mut self, buyer: &mut Army, item_num: usize) {
-        if self.can_buy(buyer, item_num) {
+    fn buy(&mut self, buyer: &mut Army, item_num: usize, registry: &Items) {
+        if self.can_buy(buyer, item_num, registry) {
             buyer.stats.gold = buyer
                 .stats
                 .gold
-                .saturating_sub(self.get_item_cost(item_num));
+                .saturating_sub(self.get_item_cost(item_num, registry));
             buyer.add_item(self.items.remove(item_num));
         }
     }
-    fn can_buy(&self, buyer: &Army, item_num: usize) -> bool {
-        if self.items[item_num].get_info().sells {
-            return buyer.stats.gold >= self.get_item_cost(item_num);
+    fn can_buy(&self, buyer: &Army, item_num: usize, registry: &Items) -> bool {
+        if self.items[item_num].get_info(&registry).sells {
+            return buyer.stats.gold >= self.get_item_cost(item_num, registry);
         }
         false
     }
-    fn get_item_cost(&self, item_num: usize) -> u64 {
-        self.items[item_num].get_info().cost
+    fn get_item_cost(&self, item_num: usize, registry: &Items) -> u64 {
+        self.items[item_num].get_info(&registry).cost
     }
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -172,14 +171,15 @@ pub struct RecruitUnit {
     pub unit: usize,
     pub count: usize,
 }
-impl Ini for RecruitUnit {
-    fn eat(chars: std::str::Chars) -> Result<(Self, std::str::Chars), IniParseError> {
-        let (unit, chars) = usize::eat(chars)?;
-        let (count, chars) = usize::eat(chars)?;
-        Ok((Self { unit, count }, chars))
+impl Ini<'_> for RecruitUnit {
+	type Arg = ();
+    fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+        let (input, unit) = usize::eat(input, _additional)?;
+        let (input, count) = usize::eat(input, _additional)?;
+        Ok((input, Self { unit, count }))
     }
-    fn vomit(&self) -> String {
-        [self.unit.vomit(), self.count.vomit()].join(",")
+	fn vomit(&self, additional: Self::Arg) -> String {
+        [self.unit.vomit(additional), self.count.vomit(additional)].join(",")
     }
 }
 impl RecruitUnit {
@@ -197,26 +197,29 @@ impl Recruitment {
     pub fn new(units: Vec<RecruitUnit>, cost_modify: f64) -> Self {
         Self { units, cost_modify }
     }
-    pub fn buy(&mut self, buyer: &mut Army, unit_num: usize, units: &Vec<Unit>) -> Result<(), ()> {
-        if self.can_buy(buyer, unit_num, units) {
+    pub fn buy(&mut self, buyer: &mut Army, unit_num: usize, registry: &GameInfo) -> Result<(), ()> {
+        if self.can_buy(buyer, unit_num, &registry.units) {
             buyer.add_troop(
                 Troop {
-                    unit: units[self.units[unit_num].unit].clone(),
-                    ..Troop::empty()
+                    unit: (registry.units[self.units[unit_num].unit].clone(), &registry.bonuses).into(),
+					was_payed: true,
+					is_free: false,
+					is_main: false,
+					pos: UnitPos::from_index(0),
+					custom_name: None,
                 }
                 .into(),
+				&registry.units
             )?;
             self.units[unit_num].count -= 1;
-            buyer.stats.gold -= units[self.units[unit_num].unit].info.cost_hire;
+            buyer.stats.gold -= registry.units[self.units[unit_num].unit].cost_hire;
         }
         Err(())
     }
-    pub fn can_buy(&self, buyer: &Army, unit_num: usize, units: &Vec<Unit>) -> bool {
-        let info = &self
-            .units
-            .get(unit_num)
-            .expect("Trying to get unit at unknown index");
-        buyer.stats.gold >= units[info.unit].info.cost_hire && info.count > 0
+    pub fn can_buy(&self, buyer: &Army, unit_num: usize, registry: &Units) -> bool {
+		let recruit = &self.units[unit_num];
+        let info = &registry[recruit.unit];
+        buyer.stats.gold >= info.cost_hire && recruit.count > 0
         //* (RECRUIT_COST * self.cost_modify)) as u64;
     }
 }

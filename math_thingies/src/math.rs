@@ -1,7 +1,9 @@
-use advini::{Ini, IniParseError};
+use advini::{Ini, IniParseError, trim_separator};
 use alkahest::alkahest;
 use boolinator::Boolinator;
+use nom::{character::complete::digit1, combinator::map_res};
 use num::{Num, NumCast, One, ToPrimitive, Zero};
+use schemars::JsonSchema;
 use std::{
     cmp::{max, min, Ordering},
     fmt::{Display, Formatter},
@@ -96,20 +98,15 @@ impl<V: CopyPartOrdNum + NumCast> IsInRange<V> for InUnsignedRange<V> {
         Ok(())
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, serde::Serialize, JsonSchema)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Percent(i16);
 impl Percent {
     pub fn new(value: i16) -> Self {
-        assert!(Self::is_in_range(value));
         Self(value)
     }
     pub const fn const_new(value: i16) -> Self {
-        assert!(Self::is_in_const_range(value));
         Self(value)
-    }
-    pub const fn is_in_const_range(value: i16) -> bool {
-        value >= Self::RANGE.start || value <= Self::RANGE.end
     }
     pub fn get(self) -> i16 {
         self.0
@@ -118,15 +115,16 @@ impl Percent {
         all * NumCast::from(self.0).unwrap() / NumCast::from(100).unwrap()
     }
 }
-impl Ini for Percent {
-    fn eat(chars: std::str::Chars) -> Result<(Self, std::str::Chars), advini::IniParseError> {
-        let Ok((num, chars)) = i16::eat(chars) else {
-            return Err(IniParseError::Error("Cant parse percent"));
-        };
-        Ok((Percent(num), chars))
+impl Ini<'_> for Percent {
+	type Arg = ();
+    fn eat<'a>(input: &'a str, _additional: Self::Arg) -> Result<(&'a str, Self), IniParseError> {
+		if let Ok((rest, _)) = trim_separator(input) {
+			return Ok((rest, Percent::new(0)));
+		};
+		i16::eat(input, _additional).map(|x| (x.0, Percent::new(x.1)))
     }
-    fn vomit(&self) -> String {
-        self.0.vomit()
+	fn vomit(&self, additional: Self::Arg) -> String {
+        self.0.vomit(additional) + "%"
     }
 }
 impl Default for Percent {
