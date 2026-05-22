@@ -11,7 +11,7 @@ name = "dt_server"
 path = "src/main.rs"
 [dependencies]
 dt_lib = { path = "../dt_lib" }
-axum = { version = "*", features = ["ws"] }
+axum = { version = "*", features = ["ws", "macros"] }
 bincode = "1.3.3"
 futures = "0.3.31"
 serde = { version = "1.0.210", features = ["derive"] }

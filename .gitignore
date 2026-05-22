@@ -8,7 +8,6 @@ notan
 **/\#*
 /dt_launcher/launcher/
 macroquad
-Cargo.lock
 !*/dt/android_pack/android/**
 !dt/assets/
 !dt/assets/**/*.png

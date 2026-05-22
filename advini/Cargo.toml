@@ -13,3 +13,5 @@ ini_core = { path = "../ini_core" }
 num = "0.4.1"
 advini_derive = { path = "../advini_derive" }
 proc-macro2 = "1.0.66"
+nom = "8.0.0"
+indexmap = "2.13.1"

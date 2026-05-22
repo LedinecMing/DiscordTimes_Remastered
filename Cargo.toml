@@ -1,10 +1,10 @@
 [workspace]
 default-members = ["quad_ui"]
-members = ["quad_ui" ,"ini_core", "advini", "advini_derive", "math_thingies", "notan_ui", "ui", "dt_lib", "dt_launcher", "dt_server", "dtm_info", "dt_client", "dtm_editor"]
+members = ["quad_ui" ,"ini_core", "advini", "advini_derive", "math_thingies", "dt_lib", "dt_launcher", "dt_server", "dtm_info", "dt_client", "dtm_editor"]
 resolver = "2"
 
-[patch.crates-io] 
-ahash = { "git" = "https://github.com/tkaitchuck/aHash.git", rev = "db36e4c" }
+#[patch.crates-io] 
+#ahash = { "git" = "https://github.com/tkaitchuck/aHash.git", rev = "db36e4c" }
 
 [profile.release]
 lto = true
@@ -14,6 +14,8 @@ panic = "abort"
 opt-level = "z"
 codegen-units = 1
 
+[workspace.dependencies]
+alkahest = { git = "https://github.com/zakarumych/alkahest.git", rev = "99a5b68", features=["derive"] } 
 #[dev-dependencies]
 #criterion = { version = "0.5", features = ["html_reports"] }
 

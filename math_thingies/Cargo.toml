@@ -11,3 +11,6 @@ boolinator = "2.4.0"
 num = "0.4.0"
 alkahest = { git = "https://github.com/zakarumych/alkahest.git", rev = "99a5b68", features=["derive"] }
 advini = { path = "../advini" }
+nom = "8.0.0"
+serde = { version = "1.0", features = ["derive"] }
+schemars = "1.2.1"

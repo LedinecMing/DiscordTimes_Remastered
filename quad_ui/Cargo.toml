@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-macroquad = { git = "https://github.com/not-fl3/macroquad.git" }
 dt_lib = {path = "../dt_lib/"}
 dt_client = {path = "../dt_client"}
 ahash = { version = "0.8.11" }
@@ -12,6 +11,10 @@ tokio = { version = "*", features = ["sync", "rt", "rt-multi-thread", "process",
 futures-util = "*"
 # rfd = { version = "0.15.4", features = ["gtk3"] }
 once_cell = "1.19.0"
+serde_with = "3.20.0"
+egui = "0.33.*"
+egui-miniquad = { git = "https://github.com/not-fl3/egui-miniquad.git" }
+macroquad = "0.4.14"
 [package.metadata.android]
 res = "../dt/android_pack/android/res/"
 icon = "@mipmap/ic_launcher"
