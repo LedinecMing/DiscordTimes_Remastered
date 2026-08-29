@@ -103,23 +103,18 @@ impl StatusEffect {
 		self.added_modify = add_opt(self.added_modify, modify);
 	}
 	// TODO: probably should add animations here
-	fn apply_ability(&mut self, abilities: &Vec<Mechanic>, unit_army: usize, unit_index: usize, unit_pos: usize, armies: &Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
-		let info = &registry.effects[self.id];
-		let (army1, army2) = if unit_army == battle.army1 { (battle.army1, battle.army2) } else { (battle.army1, battle.army2) };
-		let armies = [&armies[army1], &armies[army2]];
-		let troops = armies.map(|x| &x.troops);
-		let hitmaps = armies.map(|x| &x.hitmap);
+	fn apply_ability(&mut self, abilities: &Vec<Mechanic>, unit_army: usize, unit_index: usize, unit_pos: usize, armies: &mut Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
 		for mechanic in abilities {
-			let to_add = mechanic.apply(self.get_power(info), unit_index, unit_pos, &hitmaps, &troops, ability_units, battle, registry);
+			let to_add = mechanic.apply(self.get_power(&registry.effects[self.id]), unit_index, unit_pos, armies, ability_units, battle, registry);
 			self.add_modify(Some(to_add));
 		}
 	}
-	pub fn apply_rule(&mut self, rule: AbilityCondition, BattleUnit { army, index }: BattleUnit, unit_pos: usize, armies: &Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
+	pub fn apply_rule(&mut self, rule: AbilityCondition, BattleUnit { army, index }: BattleUnit, unit_pos: usize, armies: &mut Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
 		let info = &registry.effects[self.id];
 		let abilities = &info.rules[&rule];
 		self.apply_ability(&abilities.1, army, index, unit_pos, armies, ability_units, battle, registry);
 	}
-	pub fn on_tick(&mut self, unit_info: BattleUnit, unit_pos: usize, armies: &Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
+	pub fn on_tick(&mut self, unit_info: BattleUnit, unit_pos: usize, armies: &mut Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
 		let info = &registry.effects[self.id];
 		if let Some(lifetime) = &mut self.lifetime.lifetime {
 			*lifetime = lifetime.saturating_sub(self.lifetime.decay);

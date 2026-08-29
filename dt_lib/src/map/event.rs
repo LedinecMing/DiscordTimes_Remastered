@@ -505,7 +505,7 @@ pub fn execute_event_as_player(
                             is_free: true,
                             was_payed: true,
                             is_main: false,
-                            pos: UnitPos::from_index(0),
+                            pos: UnitPos::from_index(0, 6),
                         }), &registry.units)
                         .ok();
                 });

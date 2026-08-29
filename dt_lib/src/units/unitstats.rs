@@ -149,7 +149,13 @@ impl<V: Num + NumCast + Copy + Neg<Output = V>> Sub<Modify<V>> for Modify<V> {
     type Output = Self;
     fn sub(self, _rhs: Self) -> Self::Output {
         Self {
-            set: self.set,
+            set: {
+				if self.set == _rhs.set {
+					None
+				} else {
+					self.set
+				}
+			},
             add: sub_opt(self.add, _rhs.add),
             percent_add: sub_opt(self.percent_add, _rhs.percent_add),
         }
@@ -164,7 +170,9 @@ impl<V: Num + NumCast + Copy> AddAssign<Modify<V>> for Modify<V> {
 }
 impl<V: Num + NumCast + Copy + Neg<Output = V>> SubAssign<Modify<V>> for Modify<V> {
     fn sub_assign(&mut self, _rhs: Self) {
-        self.set = Some(V::zero());
+        if self.set == _rhs.set {
+			self.set = None;
+		};
         self.add = sub_opt(self.add, _rhs.add);
         self.percent_add = sub_opt(self.percent_add, _rhs.percent_add);
     }
@@ -437,9 +445,130 @@ fn modifiers() {
 			add: Some(10),
 			percent_add: Some(Percent::new(10)),
 		};
-		let mut mul_modify = Modify::default();
-		mul_modify.add_val(10 * i);
-		mul_modify.percent_add(Percent::new(10 * i as i16));
+		let mul_modify = Modify::default()
+			.with_add_val(10 * i)
+			.with_percent_add(Percent::new(10 * i as i16));
 		assert_eq!(modify * i, mul_modify);
 	}
+}
+
+#[test]
+fn modify_add_combines_fields() {
+	let a = Modify { set: None, add: Some(5), percent_add: Some(Percent::new(10)) };
+	let b = Modify { set: None, add: Some(3), percent_add: Some(Percent::new(20)) };
+	let c = a + b;
+	assert_eq!(c.set, None);
+	assert_eq!(c.add, Some(8));
+	assert_eq!(c.percent_add, Some(Percent::new(30)));
+}
+
+#[test]
+fn modify_sub_subtracts_fields() {
+	let a = Modify { set: None, add: Some(10), percent_add: Some(Percent::new(30)) };
+	let b = Modify { set: None, add: Some(3), percent_add: Some(Percent::new(10)) };
+	let c = a - b;
+	assert_eq!(c.set, None);
+	assert_eq!(c.add, Some(7));
+	assert_eq!(c.percent_add, Some(Percent::new(20)));
+}
+
+#[test]
+fn modify_sub_clears_set_when_equal() {
+	let a = Modify { set: Some(50), add: None, percent_add: None };
+	let b = Modify { set: Some(50), add: None, percent_add: None };
+	let c = a - b;
+	assert_eq!(c.set, None);
+}
+
+#[test]
+fn modify_sub_preserves_set_when_different() {
+	let a = Modify { set: Some(50), add: None, percent_add: None };
+	let b = Modify { set: Some(25), add: None, percent_add: None };
+	let c = a - b;
+	assert_eq!(c.set, Some(50));
+}
+
+#[test]
+fn modify_apply_set_overrides_then_adds_percent() {
+	let m = Modify { set: Some(100), add: Some(5), percent_add: Some(Percent::new(10)) };
+	let result: i64 = m.apply(50);
+	assert_eq!(result, 115, "set=100 → +5=105 → +10% of 105=115.5→115");
+}
+
+#[test]
+fn modify_apply_additive() {
+	let m = Modify { set: None, add: Some(10), percent_add: Some(Percent::new(20)) };
+	let result: i64 = m.apply(50);
+	// 50 + 10 = 60, +20% of 60 = 72
+	assert_eq!(result, 72);
+}
+
+#[test]
+fn modify_add_assign_replaces_set() {
+	let mut m = Modify { set: Some(10), add: None, percent_add: None };
+	m += Modify { set: Some(20), add: Some(5), percent_add: None };
+	assert_eq!(m.set, Some(20));
+	assert_eq!(m.add, Some(5));
+}
+
+#[test]
+fn modify_sub_assign_clears_set_when_equal() {
+	let mut m = Modify { set: Some(10), add: Some(10), percent_add: Some(Percent::new(5)) };
+	m -= Modify { set: Some(10), add: Some(3), percent_add: Some(Percent::new(2)) };
+	assert_eq!(m.set, None);
+	assert_eq!(m.add, Some(7));
+	assert_eq!(m.percent_add, Some(Percent::new(3)));
+}
+
+#[test]
+fn modify_sub_assign_partial() {
+	let mut m = Modify { set: Some(10), add: Some(10), percent_add: None };
+	m -= Modify { set: None, add: Some(4), percent_add: None };
+	assert_eq!(m.set, Some(10), "set=10 should stay because rhs.set=None != 10");
+	assert_eq!(m.add, Some(6));
+}
+
+#[test]
+fn modify_default_apply_is_identity() {
+	let m = Modify::<i64>::default();
+	assert_eq!(m.apply(42), 42);
+}
+
+#[test]
+fn modify_mul_scales_both_fields() {
+	let m = Modify { set: None, add: Some(10), percent_add: Some(Percent::new(10)) };
+	let r = m * 3;
+	assert_eq!(r.add, Some(30));
+	assert_eq!(r.percent_add, Some(Percent::new(30)));
+}
+
+#[test]
+fn modify_div_scales_both_fields() {
+	let m = Modify { set: None, add: Some(30), percent_add: Some(Percent::new(30)) };
+	let r = m / 3;
+	assert_eq!(r.add, Some(10));
+	assert_eq!(r.percent_add, Some(Percent::new(10)));
+}
+
+#[test]
+fn modify_div_by_zero_no_panic() {
+	let m = Modify { set: None, add: Some(30), percent_add: None };
+	let r = m / 0;
+	assert_eq!(r.add, Some(30));
+}
+
+#[test]
+fn modify_display_positive() {
+	let m = Modify { set: Some(25), add: Some(10), percent_add: Some(Percent::new(15)) };
+	let s = format!("{}", m);
+	assert!(s.contains("=25"));
+	assert!(s.contains("+10"));
+	assert!(s.contains("+15%"));
+}
+
+#[test]
+fn modify_apply_result_non_negative() {
+	let m = Modify { set: None, add: Some(-200), percent_add: None };
+	let result: i64 = m.apply(50);
+	assert_eq!(result, 0, "should clamp to 0");
 }

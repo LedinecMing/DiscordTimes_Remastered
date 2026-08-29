@@ -644,7 +644,7 @@ async fn parse_mapdata<Reader: FileAccess>(
                                 is_main: true,
                                 is_free: true,
                                 was_payed: true,
-                                pos: UnitPos::from_index(0),
+                                pos: UnitPos::from_index(0, 6),
                                 custom_name: Some(things.1.into()),
                             };
                             main = Some(SendMut::new(troop));

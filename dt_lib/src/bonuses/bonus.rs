@@ -1,6 +1,6 @@
 use crate::{
-    battle::{BattleUnit, HitMap, MAX_LINES, Troop, TroopType, army::Army, battlefield::BattleInfo}, effects::effect::*, map::event::Cmp, registry::{self, GameInfo, Units}, time::time::Time, units::{
-        unit::{AttackSettings, MagicType, Power, Unit, UnitPos, UnitType},
+    battle::{BattleUnit, HitMap, Troop, TroopType, army::Army, battlefield::BattleInfo}, effects::effect::*, map::event::Cmp, registry::{self, GameInfo, Units}, time::time::Time, units::{
+        unit::{self, AttackSettings, MagicType, Power, Unit, UnitPos, UnitType},
         unitstats::{Modify, ModifyDefence, *},
     }
 };
@@ -344,32 +344,65 @@ impl Mechanic {
 		let ability = ability_units.iter().filter_map(|x| units.iter().find(|v| v.1==*x)).collect_vec();
 		self.conditions.calc(battle_info, &ability, &registry)
 	}
-	pub fn apply(&self, power: usize, my_index: usize, my_pos: usize, hitmaps: &[&HitMap; 2], troops: &[&Vec<TroopType>; 2], ability_units: &Vec<BattleUnit>, battle_info: &BattleInfo, registry: &GameInfo) -> ModifyUnitStats {
+	pub fn apply(&self, power: usize, my_index: usize, my_pos: usize, armies: &mut Vec<Army>, ability_units: &Vec<BattleUnit>, battle_info: &BattleInfo, registry: &GameInfo) -> ModifyUnitStats {
+		let (army1_idx, army2_idx) = (battle_info.army1, battle_info.army2);
 		
-		let res = self.affects.iter().map(|x| x.get(my_pos, hitmaps, troops, ability_units));
-		let mut attacks = vec![];
-		let mut res_modify = ModifyUnitStats::default();
-		for troops in res {
-			for troop in troops {
-				let unit = &mut troop.get().unit;
-				for ability in &self.ability {
-					let (modify, attack_times) = ability.apply(unit, power, registry);
-					
-					if let Some(modify) = modify {
-						res_modify += modify;
-					}
-					if attack_times > 0 {
-						attacks.push((troop, attack_times));
+		// Pre-collect hitmaps and troops references
+		let hitmap1 = &armies[army1_idx].hitmap;
+		let hitmap2 = &armies[army2_idx].hitmap;
+		let hitmaps = [hitmap1, hitmap2];
+		let troops1 = &armies[army1_idx].troops;
+		let troops2 = &armies[army2_idx].troops;
+		let troops_refs = [troops1 as &Vec<TroopType>, troops2 as &Vec<TroopType>];
+		
+		// Phase 1: find affected targets by (army, index) pairs
+		let mut affected_targets: Vec<BattleUnit> = vec![];
+		for affect in &self.affects {
+			let refs = affect.get(my_pos, &hitmaps, &troops_refs, ability_units);
+			for troop_ref in refs {
+				// Find actual (army, index) for this troop reference
+				for a in [army1_idx, army2_idx] {
+					for (i, t) in armies[a].troops.iter().enumerate() {
+						if std::ptr::eq(t, troop_ref) {
+							affected_targets.push(BattleUnit { army: a, index: i });
+							break; // break inner loop
+						}
 					}
 				}
 			}
 		}
-		for attack in attacks {
-			let target = &mut attack.0.get();
-			let target_pos = target.pos;
-			let target_unit = &mut target.unit;
-			let me = &mut troops[0][my_index].get().unit;
-			me.attack(target_unit, target_pos, UnitPos::from_index(my_pos), battle_info, &hitmaps[1], true, registry);
+		
+		// Phase 2: dedup targets
+		affected_targets.dedup();
+		
+		let mut res_modify = ModifyUnitStats::default();
+		let mut attacks_to_do: Vec<BattleUnit> = vec![]; // targets to attack
+		
+		// Phase 3: apply abilities by index (short guards, no overlapping borrows)
+		for target_bu in &affected_targets {
+			for ability in &self.ability {
+				let (modify, attack_times) = {
+					let mut t = armies[target_bu.army].troops[target_bu.index].get();
+					ability.apply(&mut t.unit, power, registry)
+				};
+				if let Some(modify) = modify {
+					res_modify += modify;
+				}
+				if attack_times > 0 {
+					attacks_to_do.push(*target_bu);
+				}
+			}
+		}
+		
+		// Phase 4: resolve attacks (me vs each target)
+		for target_bu in &attacks_to_do {
+			unit::attack_indexed(
+				BattleUnit { army: army1_idx, index: my_index }, 
+				*target_bu,
+				armies,
+				battle_info, 
+				registry
+			);
 		}
 		res_modify
 	}
@@ -398,13 +431,9 @@ impl BonusInfo {
 		unit.modify -= self.add_modify;
 		unit.settings = unit.get_info(&registry.units).settings;
 	}
-	pub fn apply_rules(&self, rule: AbilityCondition, BattleUnit { army, index }: BattleUnit, my_pos: usize, armies: &Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
-		let (army1, army2) = if army == battle.army1 { (battle.army1, battle.army2) } else { (battle.army1, battle.army2) };
-		let armies = [&armies[army1], &armies[army2]];
-		let troops = armies.map(|x| &x.troops);
-		let hitmaps = armies.map(|x| &x.hitmap);
+	pub fn apply_rules(&self, rule: AbilityCondition, BattleUnit { army, index }: BattleUnit, my_pos: usize, armies: &mut Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
 		for mechanic in &self.rules[&rule].1 {
-			mechanic.apply(1, index, my_pos, &hitmaps, &troops, ability_units, battle, registry);
+			mechanic.apply(1, index, my_pos, armies, ability_units, battle, registry);
 		}
 	}
 }

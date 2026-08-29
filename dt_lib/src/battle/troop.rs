@@ -31,7 +31,7 @@ impl Troop {
             was_payed: true,
             is_free: false,
             is_main: false,
-            pos: UnitPos::from_index(0),
+            pos: UnitPos::from_index(0, 6),
             custom_name: None,
             unit,
         }

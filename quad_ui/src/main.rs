@@ -794,7 +794,7 @@ fn unit_card_battle(
     }
     let Some(unit) = armies[army].get_troop(unit_pos) else {
         let texture = assets.get(
-            &match field_type(unit_pos, MAX_TROOPS) {
+            &match field_type(unit_pos, 12) {
                 Field::Back => "backyard.png",
                 Field::Front => "front.png",
                 Field::Reserve => "tent.png",
@@ -811,9 +811,9 @@ fn unit_card_battle(
         if let Some(active_unit) = battle.active_unit {
             let old_pos = armies[active_unit.army].troops[active_unit.index].get().pos;
             if army == active_unit.army
-                && (old_pos.0.abs_diff(unit_pos % (MAX_TROOPS / MAX_LINES)) < 2
-                    || field_type(unit_pos, MAX_TROOPS) == Field::Reserve
-                    || field_type(old_pos.whole(), MAX_TROOPS) == Field::Reserve)
+                && (old_pos.0.abs_diff(unit_pos % (12 / 2)) < 2
+                    || field_type(unit_pos, 12) == Field::Reserve
+                    || field_type(old_pos.whole(6), 12) == Field::Reserve)
             {
                 let outline_color =
                     Color::from_rgba(22, 22, 255, (get_time().sin() * 128. + 64.) as u8);
@@ -999,11 +999,11 @@ fn draw_battle(assets: &Assets, game: &mut Game, is_battle_active: bool, registr
 		focus.pos = (focus.pos.saturating_sub(1)) % (half * 2);
 	}
 	
-    let half_troops = MAX_TROOPS / 2;
+    let half_troops = 12 / 2;
     let winner = battle.winner;
     for army in 0..=1 {
         for row in 0..=1 {
-            for i in 0..(MAX_TROOPS / 2) {
+            for i in 0..(12 / 2) {
                 let unit_pos = i + (army as i64 - row as i64).abs() as usize * half_troops;
                 let army = if army == 0 {
                     battle.army1
@@ -1013,9 +1013,9 @@ fn draw_battle(assets: &Assets, game: &mut Game, is_battle_active: bool, registr
                 // Check for non-single cell units, so they will be skipped
                 let hitmap = &armies[army].hitmap;
                 let skip = {
-                    let vertical = unit_pos >= MAX_TROOPS / 2
-                        && hitmap[unit_pos] == hitmap[unit_pos - MAX_TROOPS / 2];
-                    let horizontal = field_type(unit_pos, MAX_TROOPS) != Field::Reserve
+                    let vertical = unit_pos >= 12 / 2
+                        && hitmap[unit_pos] == hitmap[unit_pos - 12 / 2];
+                    let horizontal = field_type(unit_pos, 12) != Field::Reserve
                         && hitmap[unit_pos] == hitmap[unit_pos - 1];
                     (vertical || horizontal) && hitmap[unit_pos].is_some()
                 };
@@ -2082,8 +2082,8 @@ async fn main() {
                     };
                     (None, go_back)
                 };
-                //let pos = state.ui.camera.world_to_screen( vec2(CARD_SIZE * (MAX_TROOPS/2) as f32, 0.));
-                let pos = CARD_SIZE * (MAX_TROOPS / 2) as f32 / 1920. * screen_width();
+                //let pos = state.ui.camera.world_to_screen( vec2(CARD_SIZE * (12/2) as f32, 0.));
+                let pos = CARD_SIZE * (12 / 2) as f32 / 1920. * screen_width();
                 let size = screen_width() - pos;
                 let battle = state.game.executor.battle.as_ref();
                 ui.pop_skin();
@@ -2255,8 +2255,8 @@ async fn main() {
                     let size = screen_size();
                     request_new_screen_size(size.0 - 10., size.1 - 10.);
                 }
-                //let pos = state.ui.camera.world_to_screen( vec2(CARD_SIZE * (MAX_TROOPS/2) as f32, 0.));
-                let pos = CARD_SIZE * (MAX_TROOPS / 2) as f32 / 1920. * screen_width();
+                //let pos = state.ui.camera.world_to_screen( vec2(CARD_SIZE * (12/2) as f32, 0.));
+                let pos = CARD_SIZE * (12 / 2) as f32 / 1920. * screen_width();
                 Window::new(
                     hash!(),
                     vec2(pos, 000.),

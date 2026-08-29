@@ -19,6 +19,10 @@ use super::{
     control::{Control, PC_ControlSetings},
     troop_inactive, BattleUnitPos,
 };
+
+pub fn troops_columns(max_troops: usize) -> usize {
+    max_troops / 2
+}
 #[derive(Clone, Debug, Default, Sections)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct ArmyStats {
@@ -37,9 +41,9 @@ impl ArmyStats {
         }
     }
 }
-fn eq_fields(index: usize, index1: usize, columns: usize, rows: usize) -> bool {
-    let start_field = field_type(index, MAX_TROOPS);
-    let this_field = field_type(index1, MAX_TROOPS);
+fn eq_fields(index: usize, index1: usize, max_troops: usize) -> bool {
+    let start_field = field_type(index, max_troops);
+    let this_field = field_type(index1, max_troops);
 
     matches!(
         (start_field, this_field),
@@ -47,36 +51,27 @@ fn eq_fields(index: usize, index1: usize, columns: usize, rows: usize) -> bool {
     ) || matches!((start_field, this_field), (Field::Reserve, Field::Reserve))
 }
 
-pub const MAX_LINES: usize = 2;
 
 pub type HitMap = Vec<Option<usize>>;
 #[derive(Clone, Debug, Default)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct Army {
-    pub troops: Vec<TroopType>, // vec of units
-    //#[unused]
-    pub hitmap: HitMap, // map of maybe units ids
-    //#[unused]
-    pub building: Option<usize>, // what building army in
-    //#[inline_parsing]
+    pub troops: Vec<TroopType>,
+    pub hitmap: HitMap,
+    pub building: Option<usize>,
     pub stats: ArmyStats,
-    //#[default_value="Vec::new()"]
     pub inventory: Vec<Option<Item>>,
     pub pos: (usize, usize),
+    pub max_troops: usize,
 	pub transport: bool,
-    //#[default_value="true"]
     pub active: bool,
-    //#[unused]
     pub defeated: bool,
-    //#[default_value = "Control::PC"]
     pub control: Control,
     pub pc_settings: Option<PC_ControlSetings>,
-    //#[unused]
     pub path: Vec<(usize, usize)>,
 }
 pub type TroopType = SendMut<Troop>;
 
-pub static MAX_TROOPS: usize = 12;
 
 impl Army {
     pub fn new(
@@ -88,7 +83,8 @@ impl Army {
         control: Control,
 		registry: &GameInfo
     ) -> Self {
-        let hitmap: HitMap = (0..MAX_TROOPS).map(|_| None::<usize>).collect();
+        let max_troops = registry.game_settings.max_troops;
+        let hitmap: HitMap = (0..max_troops).map(|_| None::<usize>).collect();
         if inventory.len() < 4 {
             inventory.extend([None].iter().cycle().take(4 - inventory.len()));
         }
@@ -98,8 +94,8 @@ impl Army {
             building: None,
             hitmap,
             defeated: false,
-			// TODO FIX
 			transport: true,
+            max_troops,
             stats,
             control,
             inventory,
@@ -138,11 +134,13 @@ impl Army {
         }
     }
     pub fn recalc_army_hitmap(&mut self, registry: &Units) {
-        let mut hitmap = Vec::with_capacity(MAX_TROOPS);
-        for _ in 0..MAX_TROOPS {
+        let max_troops = self.max_troops;
+        let columns = max_troops / 2;
+        let mut hitmap = Vec::with_capacity(max_troops);
+        for _ in 0..max_troops {
             hitmap.push(None);
         }
-        Army::recalc_hitmap(&self.troops, &mut hitmap, MAX_TROOPS / MAX_LINES, registry);
+        Army::recalc_hitmap(&self.troops, &mut hitmap, columns, registry);
         self.hitmap = hitmap
     }
     pub fn set_unit_at(
@@ -151,18 +149,20 @@ impl Army {
         BattleUnitPos { army, pos }: BattleUnitPos,
 		registry: &GameInfo,
     ) {
+        let max_troops = self.max_troops;
+        let columns = max_troops / 2;
         let index = self.hitmap.get(pos);
         if let Some(Some(index)) = index {
             self.troops.remove(*index);
         }
         if let Some(unit_id) = unit_id {
             let new_unit_info = registry.units[unit_id].clone();
-            let dpos = UnitPos::from_index(pos);
+            let dpos = UnitPos::from_index(pos, columns);
             if !Army::fit_to(
                 &self.hitmap,
                 new_unit_info.size,
-                MAX_TROOPS / 2,
-                MAX_LINES,
+                columns,
+                2,
                 dpos.1,
                 dpos.0,
             ) {
@@ -171,7 +171,7 @@ impl Army {
 			let mut new_unit = Unit::from((new_unit_info, &registry.bonuses));
             new_unit.restore();
             let mut new_troop = Troop::new(new_unit);
-            new_troop.pos = UnitPos::from_index(pos);
+            new_troop.pos = UnitPos::from_index(pos, columns);
             self.troops.push(new_troop.into());
         } else {
         }
@@ -244,7 +244,7 @@ impl Army {
         'check_rect: for j in 0..size.1 {
             for i in 0..size.0 {
                 let my_index = (row + j) * columns + (i + column);
-                if hitmap[my_index].is_some() || !eq_fields(my_index, index, columns, rows) {
+                if hitmap[my_index].is_some() || !eq_fields(my_index, index, columns * rows) {
                     fits = false;
                     break 'check_rect;
                 }
@@ -271,10 +271,12 @@ impl Army {
     }
 
     pub fn add_troop(&mut self, wrap_troop: TroopType, registry: &Units) -> Result<(), ()> {
+        let max_troops = self.max_troops;
+        let columns = max_troops / 2;
         let size = wrap_troop.get().unit.get_info(registry).size;
-        let res = Army::fit(&self.hitmap, size, MAX_LINES, MAX_TROOPS / MAX_LINES);
+        let res = Army::fit(&self.hitmap, size, 2, columns);
         let pos = res.first().ok_or(())?;
-        wrap_troop.get().pos = UnitPos::from_index(*pos);
+        wrap_troop.get().pos = UnitPos::from_index(*pos, columns);
         self.troops.push(wrap_troop);
         self.recalc_army_hitmap(registry);
         Ok(())

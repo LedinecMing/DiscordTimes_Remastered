@@ -1,7 +1,7 @@
 use crate::{
     battle::{
-        Army, BattleUnit, BattleUnitInfo, HitMap, army::{MAX_LINES, MAX_TROOPS}, battlefield::{BattleInfo, Field, field_type}
-    }, registry::{BonusId, Bonuses, Effects, GameInfo, Registry, UnitId, Units}, units::unitstats::Modify
+        Army, BattleUnit, BattleUnitInfo, HitMap, battlefield::{BattleInfo, Field, field_type}, troop::Troop,
+    }, registry::{BonusId, Bonuses, Effects, GameInfo, UnitId, Units}, units::unitstats::Modify
 };
 use advini::Sections;
 use num::{abs, Signed};
@@ -24,6 +24,8 @@ use std::{
     ops::{Div, Mul},
     sync::RwLock,
 };
+
+pub type TroopType = crate::mutrc::SendMut<crate::battle::troop::Troop>;
 
 #[derive(Copy, Clone, Debug, Add, Sub, Default, Sections, PartialEq, serde::Deserialize, serde::Serialize)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
@@ -274,22 +276,16 @@ pub struct UnitLvl {
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct UnitPos(pub usize, pub usize);
 impl UnitPos {
-    pub fn from_index(index: usize) -> Self {
-        let max_troops = MAX_TROOPS / MAX_LINES;
-        Self(index % max_troops, index / max_troops)
+    pub fn from_index(index: usize, columns: usize) -> Self {
+        Self(index % columns, index / columns)
     }
-    pub fn whole(&self) -> usize {
-        self.0 + self.1 * MAX_TROOPS / MAX_LINES
+    pub fn whole(&self, columns: usize) -> usize {
+        self.0 + self.1 * columns
     }
 }
 impl Into<(usize, usize)> for UnitPos {
     fn into(self) -> (usize, usize) {
         (self.0, self.1)
-    }
-}
-impl Into<usize> for UnitPos {
-    fn into(self) -> usize {
-        self.0 + self.1 * MAX_TROOPS / MAX_LINES
     }
 }
 
@@ -354,6 +350,8 @@ impl Ini<'_> for Unit {
 		todo!()
 	}
 }
+
+/// Read-only: heal a single unit (takes &mut Unit since only one unit is involved).
 pub fn heal_unit(
     unit: &mut Unit,
     mut damage: Power,
@@ -379,6 +377,7 @@ pub fn heal_unit(
         }
     };
 }
+
 fn bless_unit(target: &mut Unit, damage: Power, magic_type: MagicType, target_unit_type: UnitType, registry: &GameInfo) -> Option<ActionResult> {
     match (target_unit_type, magic_type) {
         (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
@@ -408,6 +407,7 @@ fn bless_unit(target: &mut Unit, damage: Power, magic_type: MagicType, target_un
         }
     }
 }
+
 pub fn heal_bless(target: &mut Unit, damage: Power, magic_type: MagicType, target_unit_type: UnitType, registry: &GameInfo) -> Option<ActionResult> {
     match (target_unit_type, magic_type) {
         (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
@@ -421,6 +421,7 @@ pub fn heal_bless(target: &mut Unit, damage: Power, magic_type: MagicType, targe
         }
     }
 }
+
 pub fn elemental_bless(target: &mut Unit, damage: Power, target_unit_type: UnitType, target_magic_type: Option<MagicType>, registry: &GameInfo) -> Option<ActionResult> {
     if heal_unit(target, damage, Elemental, target_unit_type).is_none() {
         return if !target.has_effect_kind("mage_support", &registry.effects)
@@ -450,140 +451,334 @@ pub fn elemental_bless(target: &mut Unit, damage: Power, target_unit_type: UnitT
     Some(ActionResult::Buff)
 }
 
-fn magic_curse(
-    me: &mut Unit,
-    target: &mut Unit,
-    mut damage: Power,
-    magic_type: MagicType,
-	target_unit_type: UnitType,
-	registry: &GameInfo,
+// ==========================================
+// INDEX-BASED helper functions
+// These use armies: &mut Vec<Army> and indices to access troops
+// with short-lived MutexGuards to avoid deadlocks
+// ==========================================
+
+/// Apply a curse effect on target from me. Index-based.
+fn apply_magic_curse_indexed(
+    me: BattleUnit, target: BattleUnit,
+    armies: &mut Vec<Army>, damage: &Power, magic_type: MagicType,
+    registry: &GameInfo,
 ) -> Option<ActionResult> {
+    // Read target unit type
+    let target_unit_type = {
+        let t = armies[target.army].troops[target.index].get();
+        t.unit.get_info(&registry.units).unit_type
+    }; // guard dropped
+
+    let mut damage = *damage;
     match (target_unit_type, magic_type) {
         (UnitType::Undead, Life) => {
             damage.magic *= 2;
         }
         _ => {}
     }
-    if !target.has_effect_kind("mage_curse", &registry.effects) {
-		let mut res = ModifyUnitStats::default();
-		let magic = damage.magic as i64;
-		let (add_damage, add_defence) = match magic_type {
-			MagicType::Death => {
-				(1 + magic  / 5, 1 + magic / 10)
-			},
-			MagicType::Life => {
-				(1 + magic / 10, 1 + magic / 3)
-			},
-			_ => { (1, 1) }
-		};
-		res.damage.hand = Modify { add: Some(-add_damage), ..Default::default() };
-		res.damage.ranged = Modify { add: Some(-add_damage), ..Default::default() };
-		res.defence.hand_units = Modify { add: Some(-add_defence), ..Default::default() };
-		res.defence.ranged_units = Modify { add: Some(-add_defence), ..Default::default() };
-		if add_modify_effect(target, res, 2, registry) {
-			return Some(ActionResult::Debuff);
-		} else {
-			None
-		}
-    } else {
-        None
+
+    // Check if already cursed
+    let has_curse = {
+        let t = armies[target.army].troops[target.index].get();
+        t.unit.has_effect_kind("mage_curse", &registry.effects)
+    };
+
+    if has_curse { return None; }
+
+    let magic = damage.magic as i64;
+    let (add_damage, add_defence) = match magic_type {
+        MagicType::Death => (1 + magic / 5, 1 + magic / 10),
+        MagicType::Life => (1 + magic / 10, 1 + magic / 3),
+        _ => (1, 1)
+    };
+
+    let mut res = ModifyUnitStats::default();
+    res.damage.hand = Modify { add: Some(-add_damage), ..Default::default() };
+    res.damage.ranged = Modify { add: Some(-add_damage), ..Default::default() };
+    res.defence.hand_units = Modify { add: Some(-add_defence), ..Default::default() };
+    res.defence.ranged_units = Modify { add: Some(-add_defence), ..Default::default() };
+
+    {
+        let mut t = armies[target.army].troops[target.index].get();
+        if add_modify_effect(&mut t.unit, res, 2, registry) {
+            Some(ActionResult::Debuff)
+        } else { None }
     }
 }
 
-fn elemental_curse(
-    me: &mut Unit,
-    target: &mut Unit,
-    damage: Power,
-    magic_type: MagicType,
-	registry: &GameInfo,
+/// Apply elemental curse. Index-based.
+fn apply_elemental_curse_indexed(
+    me: BattleUnit, target: BattleUnit,
+    armies: &mut Vec<Army>, damage: &Power, magic_type: MagicType,
+    registry: &GameInfo,
 ) -> Option<ActionResult> {
-    if !target.has_effect_kind("elemental_curse", &registry.effects) {
-        let mut res = ModifyUnitStats::default();
-		let magic = damage.magic as i64;
-		let add_moves = match magic {
-			0..=19 => 0,
-			20..=44 => 1,
-			45..=99 => 2,
-			100..=255 => 3,
-			_ => magic / 64
-		};
-		let add_ini = 1 + magic /  7;
-		target.moves -= add_moves;
-		res.speed = Modify { add: Some(-add_ini), ..Default::default() };
-		if add_modify_effect(target, res, 2, registry) {
-			return Some(ActionResult::Debuff);
-		} else { None }
-    } else {
-        None
-    }
-}
+    let has_curse = {
+        let t = armies[target.army].troops[target.index].get();
+        t.unit.has_effect_kind("elemental_curse", &registry.effects)
+    };
 
-fn magic_attack(
-    me: &mut Unit,
-    target: &mut Unit,
-    mut damage: Power,
-    magic_type: MagicType,
-    target_pos: UnitPos,
-    my_pos: UnitPos,
-    battle: &BattleInfo,
-    hitmap: &HitMap,
-	target_unit_type: UnitType,
-	registry: &GameInfo
-) -> Option<ActionResult> {
-    match (target_unit_type, magic_type) {
-        (UnitType::Undead, Life) => {
-            damage.magic *= 2;
+    if has_curse { return None; }
+
+    let magic = damage.magic as i64;
+    let add_moves = match magic {
+        0..=19 => 0, 20..=44 => 1, 45..=99 => 2, 100..=255 => 3,
+        _ => magic / 64
+    };
+    let add_ini = 1 + magic / 7;
+
+    let mut res = ModifyUnitStats::default();
+    {
+        let mut t = armies[target.army].troops[target.index].get();
+        t.unit.moves -= add_moves;
+        res.speed = Modify { add: Some(-add_ini), ..Default::default() };
+        if add_modify_effect(&mut t.unit, res, 2, registry) {
+            return Some(ActionResult::Debuff);
         }
-        _ => {}
     }
-    if let Some(res) = magic_curse(me, target, damage, magic_type, target_unit_type, registry) {
-        Some(res)
+    None
+}
+
+/// Index-based: target is attacked by sender. Short-lived guards.
+pub fn being_attacked_indexed(
+    target: BattleUnit, sender: BattleUnit,
+    damage: &Power, my_pos: UnitPos,
+    my_hitmap: &HitMap, attacker_pos: UnitPos,
+    armies: &mut Vec<Army>,
+    battle: &BattleInfo, registry: &GameInfo,
+) -> u64 {
+    // READ PHASE: read from both
+    let (target_info, is_flank_attack, target_defence, target_magic_type, sender_vamp) = {
+        let t = armies[target.army].troops[target.index].get();
+        let s = armies[sender.army].troops[sender.index].get();
+        let info = t.unit.get_info(&registry.units);
+        let is_flank = t.pos.0.abs_diff(attacker_pos.0) > 1;
+        (info.unit_type, is_flank, t.unit.modified.defence, info.magic_type, s.unit.modified.vamp)
+    };
+
+    // Compute corrected damage (pure computation, no locks)
+    let percent_100 = Percent::new(100);
+    let mut dmg = *damage;
+
+    if let Some(magic_type) = target_magic_type {
+        let magic_def = match magic_type {
+            MagicType::Life => target_defence.life_magic,
+            MagicType::Death => target_defence.death_magic,
+            MagicType::Elemental => target_defence.elemental_magic,
+        };
+        dmg.magic = (percent_100 - magic_def).calc(dmg.magic.saturating_sub(target_defence.magic_units));
+    }
+
+    let hand_defence = if is_flank_attack {
+        dmg.hand = (dmg.hand as f32).mul(1.0).ceil() as u64;
+        (target_defence.hand_units as f32).div(2.).ceil() as u64
     } else {
-        damage.hand = 0;
-        damage.ranged = 0;
-        let res = target.being_attacked(&damage, me, target_pos, hitmap, my_pos, battle, registry);
-        Some(ActionResult::Melee)
+        target_defence.hand_units
+    };
+
+    dmg.ranged = (percent_100 - target_defence.ranged_percent).calc(dmg.ranged.saturating_sub(target_defence.ranged_units));
+    dmg.hand = (percent_100 - target_defence.hand_percent).calc(dmg.hand.saturating_sub(hand_defence));
+
+    let corrected_damage_units = (dmg.magic + dmg.ranged + dmg.hand).max(1);
+
+    // MUTATE target: apply damage
+    {
+        let mut t = armies[target.army].troops[target.index].get();
+        t.unit.hp = t.unit.hp.abs_sub(&(corrected_damage_units as i64));
     }
+
+    // MUTATE sender: apply vampirism
+    if sender_vamp > Percent::new(0) && !matches!(target_info, UnitType::Undead | UnitType::Mecha) {
+        let heal_amount = sender_vamp.calc(corrected_damage_units) as i64;
+        let mut s = armies[sender.army].troops[sender.index].get();
+        s.unit.heal(heal_amount);
+    }
+
+    corrected_damage_units
 }
 
-fn elemental_attack(
-    me: &mut Unit,
-    target: &mut Unit,
-    damage: Power,
-    target_pos: UnitPos,
-    my_pos: UnitPos,
-    battle: &BattleInfo,
-    magic_type: MagicType,
-    hitmap: &HitMap,
-	registry: &GameInfo,
+/// Index-based attack. Takes armies by mutable ref, uses indices.
+pub fn attack_indexed(
+    me: BattleUnit, target: BattleUnit,
+    armies: &mut Vec<Army>,
+    battle: &BattleInfo, registry: &GameInfo,
 ) -> Option<ActionResult> {
-    let mut damage = damage;
-    if !elemental_curse(me, target, damage, magic_type, registry).is_some() {
-        damage.hand = 0;
-        damage.ranged = 0;
-        target.being_attacked(&damage, me, target_pos, hitmap, my_pos, battle, registry);
+    let is_enemy = me.army != target.army;
+    let columns = armies[me.army].max_troops / 2;
+    let max_troops = armies[me.army].max_troops;
+
+    // READ PHASE: extract all needed data with short-lived guards
+    let (my_pos, target_pos, my_modified, target_hitmap,
+          my_info_data, target_info_data, my_settings,
+          target_unit_type, target_magic_type) = {
+        let m = armies[me.army].troops[me.index].get();
+        let t_army = &armies[target.army];
+        let t = t_army.troops[target.index].get();
+        (m.pos, t.pos, m.unit.modified,
+         t_army.hitmap.clone(),
+         m.unit.get_info(&registry.units).clone(),
+         t.unit.get_info(&registry.units).clone(),
+         m.unit.settings,
+         t.unit.get_info(&registry.units).unit_type,
+         t.unit.get_info(&registry.units).magic_type)
+    };
+
+    let my_field = field_type(my_pos.whole(columns), max_troops);
+    let is_in_back = my_field == Field::Back;
+    let enemy_field = field_type(target_pos.whole(columns), max_troops);
+    let mut damage = my_modified.damage;
+    let enemy_in_reserve = enemy_field == Field::Reserve;
+    let me_in_reserve = my_field == Field::Reserve;
+    let both_in_reserve = me_in_reserve && enemy_in_reserve;
+    let both_not_in_reserve = !me_in_reserve && !enemy_in_reserve;
+
+    let can_reserve = me_in_reserve && my_settings.attacks_from_reserve;
+    let allies_together = (both_in_reserve || both_not_in_reserve) && !is_enemy;
+    let field_checks = allies_together || (!enemy_in_reserve && (!me_in_reserve || can_reserve));
+
+    let dist = target_pos.0.abs_diff(my_pos.0);
+    let is_path_empty = is_path_empty(&target_hitmap, my_pos, target_pos, columns);
+
+    if !field_checks { return None; }
+
+    // Melee
+    if damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy
+        && (is_path_empty || dist < 2)
+    {
+        damage.ranged = 0; damage.magic = 0;
+        being_attacked_indexed(target, me, &damage, my_pos, &target_hitmap, target_pos, armies, battle, registry);
+        return Some(ActionResult::Melee);
     }
-    Some(ActionResult::Debuff)
+
+    // Ranged
+    let is_front_empty = is_front_empty(&target_hitmap, my_pos, columns);
+    if damage.ranged > 0 && is_enemy
+        && ((enemy_field == Field::Front && (dist < 2 || is_path_empty))
+            || enemy_field == Field::Back && is_front_empty
+            || is_in_back || can_reserve)
+    {
+        damage.hand = 0; damage.magic = 0;
+        being_attacked_indexed(target, me, &damage, my_pos, &target_hitmap, target_pos, armies, battle, registry);
+        return Some(ActionResult::Ranged);
+    }
+
+    // Magic
+    let can_magic = (enemy_field == Field::Front && is_path_empty && dist > 1)
+        || (enemy_field == Field::Back && is_front_empty)
+        || is_in_back || can_reserve
+        || (!is_enemy && (allies_together || can_reserve)
+            && matches!(my_info_data.magic_direction, ToAll | ToAlly | CureOnly | BlessOnly)
+            && my_info_data.magic_type.is_some());
+
+    if !can_magic || my_modified.damage.magic < 1 { return None; }
+    let Some(magic_type) = my_info_data.magic_type else { return None; };
+
+    match (my_info_data.magic_direction, magic_type, is_enemy) {
+        (ToAlly, _, false) => match magic_type {
+            Death | Life => {
+                let mut t = armies[target.army].troops[target.index].get();
+                heal_bless(&mut t.unit, damage, magic_type, target_unit_type, registry)
+            },
+            Elemental => {
+                let mut t = armies[target.army].troops[target.index].get();
+                elemental_bless(&mut t.unit, damage, target_unit_type, target_magic_type, registry)
+            },
+        },
+        (ToAll, _, _) => match (magic_type, is_enemy) {
+            (Death | Life, true) => {
+                apply_magic_curse_indexed(me, target, armies, &damage, magic_type, registry)
+                    .or_else(|| {
+                        let mut dmg = damage;
+                        dmg.hand = 0; dmg.ranged = 0;
+                        being_attacked_indexed(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
+                        Some(ActionResult::Melee)
+                    })
+            },
+            (Death | Life, false) => {
+                let mut t = armies[target.army].troops[target.index].get();
+                heal_bless(&mut t.unit, damage, magic_type, target_unit_type, registry)
+            },
+            (Elemental, true) => {
+                apply_elemental_curse_indexed(me, target, armies, &damage, magic_type, registry)
+                    .or_else(|| {
+                        let mut dmg = damage;
+                        dmg.hand = 0; dmg.ranged = 0;
+                        being_attacked_indexed(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
+                        Some(ActionResult::Debuff)
+                    })
+            },
+            (Elemental, false) => {
+                let mut t = armies[target.army].troops[target.index].get();
+                elemental_bless(&mut t.unit, damage, target_unit_type, target_magic_type, registry)
+            },
+        },
+        (ToEnemy, _, true) => match magic_type {
+            Death | Life => {
+                apply_magic_curse_indexed(me, target, armies, &damage, magic_type, registry)
+                    .or_else(|| {
+                        let mut dmg = damage;
+                        dmg.hand = 0; dmg.ranged = 0;
+                        being_attacked_indexed(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
+                        Some(ActionResult::Melee)
+                    })
+            },
+            Elemental => {
+                apply_elemental_curse_indexed(me, target, armies, &damage, magic_type, registry)
+                    .or_else(|| {
+                        let mut dmg = damage;
+                        dmg.hand = 0; dmg.ranged = 0;
+                        being_attacked_indexed(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
+                        Some(ActionResult::Debuff)
+                    })
+            },
+        },
+        (CurseOnly, _, true) => match magic_type {
+            Death | Life => apply_magic_curse_indexed(me, target, armies, &damage, magic_type, registry),
+            Elemental => apply_elemental_curse_indexed(me, target, armies, &damage, magic_type, registry),
+        },
+        (StrikeOnly, _, true) => {
+            let mut dmg = damage;
+            dmg.hand = 0; dmg.ranged = 0;
+            being_attacked_indexed(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
+            Some(ActionResult::Debuff)
+        },
+        (BlessOnly, _, false) => match magic_type {
+            Life | Death => {
+                let mut t = armies[target.army].troops[target.index].get();
+                bless_unit(&mut t.unit, damage, magic_type, target_unit_type, registry)
+            },
+            Elemental => {
+                let mut t = armies[target.army].troops[target.index].get();
+                elemental_bless(&mut t.unit, damage, target_unit_type, target_magic_type, registry)
+            },
+        },
+        (CureOnly, Life | Death, false) => {
+            let mut t = armies[target.army].troops[target.index].get();
+            heal_unit(&mut t.unit, damage, magic_type, target_unit_type)
+        },
+        _ => None,
+    }
 }
 
-fn is_front_empty(hitmap: &HitMap, my_pos: UnitPos) -> bool {
-    let me = my_pos.whole() as i64;
+fn is_front_empty(hitmap: &HitMap, my_pos: UnitPos, columns: usize) -> bool {
+    let max_troops = columns * 2;
+    let me = my_pos.whole(columns) as i64;
     let other = me + 2;
     let sign = if me > other { -1 } else { 1 };
     (1..=(me - sign - other).abs())
-        .map(|pos| (other + (pos * -sign)).max(0).min((MAX_TROOPS - 1) as i64) as usize)
-        .all(|x| hitmap[x].is_none() || field_type(x, MAX_TROOPS) == Field::Reserve)
+        .map(|pos| (other + (pos * -sign)).max(0).min((max_troops - 1) as i64) as usize)
+        .all(|x| hitmap[x].is_none() || field_type(x, max_troops) == Field::Reserve)
 }
-fn is_path_empty(hitmap: &HitMap, my_pos: UnitPos, target_pos: UnitPos) -> bool {
-    let me = my_pos.whole() as i64;
-    let other = target_pos.whole() as i64;
+fn is_path_empty(hitmap: &HitMap, my_pos: UnitPos, target_pos: UnitPos, columns: usize) -> bool {
+    let max_troops = columns * 2;
+    let me = my_pos.whole(columns) as i64;
+    let other = target_pos.whole(columns) as i64;
     if me == other {
         return true;
     };
     let sign = if me > other { -1 } else { 1 };
     (1..=(me - sign - other).abs())
-        .map(|pos| (other + (pos * -sign)).max(0).min((MAX_TROOPS - 1) as i64) as usize)
-        .all(|x| hitmap[x].is_none() || field_type(x, MAX_TROOPS) == Field::Reserve)
+        .map(|pos| (other + (pos * -sign)).max(0).min((max_troops - 1) as i64) as usize)
+        .all(|x| hitmap[x].is_none() || field_type(x, max_troops) == Field::Reserve)
 }
 
 #[derive(Debug, PartialEq)]
@@ -631,11 +826,13 @@ impl Unit {
         is_enemy: bool,
         target_hitmap: &Vec<Option<usize>>,
 		registry: &GameInfo,
+		columns: usize,
+		max_troops: usize,
     ) -> bool {
         let effected = self.modified;
-        let my_field = field_type(my_pos.into(), MAX_TROOPS);
+        let my_field = field_type(my_pos.whole(columns), max_troops);
         let is_in_back = my_field == Field::Back;
-        let enemy_field = field_type(target_pos.into(), MAX_TROOPS);
+        let enemy_field = field_type(target_pos.whole(columns), max_troops);
         let mut damage = effected.damage;
         let enemy_in_reserve = enemy_field == Field::Reserve;
         let me_in_reserve = my_field == Field::Reserve;
@@ -646,8 +843,8 @@ impl Unit {
         let allies_together = (both_in_reserve || both_not_in_reserve) && !is_enemy;
         let field_checks = allies_together || !enemy_in_reserve && (!me_in_reserve || can_reserve);
 
-        let is_path_empty = is_path_empty(target_hitmap, my_pos, target_pos);
-        let is_front_empty = is_front_empty(target_hitmap, my_pos);
+        let is_path_empty = is_path_empty(target_hitmap, my_pos, target_pos, columns);
+        let is_front_empty = is_front_empty(target_hitmap, my_pos, columns);
         let dist = target_pos.0.abs_diff(my_pos.0);
 
 		let my_info = self.get_info(&registry.units);
@@ -667,7 +864,6 @@ impl Unit {
         } else if (damage.hand > 0 && !is_in_back && is_enemy && enemy_field == Field::Front)
             && (is_path_empty || dist < 2)
         {
-            // This checks that receiver is in front and there are no obstacles between me and him.
             true
         } else {
             if !((enemy_field == Field::Front && is_path_empty && dist > 1)
@@ -747,157 +943,7 @@ impl Unit {
             }
         }
     }
-    pub fn attack(
-        &mut self,
-        target: &mut Unit,
-        target_pos: UnitPos,
-        my_pos: UnitPos,
-        battle: &BattleInfo,
-        target_hitmap: &Vec<Option<usize>>,
-        is_enemy: bool,
-		registry: &GameInfo,
-    ) -> Option<ActionResult> {
-        let effected = self.modified;
-        let my_field = field_type(my_pos.into(), MAX_TROOPS);
-        let is_in_back = my_field == Field::Back;
-        let enemy_field = field_type(target_pos.into(), MAX_TROOPS);
-        let mut damage = effected.damage;
-        let enemy_in_reserve = enemy_field == Field::Reserve;
-        let me_in_reserve = my_field == Field::Reserve;
-        let both_in_reserve = me_in_reserve && enemy_in_reserve;
-        let both_not_in_reserve = !me_in_reserve && !enemy_in_reserve;
 
-		let my_info = self.get_info(&registry.units);
-        let bonus = self.get_bonus(registry);
-
-        let can_reserve = me_in_reserve && self.settings.attacks_from_reserve;
-        let allies_together = (both_in_reserve || both_not_in_reserve) && !is_enemy;
-        let field_checks = allies_together || !enemy_in_reserve && (!me_in_reserve || can_reserve);
-
-        let is_path_empty = is_path_empty(target_hitmap, my_pos, target_pos);
-        let is_front_empty = is_front_empty(target_hitmap, my_pos);
-        let dist = target_pos.0.abs_diff(my_pos.0);
-
-		let target_info = target.get_info(&registry.units);
-		let target_unit_type = target_info.unit_type;
-		
-        return if !field_checks {
-            None
-        } else if (damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy)
-            && (is_path_empty || dist < 2)
-        {
-            damage.ranged = 0;
-            damage.magic = 0;
-            let _ = target.being_attacked(&damage, self, target_pos, target_hitmap, my_pos, battle, registry);
-            Some(ActionResult::Melee)
-        } else if damage.ranged > 0
-            && ((enemy_field == Field::Front && (dist < 2 || is_path_empty))
-                || enemy_field == Field::Back && is_front_empty
-                || is_in_back
-                || can_reserve)
-            && is_enemy
-        {
-            damage.hand = 0;
-            damage.magic = 0;
-            let _ = target.being_attacked(&damage, self, target_pos, target_hitmap, my_pos, battle, registry);
-            Some(ActionResult::Ranged)
-        } else {
-            if !((enemy_field == Field::Front && is_path_empty && dist > 1)
-                || (enemy_field == Field::Back && is_front_empty)
-                || is_in_back
-                || can_reserve
-                || (!is_enemy
-                    && (allies_together || can_reserve)
-                    && matches!(
-                        my_info.magic_direction,
-						ToAll | ToAlly | CureOnly | BlessOnly)
-					&& my_info.magic_type.is_some()
-                    ))
-            {
-                return None;
-            }
-            if effected.damage.magic < 1 {
-                return None;
-            }
-            let Some(magic_type) = my_info.magic_type else {
-                return None;
-            };
-            match (my_info.magic_direction, magic_type, is_enemy) {
-                (ToAlly, _, false) => match magic_type {
-                    Death | Life => heal_bless(target, damage, magic_type, target_unit_type, registry),
-                    Elemental => elemental_bless(target, damage, target_unit_type, target_info.magic_type, registry),
-                },
-                (ToAll, _, _) => match (magic_type, is_enemy) {
-                    (Death | Life, true) => magic_attack(
-                        self,
-                        target,
-                        damage,
-                        magic_type,
-                        my_pos,
-                        target_pos,
-                        battle,
-                        target_hitmap,
-						target_unit_type,
-						registry
-                    ),
-                    (Death | Life, false) => heal_bless(target, damage, magic_type, target_unit_type, registry),
-                    (Elemental, true) => elemental_attack(
-                        self,
-                        target,
-                        damage,
-                        target_pos,
-                        my_pos,
-                        battle,
-                        magic_type,
-                        target_hitmap,
-						registry
-                    ),
-                    (Elemental, false) => elemental_bless(target, damage, target_unit_type, target_info.magic_type, registry),
-                },
-                (ToEnemy, _, true) => match magic_type {
-                    Death | Life => magic_attack(
-                        self,
-                        target,
-                        damage,
-                        magic_type,
-                        my_pos,
-                        target_pos,
-                        battle,
-                        target_hitmap,
-						target_unit_type,
-						registry
-                    ),
-                    Elemental => elemental_attack(
-                        self,
-                        target,
-                        damage,
-                        target_pos,
-                        my_pos,
-                        battle,
-                        magic_type,
-                        target_hitmap,
-						registry
-                    ),
-                },
-                (CurseOnly, _, true) => match magic_type {
-                    Death | Life => magic_curse(self, target, damage, magic_type, target_unit_type, registry),
-                    Elemental => elemental_curse(self, target, damage, magic_type, registry),
-                },
-                (StrikeOnly, _, true) => {
-                    damage.hand = 0;
-                    damage.ranged = 0;
-                    target.being_attacked(&damage, self, my_pos, target_hitmap, target_pos, battle, registry);
-                    Some(ActionResult::Debuff)
-                }
-                (BlessOnly, _, false) => match magic_type {
-                    Life | Death => bless_unit(target, damage, magic_type, target_unit_type, registry),
-                    Elemental => elemental_bless(target, damage, target_unit_type, target_info.magic_type, registry),
-                },
-                (CureOnly, Life | Death, false) => heal_unit(target, damage, magic_type, target_unit_type),
-                _ => None,
-            }
-        };
-    }
     pub fn restore(&mut self) {
         self.hp = self.modified.max_hp;
         self.moves = self.modified.max_moves;
@@ -1061,40 +1107,6 @@ impl Unit {
 		};
 		bonus.and_then(|b| Some(&registry.bonuses[b]))
 	}
-	pub fn being_attacked(
-		&mut self,
-		damage: &Power,
-		sender: &mut Unit,
-		my_pos: UnitPos,
-		my_hitmap: &HitMap,
-		attacker_pos: UnitPos,
-		battle: &BattleInfo,
-		registry: &GameInfo,
-	) -> u64 {
-		let info = self.get_info(&registry.units);
-		let is_flank_attack = my_pos.0.abs_diff(attacker_pos.0) > 1;
-		let flank_info = if is_flank_attack { Some(1.) } else { None };
-		let corrected_damage = self.correct_damage(
-			damage,
-			info.magic_type,
-			flank_info,
-		);
-		let unit_bonus = sender.get_bonus(registry);
-		// TODO: bonus should be applied after the attack
-		let corrected_damage_units =
-			(corrected_damage.magic + corrected_damage.ranged + corrected_damage.hand).max(1);
-		self.hp = self.hp.abs_sub(&(corrected_damage_units as i64));
-		if self.is_dead() {
-			// TODO: bonus
-		}
-		match info.unit_type {
-			UnitType::Undead | UnitType::Mecha => {}
-			_ => {
-				sender.heal(sender.modified.vamp.calc(corrected_damage_units) as i64); // apply vampirizm
-			}
-		}
-		corrected_damage_units
-	}
 	pub fn correct_damage(
 		&self,
 		damage: &Power,
@@ -1104,36 +1116,35 @@ impl Unit {
 		let mut damage = damage.clone();
 		let defence: Defence = self.modified.defence;
 		let percent_100 = Percent::new(100);
-		let mut magic: u64 = 0;
 
 		if let Some(magic_type) = magic_type {
 			let magic_def = match magic_type {
-				Life => defence.life_magic,
-				Death => defence.death_magic,
-				Elemental => defence.elemental_magic,
+				MagicType::Life => defence.life_magic,
+				MagicType::Death => defence.death_magic,
+				MagicType::Elemental => defence.elemental_magic,
 			};
-			magic =
-				(percent_100 - magic_def).calc(damage.magic.saturating_sub(defence.magic_units));
+			damage.magic = (percent_100 - magic_def)
+				.calc(damage.magic.saturating_sub(defence.magic_units));
 		}
+
 		let hand_defence = if let Some(flank_mod) = flank_modifier {
 			damage.hand = (damage.hand as f32).mul(flank_mod).ceil() as u64;
 			(defence.hand_units as f32).div(2.).ceil() as u64
 		} else {
 			defence.hand_units
 		};
+
 		Power {
 			ranged: (percent_100 - defence.ranged_percent)
 				.calc(damage.ranged.saturating_sub(defence.ranged_units)),
-			magic,
+			magic: damage.magic,
 			hand: (percent_100 - defence.hand_percent)
 				.calc(damage.hand.saturating_sub(hand_defence)),
 		}
 	}
     pub fn tick(&mut self, registry: &GameInfo) -> bool {
         let mut _effects = self.effects.clone();
-		// TODO: EFFECTS TICKING
-        
-        self.heal(self.modified.regen.calc(self.modified.max_hp)); // apply regeneration
+        self.heal(self.modified.regen.calc(self.modified.max_hp));
         self.recalc(registry);
         true
     }
@@ -1410,8 +1421,5 @@ pub fn display_unit(unit: &Unit, registry: &GameInfo) -> Vec<String> {
         unchanged.moves,
         stats.max_moves
     ));
-    // let bonus = get_bonus_info(unit.get_bonus());
-    // strings.push(bonus.0);
-    // strings.push(bonus.1);
     strings
 }
