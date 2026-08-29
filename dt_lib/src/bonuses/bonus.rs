@@ -375,17 +375,6 @@ impl Mechanic {
 	}
 }
 
-#[derive(Debug, Clone, PartialEq, Default, serde::Deserialize, serde::Serialize, JsonSchema)]
-pub struct Rules {
-	pub rules: [(Vec<Mechanic>, ListenTo); MAX_ABILITY],
-}
-impl Index<usize> for Rules {
-	type Output = (Vec<Mechanic>, ListenTo);
-	fn index(&self, index: usize) -> &Self::Output {
-		&self.rules[index]
-	}
-}
-
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Default, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct BonusInfo {

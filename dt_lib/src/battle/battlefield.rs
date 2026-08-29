@@ -322,16 +322,39 @@ impl BattleInfo {
              */
     }
     pub fn next_move_seq(&mut self, armies: &mut Vec<Army>, registry: &GameInfo) {
-        let army1 = &mut armies[self.army1];
-        self.armies_moved[0] = [false].repeat(army1.troops.len());
-        lower_magic(&mut army1.troops, registry);
-        restore_moves(&mut army1.troops, registry);
-        army1.recalc_army_hitmap(&registry.units);
-        let army2 = &mut armies[self.army2];
-        self.armies_moved[1] = [false].repeat(army2.troops.len());
-        lower_magic(&mut army2.troops, registry);
-        restore_moves(&mut army2.troops, registry);
-        army2.recalc_army_hitmap(&registry.units);
+		self.armies_moved[0] = [false].repeat(registry.game_settings.max_troops);
+		self.armies_moved[1] = [false].repeat(registry.game_settings.max_troops);
+		let per_army = |armies: &mut Vec<Army>, army_num: usize| {
+			let mut troops = armies[army_num].troops.iter().enumerate();
+			for (index, troop) in troops {
+				let mut troop = troop.get();
+				if troop.is_dead() {
+					continue
+				}
+				let pos = troop.pos;
+				troop.unit.tick(registry);
+				if let Some(bonus) = troop.unit.get_bonus(registry).clone() {
+					bonus.apply_rules(AbilityCondition::Turn, BattleUnit { index, army: army_num }, pos.whole(), armies, &vec![], &self, registry);
+				};
+			}
+			let mut troops = &mut armies[army_num].troops;
+			lower_magic(troops, registry);
+			for mut troop in troops.iter_mut().filter_map(|troop| {
+				let troop = troop.get();
+				if troop.is_dead() {
+					None
+				} else {
+					Some(troop)
+				}
+			}) {
+				let unit = &mut troop.unit;
+				unit.tick(registry);
+				unit.moves = unit.modified.max_moves;
+				unit.recalc(registry)
+			}
+		};
+		per_army(armies, self.army1);
+		per_army(armies, self.army2);
         self.move_count += 1;
         check_win(self, armies, registry);
     }

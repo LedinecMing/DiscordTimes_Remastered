@@ -1,6 +1,6 @@
 use crate::{
     battle::{
-        Army, HitMap, army::{MAX_LINES, MAX_TROOPS}, battlefield::{BattleInfo, Field, field_type}
+        Army, BattleUnit, BattleUnitInfo, HitMap, army::{MAX_LINES, MAX_TROOPS}, battlefield::{BattleInfo, Field, field_type}
     }, registry::{BonusId, Bonuses, Effects, GameInfo, Registry, UnitId, Units}, units::unitstats::Modify
 };
 use advini::Sections;
@@ -1129,16 +1129,11 @@ impl Unit {
 				.calc(damage.hand.saturating_sub(hand_defence)),
 		}
 	}
-    pub fn tick(&mut self, battle: &BattleInfo, armies: &Vec<Army>, registry: &GameInfo) -> bool {
-        let mut effects = self.effects.clone();
-		// TODO: EFFECTS
+    pub fn tick(&mut self, registry: &GameInfo) -> bool {
+        let mut _effects = self.effects.clone();
+		// TODO: EFFECTS TICKING
         
         self.heal(self.modified.regen.calc(self.modified.max_hp)); // apply regeneration
-		
-		// TODO: APPLY BONUS
-        if let Some(bonus) = &self.get_bonus(registry) {
-			bonus.apply_rules(AbilityCondition::Turn, )
-		};
         self.recalc(registry);
         true
     }
@@ -1419,69 +1414,4 @@ pub fn display_unit(unit: &Unit, registry: &GameInfo) -> Vec<String> {
     // strings.push(bonus.0);
     // strings.push(bonus.1);
     strings
-}
-
-pub fn calclate_unit_power(unit: &Unit) -> f32 {
-    let stats = unit.modified;
-    let health = stats.max_hp as f32;
-    let defence = stats.defence;
-    let (hand_defence, ranged_defence) = (defence.hand_units as f32, defence.ranged_units as f32);
-    let (death_defence, elemental_defence, life_defence) = (
-        defence.death_magic.get() as f32,
-        defence.elemental_magic.get() as f32,
-        defence.life_magic.get() as f32,
-    );
-    let damage = stats.damage;
-    let (hand_damage, ranged_damage, magic_damage) = (
-        damage.hand as f32,
-        damage.ranged as f32,
-        damage.magic as f32,
-    );
-    let speed = stats.speed as f32;
-    let moves = stats.max_moves as f32;
-    let regen = stats.regen.get() as f32;
-    let vamp = stats.vamp.get() as f32;
-    /*
-    ((атака/45+инициатива/20)/2*ходы+(защита/10)+(маг смерти/100+маг жизни/100*2+маг стихий/100)*2+реген/100*2+вампиризм/100*3 + health / 50) * множ бонуса
-     */
-    let health_points = health / 50.;
-    let attack_points = hand_damage / 45. + ranged_damage / 45. + magic_damage / 30.;
-    let speed_points = speed / 20.;
-    let moves_modifier = moves;
-    let defence_points = hand_defence / 10. + ranged_defence / 10.;
-    let magic_points =
-        death_defence / 100. + elemental_defence / 100. * 2. + life_defence / 100. * 2.;
-
-    let regen_points = regen / 100.;
-    let vamp_points = vamp / 100.;
-
-    let (bonus_defence_modifier, bonus_attack_modifier, bonus_health_modifier) = (1., 1., 1.);
-	//match unit.bonus {
-    //     Bonus::SpearDefence => (1.5, 1., 1.),
-    //     Bonus::GodAnger => (1., 1.1, 1.),
-    //     Bonus::GodStrike => (1., 1.2, 1.),
-    //     Bonus::AncientVampiresGist => (1., 1. + attack_points, 1.3),
-    //     Bonus::Artillery => (1., 2. + attack_points, 1.),
-    //     Bonus::Berserk => (1., 1.5, 1.),
-    //     Bonus::Block => (1.3, 1., 1.),
-    //     Bonus::DeadDodging | Bonus::Dodging => (1., 1., 1.3),
-    //     Bonus::Fast => (1., 2., 1.),
-    //     Bonus::DeadRessurect => (1., 1., 1.25),
-    //     Bonus::FireAttack | Bonus::PoisonAttack => (1., 1.3, 1.),
-    //     Bonus::Ghost => (1., 1.5, 2.),
-    //     Bonus::Invulnerable => (1., 1., 2.),
-    //     Bonus::DefencePiercing => (1., 1. + attack_points, 1.),
-    //     Bonus::FastDead => (1., 2., 1.),
-    //     Bonus::FlankStrike => (1., 1.5, 1.),
-    //     Bonus::Garrison => (1.5, 1.5, 1.5),
-    //     Bonus::Stealth => (1., 1.5, 1.),
-    //     _ => (1., 1., 1.),
-    // };
-    (1.75_f32.powf(attack_points).max(attack_points) * bonus_attack_modifier + speed_points) / 2.
-        * moves_modifier
-        + (defence_points * bonus_defence_modifier)
-        + magic_points * 2.
-        + regen_points * 2.
-        + vamp_points * 3.
-        + health_points * bonus_health_modifier
 }

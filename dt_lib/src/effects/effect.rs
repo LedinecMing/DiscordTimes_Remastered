@@ -1,4 +1,4 @@
-use crate::{battle::{Army, BattleInfo, BattleUnit}, bonuses::{AbilityCondition, AbilityTowardsTroop, ListenTo, MAX_ABILITY, Mechanic, RemoveEffect, Rules}, registry::{Effects, GameInfo}, units::{
+use crate::{battle::{Army, BattleInfo, BattleUnit}, bonuses::{AbilityCondition, AbilityTowardsTroop, ListenTo, MAX_ABILITY, Mechanic, RemoveEffect, }, registry::{Effects, GameInfo}, units::{
     unit::{Unit, *},
     unitstats::*,
 }};

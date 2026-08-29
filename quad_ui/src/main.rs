@@ -20,7 +20,7 @@ use dt_lib::{
     }, mutrc::*, network::{GameServer, server::Executor}, parse::{
         FileAccess, collect_errors, parse_bonuses, parse_effects, parse_items, parse_objects, parse_settings, parse_story, parse_units
     }, registry::{self, GameInfo, Objects, Registry, Units}, time::time::Data as TimeData, units::{
-        unit::{ActionResult, Unit, UnitInfo, UnitPos, UnitType, calclate_unit_power, display_unit},
+        unit::{ActionResult, Unit, UnitInfo, UnitPos, UnitType,  display_unit},
         unitstats::ModifyUnitStats,
     }
 };
