@@ -129,8 +129,7 @@ impl Default for GameInfo {
 impl GameInfo {
 	pub fn new() -> Self {
 		let mut reg = Self::default();
-		
-		
+				
 		reg
 	}
 }

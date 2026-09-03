@@ -114,7 +114,6 @@ impl Power {
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct UnitStats {
 	#[default_value = "1i64"]
-	#[alias = "hits"]
     pub hp: i64,
 	#[default_value = "1i64"]
 	#[alias = "hits"]
@@ -124,7 +123,6 @@ pub struct UnitStats {
     #[inline_parsing]
     pub defence: Defence,
 	#[default_value = "1i64"]
-	#[alias = "manevres"]
     pub moves: i64,
 	#[default_value = "1i64"]
 	#[alias = "manevres"]
@@ -152,7 +150,8 @@ impl UnitStats {
 	pub fn get_stat(&self, stat: UnitStat) -> i64 {
 		use UnitStat::*;
 		match stat {
-			Hp => self.hp,
+			Hp => self.
+				hp,
 			Speed => self.speed,
 			MaxHp => self.max_hp,
 			Moves => self.moves,
@@ -333,8 +332,8 @@ impl From<(UnitInfo, &Bonuses)> for Unit {
 	fn from((value, bonuses): (UnitInfo, &Bonuses)) -> Self {
 		Self {
 			id: value.icon_index - 1,
-			hp: value.stats.hp,
-			moves: value.stats.moves,
+			hp: value.stats.max_hp,
+			moves: value.stats.max_moves,
 			modified: value.stats.clone(),
 			bonus: value.bonus.and_then(|x| bonuses.str_to_id(&x)),
 			..Default::default()
@@ -424,7 +423,7 @@ pub fn heal_bless(target: &mut Unit, damage: Power, magic_type: MagicType, targe
 
 pub fn elemental_bless(target: &mut Unit, damage: Power, target_unit_type: UnitType, target_magic_type: Option<MagicType>, registry: &GameInfo) -> Option<ActionResult> {
     if heal_unit(target, damage, Elemental, target_unit_type).is_none() {
-        return if !target.has_effect_kind("mage_support", &registry.effects)
+        return if !target.has_effect_id(1)
             && !matches!(target_magic_type, Some(MagicType::Elemental))
         {
 			let mut res = ModifyUnitStats::default();
@@ -480,10 +479,10 @@ fn apply_magic_curse_indexed(
     // Check if already cursed
     let has_curse = {
         let t = armies[target.army].troops[target.index].get();
-        t.unit.has_effect_kind("mage_curse", &registry.effects)
+        t.unit.has_effect_id(2)
     };
 
-    if has_curse { return None; }
+    if dbg!(has_curse) { return None; }
 
     let magic = damage.magic as i64;
     let (add_damage, add_defence) = match magic_type {
@@ -500,7 +499,7 @@ fn apply_magic_curse_indexed(
 
     {
         let mut t = armies[target.army].troops[target.index].get();
-        if add_modify_effect(&mut t.unit, res, 2, registry) {
+        if dbg!(add_modify_effect(&mut t.unit, res, 2, registry)) {
             Some(ActionResult::Debuff)
         } else { None }
     }
@@ -514,7 +513,7 @@ fn apply_elemental_curse_indexed(
 ) -> Option<ActionResult> {
     let has_curse = {
         let t = armies[target.army].troops[target.index].get();
-        t.unit.has_effect_kind("elemental_curse", &registry.effects)
+        t.unit.has_effect_id(3)
     };
 
     if has_curse { return None; }
@@ -538,24 +537,16 @@ fn apply_elemental_curse_indexed(
     None
 }
 
-/// Index-based: target is attacked by sender. Short-lived guards.
-pub fn being_attacked_indexed(
-    target: BattleUnit, sender: BattleUnit,
-    damage: &Power, my_pos: UnitPos,
-    my_hitmap: &HitMap, attacker_pos: UnitPos,
-    armies: &mut Vec<Army>,
-    battle: &BattleInfo, registry: &GameInfo,
-) -> u64 {
-    // READ PHASE: read from both
-    let (target_info, is_flank_attack, target_defence, target_magic_type, sender_vamp) = {
-        let t = armies[target.army].troops[target.index].get();
-        let s = armies[sender.army].troops[sender.index].get();
-        let info = t.unit.get_info(&registry.units);
-        let is_flank = t.pos.0.abs_diff(attacker_pos.0) > 1;
-        (info.unit_type, is_flank, t.unit.modified.defence, info.magic_type, s.unit.modified.vamp)
-    };
 
-    // Compute corrected damage (pure computation, no locks)
+/// Чистый расчёт урона по цели: защита от магии/рукопашной/стрельбы, фланг.
+/// Никаких мутаций — только вычисление скорректированного суммарного урона.
+fn compute_attack_damage(
+    _target_info: UnitType,
+    target_defence: &Defence,
+    target_magic_type: Option<MagicType>,
+    damage: &Power,
+    is_flank_attack: bool,
+) -> u64 {
     let percent_100 = Percent::new(100);
     let mut dmg = *damage;
 
@@ -578,7 +569,33 @@ pub fn being_attacked_indexed(
     dmg.ranged = (percent_100 - target_defence.ranged_percent).calc(dmg.ranged.saturating_sub(target_defence.ranged_units));
     dmg.hand = (percent_100 - target_defence.hand_percent).calc(dmg.hand.saturating_sub(hand_defence));
 
-    let corrected_damage_units = (dmg.magic + dmg.ranged + dmg.hand).max(1);
+    (dmg.magic + dmg.ranged + dmg.hand).max(1)
+}
+
+/// Index-based: target is attacked by sender. Short-lived guards.
+pub fn being_attacked(
+    target: BattleUnit, sender: BattleUnit,
+    damage: &Power, my_pos: UnitPos,
+    my_hitmap: &HitMap, attacker_pos: UnitPos,
+    armies: &mut Vec<Army>,
+    battle: &BattleInfo, registry: &GameInfo,
+) -> u64 {
+    // READ PHASE: read from both
+    let (target_info, is_flank_attack, target_defence, target_magic_type, sender_vamp) = {
+        let t = armies[target.army].troops[target.index].get();
+        let s = armies[sender.army].troops[sender.index].get();
+        let info = t.unit.get_info(&registry.units);
+        let is_flank = t.pos.0.abs_diff(attacker_pos.0) > 1;
+        (info.unit_type, is_flank, t.unit.modified.defence, info.magic_type, s.unit.modified.vamp)
+    };
+
+    let corrected_damage_units = compute_attack_damage(
+        target_info,
+        &target_defence,
+        target_magic_type,
+        damage,
+        is_flank_attack,
+    );
 
     // MUTATE target: apply damage
     {
@@ -596,36 +613,30 @@ pub fn being_attacked_indexed(
     corrected_damage_units
 }
 
-/// Index-based attack. Takes armies by mutable ref, uses indices.
-pub fn attack_indexed(
+/// Вся конкретика (какая магия, урон или проклятие) решается в apply_attack.
+pub fn attack(
     me: BattleUnit, target: BattleUnit,
-    armies: &mut Vec<Army>,
-    battle: &BattleInfo, registry: &GameInfo,
+    armies: &Vec<Army>,
+    registry: &GameInfo,
 ) -> Option<ActionResult> {
     let is_enemy = me.army != target.army;
     let columns = armies[me.army].max_troops / 2;
     let max_troops = armies[me.army].max_troops;
 
-    // READ PHASE: extract all needed data with short-lived guards
-    let (my_pos, target_pos, my_modified, target_hitmap,
-          my_info_data, target_info_data, my_settings,
-          target_unit_type, target_magic_type) = {
-        let m = armies[me.army].troops[me.index].get();
-        let t_army = &armies[target.army];
-        let t = t_army.troops[target.index].get();
-        (m.pos, t.pos, m.unit.modified,
-         t_army.hitmap.clone(),
-         m.unit.get_info(&registry.units).clone(),
-         t.unit.get_info(&registry.units).clone(),
-         m.unit.settings,
-         t.unit.get_info(&registry.units).unit_type,
-         t.unit.get_info(&registry.units).magic_type)
-    };
+    let m = armies[me.army].troops[me.index].get();
+    let t = armies[target.army].troops[target.index].get();
+    let my_pos = m.pos;
+    let target_pos = t.pos;
+    let my_modified = m.unit.modified;
+    let my_settings = m.unit.settings;
+    let target_hitmap = &armies[target.army].hitmap;
+    let my_info_data = m.unit.get_info(&registry.units);
+    let target_info_data = t.unit.get_info(&registry.units);
 
     let my_field = field_type(my_pos.whole(columns), max_troops);
     let is_in_back = my_field == Field::Back;
     let enemy_field = field_type(target_pos.whole(columns), max_troops);
-    let mut damage = my_modified.damage;
+    let damage = my_modified.damage;
     let enemy_in_reserve = enemy_field == Field::Reserve;
     let me_in_reserve = my_field == Field::Reserve;
     let both_in_reserve = me_in_reserve && enemy_in_reserve;
@@ -633,129 +644,182 @@ pub fn attack_indexed(
 
     let can_reserve = me_in_reserve && my_settings.attacks_from_reserve;
     let allies_together = (both_in_reserve || both_not_in_reserve) && !is_enemy;
+	// Если оба в резерве и союзники - можно. Если оба не в резерве и союзники - можно. Если юнит в резерве и нет способности can_reserve то нельзя. Если другой юнит в резерве - нельзя.
     let field_checks = allies_together || (!enemy_in_reserve && (!me_in_reserve || can_reserve));
 
     let dist = target_pos.0.abs_diff(my_pos.0);
-    let is_path_empty = is_path_empty(&target_hitmap, my_pos, target_pos, columns);
+    let is_path_empty = is_path_empty(target_hitmap, my_pos, target_pos, columns);
 
-    if !field_checks { return None; }
-
-    // Melee
-    if damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy
+    if field_checks
+        && damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy
         && (is_path_empty || dist < 2)
     {
-        damage.ranged = 0; damage.magic = 0;
-        being_attacked_indexed(target, me, &damage, my_pos, &target_hitmap, target_pos, armies, battle, registry);
         return Some(ActionResult::Melee);
     }
 
     // Ranged
-    let is_front_empty = is_front_empty(&target_hitmap, my_pos, columns);
-    if damage.ranged > 0 && is_enemy
+    let is_front_empty = is_front_empty(target_hitmap, my_pos, columns);
+    if field_checks && damage.ranged > 0 && is_enemy
         && ((enemy_field == Field::Front && (dist < 2 || is_path_empty))
             || enemy_field == Field::Back && is_front_empty
             || is_in_back || can_reserve)
     {
-        damage.hand = 0; damage.magic = 0;
-        being_attacked_indexed(target, me, &damage, my_pos, &target_hitmap, target_pos, armies, battle, registry);
         return Some(ActionResult::Ranged);
     }
 
-    // Magic
-    let can_magic = (enemy_field == Field::Front && is_path_empty && dist > 1)
-        || (enemy_field == Field::Back && is_front_empty)
-        || is_in_back || can_reserve
-        || (!is_enemy && (allies_together || can_reserve)
-            && matches!(my_info_data.magic_direction, ToAll | ToAlly | CureOnly | BlessOnly)
-            && my_info_data.magic_type.is_some());
+	let can_magic = (enemy_field == Field::Front && is_path_empty && dist > 1)
+		|| (enemy_field == Field::Back && is_front_empty)
+        || is_in_back
+		|| field_checks;
+    // let can_magic = (enemy_field == Field::Front && is_path_empty && dist > 1)
+    //     || (enemy_field == Field::Back && is_front_empty)
+    //     || is_in_back || can_reserve
+    //     || (!is_enemy
+    //         && matches!(my_info_data.magic_direction, ToAll | ToAlly | CureOnly | BlessOnly)
+    //         && my_info_data.magic_type.is_some());
 
-    if !can_magic || my_modified.damage.magic < 1 { return None; }
-    let Some(magic_type) = my_info_data.magic_type else { return None; };
+    if !can_magic || my_modified.damage.magic < 1 {
+		dbg!("No magic, {};{}", can_magic, my_modified.damage.magic);
+		return None;
+	}
+    let Some(magic_type) = my_info_data.magic_type else {
+		dbg!("No magic type");
+		return None;
+	};
 
+	let is_cursed = t.unit.has_effect_id(2);
+	dbg!(is_cursed);
+	let is_blessed = t.unit.has_effect_id(1);
+	let has_elemental_sup = t.unit.has_effect_id(3);
+	dbg!("Selecting magic");
+    // Пер-таргет ограничения (бывший can_attack): тип цели + уже висящие эффекты.
     match (my_info_data.magic_direction, magic_type, is_enemy) {
         (ToAlly, _, false) => match magic_type {
-            Death | Life => {
-                let mut t = armies[target.army].troops[target.index].get();
-                heal_bless(&mut t.unit, damage, magic_type, target_unit_type, registry)
+            Death | Life => match (target_info_data.unit_type, magic_type) {
+                (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
+                (UnitType::Undead, Life) => None,
+                _ if is_blessed => None,
+                _ => Some(ActionResult::Buff),
             },
-            Elemental => {
-                let mut t = armies[target.army].troops[target.index].get();
-                elemental_bless(&mut t.unit, damage, target_unit_type, target_magic_type, registry)
-            },
+            Elemental if has_elemental_sup => None,
+            Elemental => Some(ActionResult::Buff),
         },
         (ToAll, _, _) => match (magic_type, is_enemy) {
-            (Death | Life, true) => {
-                apply_magic_curse_indexed(me, target, armies, &damage, magic_type, registry)
-                    .or_else(|| {
-                        let mut dmg = damage;
-                        dmg.hand = 0; dmg.ranged = 0;
-                        being_attacked_indexed(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
-                        Some(ActionResult::Melee)
-                    })
+			(Death | Life, true) if is_cursed => {
+				Some(ActionResult::MagicDamage)
+			},
+			(Death | Life, true) => {
+				Some(ActionResult::Debuff)
+			},
+            (Death | Life, false) => match (target_info_data.unit_type, magic_type) {
+                (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
+                (UnitType::Undead, Life) => None,
+                (UnitType::Mecha, Death | Life) => None,
+                _ if is_blessed => None,
+                _ => Some(ActionResult::Buff),
             },
-            (Death | Life, false) => {
-                let mut t = armies[target.army].troops[target.index].get();
-                heal_bless(&mut t.unit, damage, magic_type, target_unit_type, registry)
-            },
-            (Elemental, true) => {
-                apply_elemental_curse_indexed(me, target, armies, &damage, magic_type, registry)
-                    .or_else(|| {
-                        let mut dmg = damage;
-                        dmg.hand = 0; dmg.ranged = 0;
-                        being_attacked_indexed(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
-                        Some(ActionResult::Debuff)
-                    })
-            },
-            (Elemental, false) => {
-                let mut t = armies[target.army].troops[target.index].get();
-                elemental_bless(&mut t.unit, damage, target_unit_type, target_magic_type, registry)
-            },
+			(Elemental, true) if is_cursed => Some(ActionResult::MagicDamage),
+            (Elemental, true) => Some(ActionResult::Debuff),
+            (Elemental, false) if has_elemental_sup => {
+                None
+            }
+            (Elemental, false) => Some(ActionResult::Buff),
         },
-        (ToEnemy, _, true) => match magic_type {
-            Death | Life => {
-                apply_magic_curse_indexed(me, target, armies, &damage, magic_type, registry)
-                    .or_else(|| {
-                        let mut dmg = damage;
-                        dmg.hand = 0; dmg.ranged = 0;
-                        being_attacked_indexed(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
-                        Some(ActionResult::Melee)
-                    })
-            },
-            Elemental => {
-                apply_elemental_curse_indexed(me, target, armies, &damage, magic_type, registry)
-                    .or_else(|| {
-                        let mut dmg = damage;
-                        dmg.hand = 0; dmg.ranged = 0;
-                        being_attacked_indexed(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
-                        Some(ActionResult::Debuff)
-                    })
-            },
-        },
-        (CurseOnly, _, true) => match magic_type {
-            Death | Life => apply_magic_curse_indexed(me, target, armies, &damage, magic_type, registry),
-            Elemental => apply_elemental_curse_indexed(me, target, armies, &damage, magic_type, registry),
-        },
-        (StrikeOnly, _, true) => {
-            let mut dmg = damage;
-            dmg.hand = 0; dmg.ranged = 0;
-            being_attacked_indexed(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
-            Some(ActionResult::Debuff)
-        },
+		(ToEnemy, _, true) if is_cursed => Some(ActionResult::MagicDamage),
+        (ToEnemy, _, true) => Some(ActionResult::Debuff),
+        (CurseOnly, _, true) if !is_cursed => Some(ActionResult::Debuff),
+        (StrikeOnly, _, true) => Some(ActionResult::MagicDamage),
         (BlessOnly, _, false) => match magic_type {
-            Life | Death => {
-                let mut t = armies[target.army].troops[target.index].get();
-                bless_unit(&mut t.unit, damage, magic_type, target_unit_type, registry)
+            Life | Death => match (target_info_data.unit_type, magic_type) {
+                (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
+                (UnitType::Undead, Life) => None,
+                (UnitType::Mecha, Death | Life) => None,
+                _ if is_blessed => None,
+                _ => Some(ActionResult::Buff),
             },
-            Elemental => {
-                let mut t = armies[target.army].troops[target.index].get();
-                elemental_bless(&mut t.unit, damage, target_unit_type, target_magic_type, registry)
-            },
+            Elemental if has_elemental_sup => None,
+            Elemental => Some(ActionResult::Buff),
         },
-        (CureOnly, Life | Death, false) => {
-            let mut t = armies[target.army].troops[target.index].get();
-            heal_unit(&mut t.unit, damage, magic_type, target_unit_type)
+        (CureOnly, _, false) => match (target_info_data.unit_type, magic_type) {
+            (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
+            (UnitType::Undead, Life) => None,
+            (UnitType::Mecha, Death | Life) => None,
+            // Невозможно лечить полного (в can_attack была инвертированная опечатка).
+            _ if t.unit.hp >= t.unit.modified.max_hp => None,
+            _ => Some(ActionResult::Buff),
         },
         _ => None,
+    }
+}
+
+/// Исполнитель эффектов интеракции: читает info юнитов сам, решает урон/магию.
+/// Возвращает нанесённый урон (0 для Buff/Debuff без урона).
+pub fn apply_attack(
+    effects: ActionResult, me: BattleUnit, target: BattleUnit,
+    armies: &mut Vec<Army>, battle: &BattleInfo, registry: &GameInfo,
+) -> u64 {
+    let (my_pos, target_pos, my_modified, my_info) = {
+        let m = armies[me.army].troops[me.index].get();
+        let t = armies[target.army].troops[target.index].get();
+        (m.pos, t.pos, m.unit.modified, m.unit.get_info(&registry.units).clone())
+    };
+    let target_hitmap = armies[target.army].hitmap.clone();
+    let damage = my_modified.damage;
+
+    match effects {
+        ActionResult::Melee => {
+            let mut dmg = damage;
+            dmg.ranged = 0; dmg.magic = 0;
+            being_attacked(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry)
+        }
+        ActionResult::Ranged => {
+            let mut dmg = damage;
+            dmg.hand = 0; dmg.magic = 0;
+            being_attacked(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry)
+        }
+        ActionResult::MagicDamage => {
+            let mut dmg = damage;
+            dmg.hand = 0; dmg.ranged = 0;
+            being_attacked(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry)
+        }
+        ActionResult::Debuff => {
+            let Some(magic_type) = my_info.magic_type else { return 0; };
+            let curse = match magic_type {
+                Death | Life => apply_magic_curse_indexed(me, target, armies, &damage, magic_type, registry),
+                Elemental => apply_elemental_curse_indexed(me, target, armies, &damage, magic_type, registry),
+            };
+            if curse.is_none() {
+                // Фоллбек оригинального attack: проклятие не легло — чистый магический урон.
+                let mut dmg = damage;
+                dmg.hand = 0; dmg.ranged = 0;
+                return being_attacked(target, me, &dmg, my_pos, &target_hitmap, target_pos, armies, battle, registry);
+            }
+            0
+        }
+        ActionResult::Buff => {
+            let Some(magic_type) = my_info.magic_type else { return 0; };
+            let (target_unit_type, target_magic_type) = {
+                let t = armies[target.army].troops[target.index].get();
+                let info = t.unit.get_info(&registry.units);
+                (info.unit_type, info.magic_type)
+            };
+            let mut t = armies[target.army].troops[target.index].get();
+            let unit = &mut t.unit;
+            match my_info.magic_direction {
+                BlessOnly => match magic_type {
+                    Life | Death => { bless_unit(unit, damage, magic_type, target_unit_type, registry); }
+                    Elemental => { elemental_bless(unit, damage, target_unit_type, target_magic_type, registry); }
+                },
+                CureOnly => { heal_unit(unit, damage, magic_type, target_unit_type); }
+                ToAlly | ToAll => match magic_type {
+                    Death | Life => { heal_bless(unit, damage, magic_type, target_unit_type, registry); }
+                    Elemental => { elemental_bless(unit, damage, target_unit_type, target_magic_type, registry); }
+                },
+                _ => {}
+            }
+            0
+        }
+        ActionResult::Move => 0,
     }
 }
 
@@ -781,10 +845,12 @@ fn is_path_empty(hitmap: &HitMap, my_pos: UnitPos, target_pos: UnitPos, columns:
         .all(|x| hitmap[x].is_none() || field_type(x, max_troops) == Field::Reserve)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ActionResult {
     Buff,
     Debuff,
+    /// Магическая атака, наносящая урон (StrikeOnly/уроновый фоллбек). Не Debuff.
+    MagicDamage,
     Melee,
     Ranged,
     Move,
@@ -817,131 +883,6 @@ impl Unit {
 			..Default::default()
         };
         unit
-    }
-    pub fn can_attack(
-        &self,
-        target: &Unit,
-        target_pos: UnitPos,
-        my_pos: UnitPos,
-        is_enemy: bool,
-        target_hitmap: &Vec<Option<usize>>,
-		registry: &GameInfo,
-		columns: usize,
-		max_troops: usize,
-    ) -> bool {
-        let effected = self.modified;
-        let my_field = field_type(my_pos.whole(columns), max_troops);
-        let is_in_back = my_field == Field::Back;
-        let enemy_field = field_type(target_pos.whole(columns), max_troops);
-        let mut damage = effected.damage;
-        let enemy_in_reserve = enemy_field == Field::Reserve;
-        let me_in_reserve = my_field == Field::Reserve;
-        let both_in_reserve = me_in_reserve && enemy_in_reserve;
-        let both_not_in_reserve = !me_in_reserve && !enemy_in_reserve;
-
-        let can_reserve = me_in_reserve && self.settings.attacks_from_reserve;
-        let allies_together = (both_in_reserve || both_not_in_reserve) && !is_enemy;
-        let field_checks = allies_together || !enemy_in_reserve && (!me_in_reserve || can_reserve);
-
-        let is_path_empty = is_path_empty(target_hitmap, my_pos, target_pos, columns);
-        let is_front_empty = is_front_empty(target_hitmap, my_pos, columns);
-        let dist = target_pos.0.abs_diff(my_pos.0);
-
-		let my_info = self.get_info(&registry.units);
-		let target_info = target.get_info(&registry.units);
-		
-		if !field_checks {
-            return false;
-        }
-        if damage.ranged > 0
-            && ((enemy_field == Field::Front && (dist < 2 || is_path_empty))
-                || enemy_field == Field::Back && is_front_empty
-                || is_in_back
-                || can_reserve)
-            && is_enemy
-        {
-            true
-        } else if (damage.hand > 0 && !is_in_back && is_enemy && enemy_field == Field::Front)
-            && (is_path_empty || dist < 2)
-        {
-            true
-        } else {
-            if !((enemy_field == Field::Front && is_path_empty && dist > 1)
-                || (enemy_field == Field::Back && is_front_empty)
-                || is_in_back
-                || can_reserve
-                || (!is_enemy
-                    && (allies_together || can_reserve)
-                    && matches!(
-                        my_info.magic_direction,
-						ToAll | ToAlly | CureOnly | BlessOnly)
-					&& my_info.magic_type.is_some()
-                    ))
-            {
-                return false;
-            }
-            match my_info.magic_type {
-                None => false,
-                Some(magic_type) => {
-                    match (my_info.magic_direction, magic_type, is_enemy) {
-                        (ToAlly, _, false) => match magic_type {
-                            Death | Life => match (target_info.unit_type, magic_type) {
-                                (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => {
-                                    false
-                                }
-                                (UnitType::Undead, Life) => false,
-                                _ => !target.has_effect_kind("mage_support", &registry.effects),
-                            },
-                            Elemental => !target.has_effect_kind("elemental_support", &registry.effects),
-                        },
-                        (ToAll, _, _) => match (magic_type, is_enemy) {
-                            (Death | Life, true) => true,
-                            (Death | Life, false) => match (target_info.unit_type, magic_type) {
-                                (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => {
-                                    false
-                                }
-                                (UnitType::Undead, Life) => false,
-                                (UnitType::Mecha, Death | Life) => false,
-                                _ => !target.has_effect_kind("mage_support", &registry.effects),
-                            },
-                            (Elemental, true) => true,
-                            (Elemental, false) => !target.has_effect_kind("elemental_support", &registry.effects),
-                        },
-                        (ToEnemy, _, true) => match magic_type {
-                            Death | Life => true,
-                            Elemental => true,
-                        },
-                        (CurseOnly, _, true) => match magic_type {
-                            Death | Life => true,
-                            Elemental => true,
-                        },
-                        (StrikeOnly, _, true) => true,
-                        (BlessOnly, _, false) => match magic_type {
-                            Life | Death => match (target_info.unit_type, magic_type) {
-                                (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => {
-                                    false
-                                }
-                                (UnitType::Undead, Life) => false,
-                                (UnitType::Mecha, Death | Life) => false,
-                                _ => !target.has_effect_kind("mage_support", &registry.effects),
-                            },
-                            Elemental => !target.has_effect_kind("elemental_support", &registry.effects),
-                        },
-                        (CureOnly, Life | Death, false) => {
-                            match (target_info.unit_type, magic_type) {
-                                (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => {
-                                    false
-                                }
-                                (UnitType::Undead, Life) => false,
-                                (UnitType::Mecha, Death | Life) => false,
-                                _ => !target.hp >= target.modified.max_hp,
-                            }
-                        }
-                        _ => false,
-                    }
-                }
-            }
-        }
     }
 
     pub fn restore(&mut self) {
@@ -987,27 +928,29 @@ impl Unit {
 	
     pub fn add_effect(&mut self, add: StatusEffect, registry: &GameInfo) -> bool {
 		let mut effect = self.get_effect_by_id(add.id);
-		if effect.is_none() {
-			self.effects.push(add.clone());
-			effect = self.effects.last_mut();
-		}
-		let Some(effect) = effect else { return false; }; 
-		let effect_info = &registry.effects[effect.id];
-		if !effect_info.stacks {
-			return false;
-		}
-		let old_power = effect.get_power(effect_info);
-		if effect_info.power_scales {
-			effect.power += add.power;
-		}
-		if let Some(lifetime) = &mut effect.lifetime.lifetime {
-			*lifetime += add.lifetime.lifetime.unwrap_or(0);
-		}
-		let new_power = effect.get_power(effect_info);
-		if old_power != new_power {
-			if let Some(added_modify) = effect.added_modify {
-				self.modify -= added_modify;
-				self.modify += added_modify / old_power * new_power;
+		if let Some(effect) = effect {
+			let effect_info = &registry.effects[effect.id];
+			if !effect_info.stacks {
+				return false;
+			}
+			let old_power = effect.get_power(effect_info);
+			if effect_info.power_scales {
+				effect.power += add.power;
+			}
+			if let Some(lifetime) = &mut effect.lifetime.lifetime {
+				*lifetime += add.lifetime.lifetime.unwrap_or(0);
+			}
+			let new_power = effect.get_power(effect_info);
+			if old_power != new_power {
+				if let Some(added_modify) = effect.added_modify {
+					self.modify -= added_modify;
+					self.modify += added_modify / old_power * new_power;
+				}
+			}
+		} else {
+			if effect.is_none() {
+				self.effects.push(add.clone());
+				effect = self.effects.last_mut();
 			}
 		}
 		true

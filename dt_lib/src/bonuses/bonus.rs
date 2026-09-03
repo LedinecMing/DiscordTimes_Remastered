@@ -396,13 +396,15 @@ impl Mechanic {
 		
 		// Phase 4: resolve attacks (me vs each target)
 		for target_bu in &attacks_to_do {
-			unit::attack_indexed(
+			let effects = unit::attack(
 				BattleUnit { army: army1_idx, index: my_index }, 
 				*target_bu,
 				armies,
-				battle_info, 
 				registry
 			);
+			if let Some(effects) = effects {
+				unit::apply_attack(effects, BattleUnit { army: army1_idx, index: my_index }, *target_bu, armies, battle_info, registry);
+			}
 		}
 		res_modify
 	}

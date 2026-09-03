@@ -142,7 +142,6 @@ impl BattleInfo {
         battle
     }
     pub fn start(&mut self, armies: &mut Vec<Army>, registry: &GameInfo) {
-        dbg!("Battle start!");
         // Process army1: collect all data first, then apply_rules
         let bonuses_and_pos1: Vec<_> = (0..armies[self.army1].troops.len()).map(|index| {
             let mut t = armies[self.army1].troops[index].get();
@@ -383,54 +382,40 @@ pub fn search_interactions(
         active_unit: BattleUnit,
         active_troops: &Vec<TroopType>,
         troops: &Vec<TroopType>,
-        hitmap: &HitMap,
+        armies: &Vec<Army>,
         army: usize,
         active_pos: usize,
         can_interact: &mut Vec<BattleUnitPos>,
 		registry: &GameInfo,
 		columns: usize,
     ) {
-        can_interact.append(
-            &mut troops
-                .iter()
-                .enumerate()
-                .map(|(i, troop)| {
-                    if i == active_unit.index && active_unit.army == army {
-                        return Some(BattleUnitPos {
-                            army,
-                            pos: active_pos,
-                        });
-                    }
-                    let troop = &troop.get();
-                    let pos = troop.pos.whole(columns);
-                    let unit = &troop.unit;
-                    let active_troop = &active_troops[active_unit.index].get();
-                    let active_unit_unit = &active_troop.unit;
-                    let is_enemy = active_unit.army != army;
-                    if active_unit_unit.can_attack(
-                        unit,
-                        troop.pos,
-                        active_troop.pos,
-                        is_enemy,
-                        hitmap,
-						registry,
-						columns,
-						columns * 2,
-                    ) {
-                        Some(BattleUnitPos { army, pos })
-                    } else {
-                        None
-                    }
-                })
-                .filter_map(|e| e.and_then(|v| Some(v)))
-                .collect(),
-        );
+        // Снапшот позиций короткими guard'ами: attack внутри захватывает те же
+        // SendMut-мьютексы — держать guard во время вызова = дедлок.
+        let entries: Vec<(usize, usize)> = troops
+            .iter()
+            .enumerate()
+            .map(|(i, troop)| (i, troop.get().pos.whole(columns)))
+            .collect();
+        for (i, pos) in entries {
+            if i == active_unit.index && active_unit.army == army {
+                can_interact.push(BattleUnitPos {
+                    army,
+                    pos: active_pos,
+                });
+                continue;
+            }
+            let me = BattleUnit { army: active_unit.army, index: active_unit.index };
+            let target = BattleUnit { army, index: i };
+            if unit::attack(me, target, armies, registry).is_some() {
+                can_interact.push(BattleUnitPos { army, pos });
+            }
+        }
     }
     collect_interactions(
         active_unit,
         active_troops,
         troops1,
-        &army1.hitmap,
+        armies,
         battle.army1,
         active_pos,
         &mut can_interact,
@@ -441,7 +426,7 @@ pub fn search_interactions(
         active_unit,
         active_troops,
         troops2,
-        &army2.hitmap,
+        armies,
         battle.army2,
         active_pos,
         &mut can_interact,
@@ -648,13 +633,16 @@ pub(crate) fn unit_interaction(
     let mut action_result = None;
 
     let Some(active_unit) = battle.active_unit else {
+		dbg!("No active unit in battle");
         return None;
     };
     let Some(pos) = info.pos(&armies[army].hitmap) else {
+		dbg!("Cant find unit position");
         return None;
     };
     // move unit
     let Some(target_index) = info.index(&armies[army].hitmap) else {
+		dbg!("No unit found at position, trying to move");
         let army_index = if active_unit.army == battle.army1 {
             0
         } else {
@@ -696,12 +684,14 @@ pub(crate) fn unit_interaction(
             troop.pos = npos;
             return Some(ActionResult::Move);
         } else {
+			dbg!("Trying to move to enemy square");
             return None;
         }
     };
 
     // skip move (same unit clicked)
     if active_unit.army == army && target_index == active_unit.index {
+		dbg!("Skipping move");
         {
             let mut t = armies[active_unit.army].troops[active_unit.index].get();
             let unit = &mut t.unit;
@@ -721,14 +711,17 @@ pub(crate) fn unit_interaction(
             unit.moves -= 1;
         }
     } else {
-        // Attack action: use index-based attack
+		dbg!("Trying to attack");
+        // Attack action: чистый attack -> исполнитель эффектов
         let me = BattleUnit { army: active_unit.army, index: active_unit.index };
         let target = BattleUnit { army, index: target_index };
-        action_result = unit::attack_indexed(me, target, armies, battle, registry);
+        let effects = unit::attack(me, target, armies, registry);
         // Decrease moves
-        if action_result.is_some() {
+        if let Some(effects) = effects {
+            unit::apply_attack(effects, me, target, armies, battle, registry);
             let mut t = armies[me.army].troops[me.index].get();
             t.unit.moves -= 1;
+            action_result = Some(effects);
         }
     }
     action_result
@@ -742,6 +735,7 @@ pub fn handle_action(
 	registry: &GameInfo,
 ) -> Option<(ActionResult, BattleUnit)> {
     if let Some(_) = battle.winner {
+		dbg!("Battle is ended");
         return None;
     }
     let active = battle.active_unit;

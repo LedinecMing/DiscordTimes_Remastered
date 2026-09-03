@@ -2,18 +2,20 @@ use crate::{
     battle::{
         Army, ArmyStats, BattleInfo, BattleUnit, BattleUnitInfo,
         Field, TroopType,
-        battlefield::{field_type, possible_movement, unit_interaction, check_win},
+        battlefield::{field_type, possible_movement, unit_interaction, check_win,
+                      handle_action, search_interactions, BattleUnitPos},
         troop::Troop, control::Control,
     },
     registry::GameInfo,
     units::{
         unit::{AttackSettings, LevelUpInfo, MagicDirection, MagicType, Power, Unit, UnitInfo,
                UnitInventory, UnitLvl, UnitPos, UnitStats, UnitType, ActionResult, Defence,
-               attack_indexed},
+               attack},
         unitstats::{ModifyUnitStats, Modify, ModifyPower},
     },
     items::item::{Item, ItemInfo, ArtifactType, WeaponType, MagicVariants},
     bonuses::BonusInfo,
+    effects::{EffectInfo, EffectLifetime},
 };
 use rand::prelude::IteratorRandom;
 use rand::thread_rng;
@@ -101,6 +103,56 @@ fn make_test_registry() -> GameInfo {
         lvl: LevelUpInfo::default(),
     });
 
+    // Эффекты, нужные боевым веткам: add_modify_effect пишет id 2 (mage_curse).
+	registry.effects.inner.push(EffectInfo {
+        id: "internal".into(),
+        name: "internal".into(),
+        desc: "".into(),
+        kind: "internal".into(),
+        lifetime: EffectLifetime::default(),
+        stacks: true,
+        added_modify: Default::default(),
+        rules: Default::default(),
+        power_scales: false,
+        power_scales_with_lifetime: false,
+    });
+
+    registry.effects.inner.push(EffectInfo {
+        id: "mage_support".into(),
+        name: "Mage Support".into(),
+        desc: "".into(),
+        kind: "mage_support".into(),
+        lifetime: EffectLifetime::default(),
+        stacks: true,
+        added_modify: Default::default(),
+        rules: Default::default(),
+        power_scales: false,
+        power_scales_with_lifetime: false,
+    });
+    registry.effects.inner.push(EffectInfo {
+        id: "mage_curse".into(),
+        name: "Mage Curse".into(),
+        desc: "".into(),
+        kind: "mage_curse".into(),
+        lifetime: EffectLifetime::default(),
+        stacks: false,
+        added_modify: Default::default(),
+        rules: Default::default(),
+        power_scales: false,
+        power_scales_with_lifetime: false,
+    });
+	registry.effects.inner.push(EffectInfo {
+        id: "elemental_support".into(),
+        name: "Elemental Support".into(),
+        desc: "".into(),
+        kind: "elemental_support".into(),
+        lifetime: EffectLifetime::default(),
+        stacks: true,
+        added_modify: Default::default(),
+        rules: Default::default(),
+        power_scales: false,
+        power_scales_with_lifetime: false,
+    });
     registry
 }
 
@@ -148,7 +200,9 @@ fn perform_attack(
         ],
         ..Default::default()
     };
-    attack_indexed(attacker, target, armies, &battle_info, registry)
+    let effects = attack(attacker, target, armies, registry)?;
+    crate::units::unit::apply_attack(effects, attacker, target, armies, &battle_info, registry);
+    Some(effects)
 }
 
 /// Create a generic unit struct with given parameters, used for non‑army tests.
@@ -457,13 +511,13 @@ fn magic_all_targets_enemy() {
     let army1 = make_army_from_ids(&registry, &[(22, 1)]);
     let army2 = make_army_from_ids(&registry, &[(0, 8)]);
     let armies = vec![army1, army2];
-    let mage = &armies[0].troops[0].get();
-    let target = &armies[1].troops[0].get();
-    let can_target = mage.unit.can_attack(
-        &target.unit, target.pos, mage.pos, true,
-        &armies[0].hitmap, &registry, 6, 12,
+    // Guard'ы troops не держим: attack захватывает те же мьютексы (SendMut).
+    let can_target = attack(
+        BattleUnit { army: 0, index: 0 },
+        BattleUnit { army: 1, index: 0 },
+        &armies, &registry,
     );
-    assert!(can_target, "ToAll mage should be able to target enemy");
+    assert!(can_target.is_some(), "ToAll mage should be able to target enemy");
 }
 
 #[test]
@@ -729,3 +783,120 @@ fn large_damage_kills_target() {
     perform_attack(&registry, &mut armies, BattleUnit { army: 0, index: 0 }, BattleUnit { army: 1, index: 0 });
     assert_eq!(armies[1].troops[0].get().unit.hp, 0, "Massive damage should kill target");
 }
+
+    // =====================
+    // MAGE FULL INTERACTION PATH (handle_action)
+    // =====================
+
+    fn battle_with_active(armies: &Vec<Army>, active: BattleUnit, registry: &GameInfo) -> BattleInfo {
+        let mut battle = BattleInfo {
+            army1: 0,
+            army2: 1,
+            armies_moved: [
+                vec![false; armies[0].max_troops],
+                vec![false; armies[1].max_troops],
+            ],
+            ..Default::default()
+        };
+        battle.active_unit = Some(active);
+        battle.can_interact = Some(search_interactions(&mut battle, active, armies, registry));
+        battle
+    }
+
+    #[test]
+    fn mage_debuffs_enemy_via_handle_action() {
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(22, 1)]); // death mage, back
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]); // enemy
+        let mut armies = vec![army1, army2];
+        let active = BattleUnit { army: 0, index: 0 };
+        let mut battle = battle_with_active(&armies, active, &registry);
+		armies[0].troops[0].get().unit.moves = 2;
+		armies[1].troops[0].get().unit.moves = 2;
+        // can_interact должен покрывать врага (иначе UI не рисует цель)
+        assert!(
+            battle
+                .can_interact
+                .as_ref()
+                .unwrap()
+                .contains(&BattleUnitPos { army: 1, pos: 8 }),
+            "can_interact must contain enemy pos 8 for ToAll death mage"
+        );
+
+        let before = armies[1].troops[0].get().unit.hp;
+        let effects = handle_action((8, 1), &mut battle, &mut armies, &registry);
+        assert_eq!(effects.map(|(r, _)| r), Some(ActionResult::Debuff));
+		
+        let after = armies[1].troops[0].get().unit.hp;
+        assert!(before == after, "enemy should NOT take magic damage ({} -> {})", before, after);
+		// Should have a curse effect
+		assert!(armies[1].troops[0].get().unit.effects.len() > 0);
+		// Second time - should strike
+		battle.active_unit = Some(active);
+		dbg!(&armies[1].troops[0].get().unit.effects);
+		let effects = handle_action((8, 1), &mut battle, &mut armies, &registry);
+		assert_eq!(effects.map(|(r, _)| r), Some(ActionResult::MagicDamage));
+		let after = armies[1].troops[0].get().unit.hp;
+        assert!(before > after, "enemy should take magic damage ({} -> {})", before, after);
+    }
+
+    #[test]
+    fn mage_heals_undead_ally_via_handle_action() {
+        let registry = make_test_registry();
+        // Death-маг лечит (necromancy) Undead-союзника
+        let army1 = make_army_from_ids(&registry, &[(22, 1), (1, 0)]);
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+        {
+            let mut ally = army1.troops[1].get();
+            ally.unit.hp = 10; // ранен
+        }
+        let mut armies = vec![army1, army2];
+        let active = BattleUnit { army: 0, index: 0 };
+        let mut battle = battle_with_active(&armies, active, &registry);
+
+        assert!(
+            battle
+                .can_interact
+                .as_ref()
+                .unwrap()
+                .contains(&BattleUnitPos { army: 0, pos: 0 }),
+            "can_interact must contain wounded undead ally pos 0"
+        );
+
+        let before = armies[1 - 1].troops[1].get().unit.hp;
+        let effects = handle_action((0, 0), &mut battle, &mut armies, &registry);
+        assert_eq!(effects.map(|(r, _)| r), Some(ActionResult::Buff));
+        let after = armies[0].troops[1].get().unit.hp;
+        assert!(after > before, "undead ally must be healed ({} -> {})", before, after);
+    }
+
+    #[test]
+    fn mage_cannot_death_heal_people_ally() {
+        let registry = make_test_registry();
+        // Death-маг + People-союзник: can_attack запрещает, интеракция = None
+        let army1 = make_army_from_ids(&registry, &[(22, 1), (0, 0)]);
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+        {
+            let mut ally = army1.troops[1].get();
+            ally.unit.hp = 10;
+        }
+        let mut armies = vec![army1, army2];
+        let active = BattleUnit { army: 0, index: 0 };
+        let mut battle = battle_with_active(&armies, active, &registry);
+
+        assert!(
+            !battle
+                .can_interact
+                .as_ref()
+                .unwrap()
+                .contains(&BattleUnitPos { army: 0, pos: 0 }),
+            "death mage must NOT target people ally"
+        );
+
+        let before = armies[0].troops[1].get().unit.hp;
+        let effects = handle_action((0, 0), &mut battle, &mut armies, &registry);
+        assert!(effects.is_none(), "invalid ally target must yield no action");
+        let after = armies[0].troops[1].get().unit.hp;
+        assert_eq!(after, before, "ally hp must be unchanged");
+    }
+

@@ -221,13 +221,11 @@ fn process_message(
 ) -> Result<AWsMessage, InstanceError> {
     let message = match message {
         Ok(m) => m,
-        Err(err) => {
-            dbg!(err);
+        Err(_err) => {
             return Err(InstanceError::Fatal);
         }
     };
     if let AWsMessage::Close(_) = message {
-        dbg!("I close");
         return Err(InstanceError::Fatal);
     }
     let action = deserialize::<Incoming, Incoming>(&message.into_data());
@@ -298,7 +296,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let app = Router::new()
         .route("/ws", axum::routing::any(ws_handler))
         .with_state(state);
-    let port = dbg!(PORT.load(Ordering::Acquire));
+    let port = PORT.load(Ordering::Acquire);
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     let server = tokio::spawn(async {
         axum::serve(
@@ -372,7 +370,6 @@ async fn handle_socket(
         let buf = serialize_gamemap(&instance.armies, &instance.battle);
         socket.send(buf).await;
         if let Some(Some((Some(sock), None))) = instance.hotel.lock().await.0.get_mut(&room_code) {
-            dbg!("Second player");
             socket
                 .send(AWsMessage::Text("Room full".into()))
                 .await
@@ -389,7 +386,6 @@ async fn handle_socket(
                 return;
             }
         } else {
-            dbg!("First player");
             let mut buf = vec![];
             serialize_to_vec::<Outcoming, Outcoming>(Outcoming::Id(0), &mut buf);
             if socket.send(AWsMessage::Binary(buf.into())).await.is_ok() {

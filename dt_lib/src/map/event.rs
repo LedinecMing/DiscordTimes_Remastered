@@ -448,7 +448,7 @@ pub fn execute_event_as_player(
 		.is_none_or(|req| req.iter().all(|&x| false)))
 		// TODO power check
         && (conds.power_req.as_ref().is_none_or(|req| true))
-        && (!conds.hero_has_1_hp || player_army.troops[0].get().unit.modified.hp == 1)
+        && (!conds.hero_has_1_hp || player_army.troops[0].get().unit.hp == 1)
 		&& (conds
 			.items_check
 			.as_ref()

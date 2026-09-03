@@ -491,11 +491,11 @@ impl ConnectionManager {
                 let ClientConnection { client, transport } = client;
                 client.update(duration);
                 if let Err(e) = transport.update(duration, client) {
-                    dbg!(e);
+                    _ = e;
                 }
 
                 if let Some(e) = client.disconnect_reason() {
-                    dbg!(e);
+                    _ = e;
                 }
                 while let Some(message) = client.receive_message(DefaultChannel::ReliableOrdered) {
                     let message: ServerMessage =
@@ -526,7 +526,7 @@ impl ConnectionManager {
                     &mut self.events,
 					registry
                 ) {
-                    dbg!(e);
+                    _ = e;
                 };
             }
         }

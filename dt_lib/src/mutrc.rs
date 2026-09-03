@@ -92,7 +92,21 @@ where
         }
     }
     pub fn get(&self) -> MutexGuard<'_, T> {
-        self.inner.lock().unwrap()
+        // Дедлок -> громкая паника с бэктрейсом вместо тихого зависания:
+        // двойной .get() на одну troops-ячейку виден сразу по стеку.
+        let start = std::time::Instant::now();
+        loop {
+            match self.inner.try_lock() {
+                Ok(guard) => return guard,
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if start.elapsed() > std::time::Duration::from_secs(5) {
+                        panic!("SendMut deadlock: lock held >5s (duplicate lock on same troop)");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(std::sync::TryLockError::Poisoned(e)) => return e.into_inner(),
+            }
+        }
     }
     pub fn clone(&self) -> Self {
         self.inner.clone().into()

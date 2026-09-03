@@ -53,7 +53,6 @@ fn parse_mod_info(entry: Result<DirEntry, Error>) -> io::Result<ModInfo> {
 fn parse_mods() -> io::Result<Vec<ModInfo>> {
     let mut mods = Vec::new();
     for entry in fs::read_dir("./mods/")? {
-        dbg!(&entry);
         if let Ok(mod_info) = parse_mod_info(entry) {
             mods.push(mod_info);
         }
@@ -63,7 +62,6 @@ fn parse_mods() -> io::Result<Vec<ModInfo>> {
 fn parse_maps() -> io::Result<Vec<MapInfo>> {
     let mut maps = Vec::new();
     for entry in fs::read_dir("./maps/")? {
-        dbg!(&entry);
         let entry = entry?;
         if entry.file_type()?.is_file() && entry.path().ends_with(".DTm") {
             maps.push(MapInfo {

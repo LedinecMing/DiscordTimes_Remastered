@@ -59,5 +59,4 @@ mod tests {
 }
 
 fn main() {
-	println!("helo");
 }

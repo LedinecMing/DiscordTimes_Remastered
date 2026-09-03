@@ -475,15 +475,10 @@ pub fn parse_dtm_map_by_bytes(mut buf: Bytes) -> Result<MapData, ()> {
         BzDecoder::new(compressed_buf.as_slice()).read_to_end(&mut uncompressed_buf);
         Bytes::from(uncompressed_buf)
     } else {
-        println!(
-            "{:x?}; {:x?}",
-            header_buf_start, b"\x41\x49\x70\x66\x0D\x0A\x13\x00"
-        );
-        println!("{:x?}; {:x?}", bzip_buf, b"\x42\x5A\x68\x39");
         compressed = false;
         buf
     };
-    let file_size = dbg!(data.remaining());
+    let file_size = data.remaining();
     let mut header_buf = data.copy_to_bytes(12);
     if compressed
         && header_buf != Bytes::from_static(b"\x4D\x61\x70\x4C\x44\x56\x20\x56\x2E\x34\x0D\x0A")
@@ -494,7 +489,7 @@ pub fn parse_dtm_map_by_bytes(mut buf: Bytes) -> Result<MapData, ()> {
     let settings = SettingsData::read_from_bytes(&bytes.as_bytes()).unwrap();
     let current_offset = file_size - data.remaining();
     let data_offset = 0x12F - 0xC - 0x8 - 0x4 * 0x6;
-    println!("0x{:X?};0x{:X?}", current_offset, data_offset);
+
     data.advance(0x12F - current_offset);
     let mut surface_data = data.copy_to_bytes(settings.surface_size as usize);
     let mut objects_data = data.copy_to_bytes(settings.deco_size as usize);
@@ -503,7 +498,6 @@ pub fn parse_dtm_map_by_bytes(mut buf: Bytes) -> Result<MapData, ()> {
     let mut lanterns_data = data.copy_to_bytes(settings.lanterns_size as usize);
     let mut events_data = data.copy_to_bytes(settings.events_size as usize);
     let mut texts_data = data;
-    dbg!(surface_data.remaining());
     fn parse_by_2_bytes(mut bytes: Bytes) -> Vec<u8> {
         let mut map = vec![];
         while !&bytes.is_empty() {
@@ -554,13 +548,7 @@ pub fn parse_dtm_map_by_bytes(mut buf: Bytes) -> Result<MapData, ()> {
         }
         const TEXT_SECTION_START: [u8; 8] = *b"\x08>-Text-";
         let section = bytes.copy_to_bytes(TEXT_SECTION_START.len());
-        if section.as_bytes() != TEXT_SECTION_START {
-            println!(
-                "Wrong text section start {:?} {:?}",
-                section.as_bytes(),
-                str::from_utf8(section.as_bytes())
-            );
-        }
+        // wrong text section start; keep silent
         let mut text_buffer = vec![];
         loop {
             let buf = copy_until(bytes, 1, &[0]);
@@ -711,7 +699,6 @@ impl FromDtm<'_> for Event {
             3 => Location::Quest,
             4 => Location::Talks,
             _ => {
-                dbg!(from.event_type, id);
                 Location::Global
             }
         };

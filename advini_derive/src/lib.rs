@@ -185,7 +185,6 @@ fn trait_body(data: &Data, ident: &Ident) -> (TokenStream, TokenStream, TokenStr
 								}
 							},
                             _ => {
-								dbg!(attr);
 								unimplemented!()
 							},
                         }

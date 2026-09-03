@@ -1,0 +1,43 @@
+[package]
+name = "wgpu_ui"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+dt_lib = { path = "../dt_lib/" }
+dt_client = { path = "../dt_client" }
+ahash = "0.8.11"
+tokio = { version = "*", features = ["sync", "rt", "rt-multi-thread", "process", "macros", "fs", "time"] }
+futures-util = "*"
+wgpu = "30"
+winit = "0.30"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+fontdue = "0.9"
+bytemuck = { version = "1.16", features = ["derive"] }
+pollster = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+
+# Android packaging metadata (cargo-apk format, mirrors quad_ui)
+[package.metadata.android]
+res = "../dt/android_pack/android/res/"
+icon = "@mipmap/ic_launcher"
+assets = "../dt/android_pack/"
+build_targets = [ "aarch64-linux-android", "armv7-linux-androideabi", "i686-linux-android", "x86_64-linux-android" ]
+fullscreen = true
+label = "Discord Times PVP"
+
+[package.metadata.android.application]
+icon = "@mipmap/ic_launcher"
+label = "Discord Times PVP"
+
+[package.metadata.android.activity_attributes]
+"android:exported" = "true"
+"android:screenOrientation" = "userLandscape"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"

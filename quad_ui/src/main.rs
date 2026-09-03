@@ -104,6 +104,7 @@ struct State {
     pub ui: Ui,
 	pub delta: f32,
     pub rt: Runtime,
+    pub tile_pixels: Vec<Image>,
 }
 async fn load_assets(
     req_assets_list: &[(&str, Vec<String>)],
@@ -156,7 +157,6 @@ async fn load_map(map: &str, registry: &GameInfo) -> (GameMap, Events) {
                 .and_modify(|x: &mut usize| x.add_assign(1))
                 .or_insert(1usize);
         }
-        dbg!(count);
         export(&events, "events.ini");
     }
     if gamemap.armys.len() == 0 {
@@ -183,7 +183,6 @@ async fn game_init() -> State {
     {
         locale.set_lang((&settings.locale, &settings.additional_locale));
         parse_locale::<QuadFiles>(&[&settings.locale, &settings.additional_locale], &mut locale).await;
-        dbg!(locale.keys_lack());
     }
 	registry.locale = locale;
 	parse_bonuses::<QuadFiles>(None, &mut registry).await;
@@ -213,7 +212,6 @@ async fn game_init() -> State {
         let Ok(req_assets_units) = res else {
             panic!("Unit parsing error")
         };
-		dbg!(&req_assets_units);
         let req_assets_objects = parse_objects::<QuadFiles>(&mut registry).await;
         // let req_assets_tiles = (
         //     "assets/Terrain",
@@ -322,6 +320,11 @@ async fn game_init() -> State {
         ];
         load_assets(&req_assets_list, fonts).await
     };
+    // Снимок тайлов пикселя в пиксель, пока текстуры ещё не в атласе (до build_textures_atlas).
+    let tile_pixels = TILES
+        .iter()
+        .map(|tile| assets.get(&tile.sprite().to_string()).get_texture_data())
+        .collect::<Vec<_>>();
     let map = "Stinger-Paramount_War_HARD.dtm";
     let (mut gamemap, mut events) = load_map(map, &registry).await;
     let mut executor = Executor {
@@ -337,8 +340,6 @@ async fn game_init() -> State {
         }],
     };
     executor.tick(&registry);
-    dbg!(&executor.execution_queue);
-    dbg!(&executor.players[0].execution_queue);
     //let (mut gamemap, events) = parse_story(
     //     units!(),
     //     objects!(),
@@ -378,6 +379,7 @@ async fn game_init() -> State {
             stack: Vec::new(),
         },
         game,
+        tile_pixels,
     }
 }
 #[derive(Debug)]
@@ -457,6 +459,33 @@ fn window_conf() -> Conf {
         ..Default::default()
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BlendMode {
+    Off,
+    Edges,
+    EdgesStrong,
+    Rounded,
+    RoundedStrong,
+}
+impl BlendMode {
+    const ALL: [BlendMode; 5] = [
+        BlendMode::Off,
+        BlendMode::Edges,
+        BlendMode::EdgesStrong,
+        BlendMode::Rounded,
+        BlendMode::RoundedStrong,
+    ];
+    fn next(self) -> BlendMode {
+        let i = BlendMode::ALL.iter().position(|m| *m == self).unwrap();
+        BlendMode::ALL[(i + 1) % BlendMode::ALL.len()]
+    }
+    fn strong(self) -> bool {
+        matches!(self, BlendMode::EdgesStrong | BlendMode::RoundedStrong)
+    }
+    fn rounded(self) -> bool {
+        matches!(self, BlendMode::Rounded | BlendMode::RoundedStrong)
+    }
+}
 #[derive(Debug)]
 struct MapRenderSettings {
     pub camera: Camera2D,
@@ -466,6 +495,10 @@ struct MapRenderSettings {
     pub tiles_render: bool,
     pub armies_render: bool,
     pub err_render: bool,
+    pub seed: u64,
+    pub decos_dirty: bool,
+    pub blend_mode: BlendMode,
+    pub blend_dirty: bool,
 }
 impl Default for MapRenderSettings {
     fn default() -> Self {
@@ -477,6 +510,10 @@ impl Default for MapRenderSettings {
             tiles_render: true,
             armies_render: true,
             err_render: false,
+            seed: 0,
+            decos_dirty: false,
+            blend_mode: BlendMode::Rounded,
+            blend_dirty: false,
         }
     }
 }
@@ -879,7 +916,7 @@ fn unit_card_battle(
     let draw_size = (size.0 as f32 * CARD_SIZE, size.1 as f32 * CARD_SIZE);
     let draw_rect = Rect::new(pos.0, pos.1, draw_size.0, draw_size.1);
     let stats = troop.unit.modified;
-    let hp = 1. - stats.hp as f32 / stats.max_hp as f32;
+    let hp = 1. - troop.unit.hp as f32 / stats.max_hp as f32;
     draw_texture_size(unit_texture, pos, draw_size);
     draw_stats(
         &troop,
@@ -1130,9 +1167,22 @@ struct RenderTextures {
     pub map: Texture2D,
     pub decos: Texture2D,
 }
-fn draw_decos(assets: &Assets, decomap: &Vec<MapDeco>, objects: &Objects) {
+fn rand_unit(seed: u64, key: u64) -> f32 {
+    let mut x = seed ^ key.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^= x >> 31;
+    (x >> 40) as f32 * (1.0 / (1u64 << 24) as f32)
+}
+const DECO_JITTER: f32 = 0.2;
+fn draw_decos(assets: &Assets, decomap: &Vec<MapDeco>, objects: &Objects, seed: u64) {
     for deco in decomap {
         let (i, j) = (deco.x, deco.y);
+        let key = i as u64 * 100_003 + j as u64;
+        let dx = (rand_unit(seed, key * 2 + 1) * 2. - 1.) * SIZE.0 * DECO_JITTER;
+        let dy = (rand_unit(seed, key * 2 + 2) * 2. - 1.) * SIZE.1 * DECO_JITTER;
         if let Some(obj) = objects.inner.iter().find(|el| match el.obj_type {
             ObjectType::MapDeco { id } => id == deco.index,
             _ => false,
@@ -1141,8 +1191,8 @@ fn draw_decos(assets: &Assets, decomap: &Vec<MapDeco>, objects: &Objects) {
             let size = texture.size();
             draw_texture_ex(
                 texture,
-                i as f32 * SIZE.0 - size.x + SIZE.0,
-                j as f32 * SIZE.1 - size.y + SIZE.1,
+                i as f32 * SIZE.0 - size.x + SIZE.0 + dx,
+                j as f32 * SIZE.1 - size.y + SIZE.1 + dy,
                 WHITE,
                 DrawTextureParams {
                     dest_size: Some(Vec2::new(
@@ -1178,10 +1228,420 @@ fn draw_tiles(assets: &Assets, tilemap: &TileMap<usize>) {
         }
     }
 }
+// «Наплывы» вместо «автотайлинга клеток»: базовые тайлы рисуются как раньше (без
+// пересэмплирования, чётко), а поверх — только зоны смешения у границ клеток.
+// Наплыв ОДНОСТОРОННИЙ по приоритету тайла (см. TILE_PRIORITY): тайл с большим
+// приоритетом «наплывает» на соседа с меньшим (вода на всё, дорога на землю), а не
+// наоборот — взаимного двойного смешения нет. Одинаковые спрайты/тайлы не смешиваются.
+// Цвет наплыва берётся из УЗОРА соседа у общего шва (текстура сохраняется, никакого
+// «мазка краской»), альфа плавно гаснет от шва внутрь клетки (как BLEND_ALPHA в эталоне).
+const TILE_PRIORITY: [u8; 16] = [
+    3, 3, 3, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1,
+]; // вода 3 > дорога/болото 2 > земля 1
+
+// Параметры наплыва: ширина полосы (доля тайла) и альфа у шва (шкала 0..255).
+// Высокая альфа у шва — наплыв уверенно перекрывает край тайла-соседа, потом cos-фейд
+// даёт видимый градиент к чистому тайлу. (обычный, strong)
+const OVERLAY_BAND: f32 = 0.2; // 20% длины/высоты тайла
+const OVERLAY_A: (f32, f32) = (210., 255.);
+
+// Плавное затухание: 1 у шва, 0 на расстоянии radius (косинус — мягкий градиент).
+fn smooth_falloff(d: f32, radius: f32) -> f32 {
+    let d = (d / radius).clamp(0., 1.);
+    0.5 * (1. + (std::f32::consts::PI * d).cos())
+}
+
+// Узор соседа, ужать 256×242 → 32×22 (в том же стиле, как рисуется базовая клетка:
+// весь спрайт честно уменьшается в клетку). Общий для всех клеток.
+fn neighbor_pattern(neighbor: &Image) -> [u8; 32 * 22 * 3] {
+    let mut out = [0u8; 32 * 22 * 3];
+    let sw = neighbor.width as usize;
+    let sh = neighbor.height as usize;
+    let (mut rs, mut gs, mut bs, mut cnt);
+    for py in 0..22 {
+        for px in 0..32 {
+            rs = 0;
+            gs = 0;
+            bs = 0;
+            cnt = 0;
+            for y in (py * sh / 22)..((py + 1) * sh / 22) {
+                for x in (px * sw / 32)..((px + 1) * sw / 32) {
+                    let i = (y * sw + x) * 4;
+                    rs += neighbor.bytes[i] as u32;
+                    gs += neighbor.bytes[i + 1] as u32;
+                    bs += neighbor.bytes[i + 2] as u32;
+                    cnt += 1;
+                }
+            }
+            let o = (py * 32 + px) * 3;
+            out[o] = (rs / cnt) as u8;
+            out[o + 1] = (gs / cnt) as u8;
+            out[o + 2] = (bs / cnt) as u8;
+        }
+    }
+    out
+}
+
+// Оверлей-полоса. Цвет берётся из мина-узора соседа (neighbor_pattern), но ТОЛЬКО тот
+// срез, который прилегает к шву: верхняя полоса — нижняя кромка узора, и т.д. — текстура
+// в полосе соответствует своему месту и масштабу. Альфа cos-градиентом гаснет от шва до
+// внутренней границы полосы. side: 0=верх, 1=низ, 2=лево, 3=право. bw/bh — ширина/высота
+// полосы в пикселях 32×22.
+fn make_side_overlay(pattern: &[u8], side: usize, bw: f32, bh: f32, a: f32) -> Texture2D {
+    let (w, h) = (SIZE.0 as usize, SIZE.1 as usize);
+    let mut bytes = vec![0u8; w * h * 4];
+    for py in 0..h {
+        let vf = py as f32 + 0.5;
+        for px in 0..w {
+            let uf = px as f32 + 0.5;
+            let (sx, sy, wgt) = match side {
+                0 => {
+                    if vf > bh {
+                        continue;
+                    }
+                    (px, (h as f32 - bh + vf) as usize, smooth_falloff(vf, bh))
+                }
+                1 => {
+                    if h as f32 - vf > bh {
+                        continue;
+                    }
+                    (px, (vf - (h as f32 - bh)) as usize, smooth_falloff(h as f32 - vf, bh))
+                }
+                2 => {
+                    if uf > bw {
+                        continue;
+                    }
+                    ((w as f32 - bw + uf) as usize, py, smooth_falloff(uf, bw))
+                }
+                _ => {
+                    if w as f32 - uf > bw {
+                        continue;
+                    }
+                    ((uf - (w as f32 - bw)) as usize, py, smooth_falloff(w as f32 - uf, bw))
+                }
+            };
+            let o = (sy * w + sx) * 3;
+            let o4 = (py * w + px) * 4;
+            bytes[o4..o4 + 3].copy_from_slice(&pattern[o..o + 3]);
+            bytes[o4 + 3] = (a * wgt).round().clamp(0., 255.) as u8;
+        }
+    }
+    Texture2D::from_rgba8(w as u16, h as u16, &bytes)
+}
+
+// Угловой оверлей для Rounded-режимов. В угловой полосе (bw×bh у угла) цвет = угол мини-
+// узора диагонального соседа, ближайший к этому углу клетки (напр. верх-право клетки ←
+// низ-лево узора соседа) — продолжение масти наплывает от угла, как и со сторон. Альфа
+// гаснет по обеим осям (произведение cos-фейдов) — угол скругляется, центр клетки чист.
+// corner: 0=верх-право, 1=низ-право, 2=низ-лево, 3=верх-лево.
+fn make_quad_overlay(pattern: &[u8], corner: usize, bw: f32, bh: f32, a: f32) -> Texture2D {
+    let (w, h) = (SIZE.0 as usize, SIZE.1 as usize);
+    let mut bytes = vec![0u8; w * h * 4];
+    for py in 0..h {
+        let vf = py as f32 + 0.5;
+        for px in 0..w {
+            let uf = px as f32 + 0.5;
+            // Расстояния от двух рёбер, образующих угол.
+            let (dx, dy) = match corner {
+                0 => (w as f32 - uf, vf),
+                1 => (w as f32 - uf, h as f32 - vf),
+                2 => (uf, h as f32 - vf),
+                _ => (uf, vf),
+            };
+            let wgt = smooth_falloff(dx, bw) * smooth_falloff(dy, bh);
+            if wgt <= 0.001 {
+                continue;
+            }
+            // Источник в узоре: у зеркальных по оси углов отражаем координату.
+            let sx = match corner {
+                0 | 1 => (w as f32 - uf).clamp(0., w as f32 - 1.),
+                _ => (w as f32 - bw + uf).clamp(0., w as f32 - 1.),
+            } as usize;
+            let sy = match corner {
+                0 | 3 => (h as f32 - bh + vf).clamp(0., h as f32 - 1.),
+                _ => (h as f32 - vf).clamp(0., h as f32 - 1.),
+            } as usize;
+            let o = (sy * w + sx) * 3;
+            let o4 = (py * w + px) * 4;
+            bytes[o4..o4 + 3].copy_from_slice(&pattern[o..o + 3]);
+            bytes[o4 + 3] = (a * wgt).round().clamp(0., 255.) as u8;
+        }
+    }
+    Texture2D::from_rgba8(w as u16, h as u16, &bytes)
+}
+
+fn overlay_cached(
+    textures: &mut Vec<Texture2D>,
+    cache: &mut HashMap<(usize, usize, usize), usize>,
+    key: (usize, usize, usize),
+    build: impl FnOnce() -> Texture2D,
+) -> usize {
+    if let Some(&t) = cache.get(&key) {
+        return t;
+    }
+    let t = textures.len();
+    textures.push(build());
+    cache.insert(key, t);
+    t
+}
+
+// Рисует наплывы поверх уже нарисованных тайлов. Возвращает число текстур наплывов.
+fn draw_blend_overlays(
+    tilemap: &TileMap<usize>,
+    tile_pixels: &[Image],
+    mode: BlendMode,
+) -> usize {
+    let size = tilemap.size;
+    let strong = mode.strong();
+    let a = if strong { OVERLAY_A.1 } else { OVERLAY_A.0 };
+    let rounded = mode.rounded();
+    let (band_w, band_h) = (SIZE.0 * OVERLAY_BAND, SIZE.1 * OVERLAY_BAND);
+    let mut textures: Vec<Texture2D> = Vec::new();
+    let mut edge_cache: HashMap<(usize, usize, usize), usize> = HashMap::new();
+    let mut quad_cache: HashMap<(usize, usize, usize), usize> = HashMap::new();
+    let mut pattern_cache: HashMap<usize, [u8; 32 * 22 * 3]> = HashMap::new();
+    let mut draws: Vec<(usize, f32, f32)> = Vec::new();
+    for i in 0..size {
+        for j in 0..size {
+            let id = tilemap[(j, i)];
+            let same = |n: usize| n == id || TILES[n].sprite() == TILES[id].sprite();
+            let pri = TILE_PRIORITY[id];
+            let (cx, cy) = (i as f32 * SIZE.0, j as f32 * SIZE.1);
+            // 4 стороны: вода/приоритетная сторона наплывает на соседа.
+            let mut side = |di: isize, dj: isize, s: usize| {
+                let (ni, nj) = (i as isize + di, j as isize + dj);
+                if ni < 0 || nj < 0 || ni >= size as isize || nj >= size as isize {
+                    return;
+                }
+                let n = tilemap[(nj as usize, ni as usize)];
+                if same(n) || pri >= TILE_PRIORITY[n] {
+                    return;
+                }
+                let key = (id, n, s);
+                let t = overlay_cached(&mut textures, &mut edge_cache, key, || {
+                    let pat = *pattern_cache
+                        .entry(n)
+                        .or_insert_with(|| neighbor_pattern(&tile_pixels[n]));
+                    make_side_overlay(&pat, s, band_w, band_h, a)
+                });
+                draws.push((t, cx, cy));
+            };
+            side(0, -1, 0); // сверху
+            side(0, 1, 1); // снизу
+            side(-1, 0, 2); // слева
+            side(1, 0, 3); // справа
+            if rounded {
+                let mut corner = |di: isize, dj: isize, c: usize| {
+                    let (ni, nj) = (i as isize + di, j as isize + dj);
+                    if ni < 0 || nj < 0 || ni >= size as isize || nj >= size as isize {
+                        return;
+                    }
+                    let n = tilemap[(nj as usize, ni as usize)];
+                    if same(n) || pri >= TILE_PRIORITY[n] {
+                        return;
+                    }
+                    let key = (id, n, c);
+                    let t = overlay_cached(&mut textures, &mut quad_cache, key, || {
+                        let pat = *pattern_cache
+                            .entry(n)
+                            .or_insert_with(|| neighbor_pattern(&tile_pixels[n]));
+                        make_quad_overlay(&pat, c, band_w, band_h, a)
+                    });
+                    draws.push((t, cx, cy));
+                };
+                corner(-1, -1, 3); // верх-лево
+                corner(1, -1, 0); // верх-право
+                corner(-1, 1, 2); // низ-лево
+                corner(1, 1, 1); // низ-право
+            }
+        }
+    }
+    // Группировка по текстуре: macroquad батчит подряд идущие одинаковые текстуры.
+    let t0 = std::time::Instant::now();
+    draws.sort_unstable_by_key(|d| d.0);
+    let t_draw = std::time::Instant::now();
+    for (idx, x, y) in draws {
+        draw_texture_ex(
+            &textures[idx],
+            x,
+            y,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(SIZE.0, SIZE.1)),
+                ..Default::default()
+            },
+        );
+    }
+    let n = textures.len();
+    println!(
+        "  overlays: {} draws, {} textures, sort {:.1}ms, draw {:.1}ms",
+        size * size,
+        n,
+        t0.elapsed().as_secs_f64() * 1000.,
+        t_draw.elapsed().as_secs_f64() * 1000.,
+    );
+    n
+}
+
+// Перекрена в отдельный RT слой декораций поверх карты.
+// «Холмы» (понижения рельефа) рисуются всегда первыми — под всем остальным.
+// Здания и прочие декорации собираются в один список и сортируются по Y-базе:
+// тот объект, чья база ниже на экране, рисуется позже — поверх. Высокие объекты
+// (горы, здания) не «наслаиваются» друг на друга некорректно.
+fn render_decos_layer(
+    target: &RenderTarget,
+    assets: &Assets,
+    game: &Game,
+    registry: &GameInfo,
+    seed: u64,
+    buildings_render: bool,
+) {
+    let size = game.executor.gamemap.tilemap.size as u32;
+    let mut camera = Camera2D::from_display_rect(Rect::new(
+        0.,
+        SIZE.1 * size as f32,
+        SIZE.0 * size as f32,
+        -SIZE.1 * size as f32,
+    ));
+    camera.render_target = Some(target.clone());
+    set_camera(&camera);
+    clear_background(Color::new(0., 0., 0., 0.));
+
+    let find_decos = |name: &'static str| {
+        game.executor
+            .gamemap
+            .decomap
+            .iter()
+            .filter(|deco| {
+                registry
+                    .objects
+                    .inner
+                    .iter()
+                    .find(|el| match el.obj_type {
+                        ObjectType::MapDeco { id } => id == deco.index,
+                        _ => false,
+                    })
+                    .is_some_and(|obj| obj.name.contains(name))
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let hills = find_decos("Hills");
+    let mountains = find_decos("Mountain");
+    let trees = find_decos("Tree");
+    let rocks = find_decos("Rocks");
+    let rest = game
+        .executor
+        .gamemap
+        .decomap
+        .iter()
+        .filter(|deco| {
+            [&hills, &mountains, &trees, &rocks]
+                .iter()
+                .all(|g| !g.contains(deco))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // Холмы под всем остальным.
+    draw_decos(assets, &hills, &registry.objects, seed);
+
+    let mut tex_cache: Vec<Texture2D> = Vec::new();
+    let mut lookups: HashMap<String, usize> = HashMap::new();
+    // (base_y, x, y, texture_idx, dest_size)
+    let mut items: Vec<(f32, f32, f32, usize, Vec2)> = Vec::new();
+    for g in [&mountains, &trees, &rocks, &rest] {
+        for deco in g {
+            let (i, j) = (deco.x, deco.y);
+            if let Some(obj) = registry.objects.inner.iter().find(|el| match el.obj_type {
+                ObjectType::MapDeco { id } => id == deco.index,
+                _ => false,
+            }) {
+                let tex = match lookups.get(&obj.path) {
+                    Some(&t) => t,
+                    None => {
+                        let t = tex_cache.len();
+                        tex_cache.push(assets.get(&obj.path.clone()).clone());
+                        lookups.insert(obj.path.clone(), t);
+                        t
+                    }
+                };
+                let size = tex_cache[tex].size();
+                let key = i as u64 * 100_003 + j as u64;
+                let dx = (rand_unit(seed, key * 2 + 1) * 2. - 1.) * SIZE.0 * DECO_JITTER;
+                let dy = (rand_unit(seed, key * 2 + 2) * 2. - 1.) * SIZE.1 * DECO_JITTER;
+                items.push((
+                    j as f32 * SIZE.1,
+                    i as f32 * SIZE.0 - size.x + SIZE.0 + dx,
+                    j as f32 * SIZE.1 - size.y + SIZE.1 + dy,
+                    tex,
+                    Vec2::new(
+                        size.x as f32 / 32. * SIZE.0,
+                        size.y as f32 / 22. * SIZE.1,
+                    ),
+                ));
+            }
+        }
+    }
+    if buildings_render {
+        for b in &game.executor.gamemap.buildings {
+            let (i, j) = b.pos;
+            if let Some(obj) = registry.objects.inner.iter().find(|el| el.index == b.id) {
+                let tex = match lookups.get(&obj.path) {
+                    Some(&t) => t,
+                    None => {
+                        let t = tex_cache.len();
+                        tex_cache.push(assets.get(&obj.path.clone()).clone());
+                        lookups.insert(obj.path.clone(), t);
+                        t
+                    }
+                };
+                let size = tex_cache[tex].size();
+                items.push((
+                    j as f32 * SIZE.1,
+                    i as f32 * SIZE.0 - size.x + SIZE.0,
+                    j as f32 * SIZE.1 - size.y + SIZE.1,
+                    tex,
+                    Vec2::new(
+                        size.x as f32 / 32. * SIZE.0,
+                        size.y as f32 / 22. * SIZE.1,
+                    ),
+                ));
+            }
+        }
+    }
+    // Порядок отрисовки: база ниже на экране — поверх; при равной базе крупнее — поверх.
+    items.sort_unstable_by(|a, b| {
+        let ycmp = a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal);
+        if ycmp != std::cmp::Ordering::Equal {
+            ycmp
+        } else {
+            tex_cache[b.3]
+                .size()
+                .y
+                .partial_cmp(&tex_cache[a.3].size().y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }
+    });
+    for (_base, x, y, tex, dest) in items {
+        draw_texture_ex(
+            &tex_cache[tex],
+            x,
+            y,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(dest),
+                ..Default::default()
+            },
+        );
+    }
+}
+
+// Отрисовка зданий напрямую (без RT/сортировки) для не-prerender пути.
 fn draw_buildings(assets: &Assets, buildings: &Vec<MapBuildingdata>, objects: &Objects) {
-    for building in buildings {
-        let (i, j) = building.pos;
-        if let Some(obj) = objects.inner.iter().find(|el| el.index == building.id) {
+    for b in buildings {
+        let (i, j) = b.pos;
+        if let Some(obj) = objects.inner.iter().find(|el| el.index == b.id) {
             let texture = assets.get(&obj.path.clone());
             let size = texture.size();
             draw_texture_ex(
@@ -1194,87 +1654,146 @@ fn draw_buildings(assets: &Assets, buildings: &Vec<MapBuildingdata>, objects: &O
                         size.x as f32 / 32. * SIZE.0,
                         size.y as f32 / 22. * SIZE.1,
                     )),
-
                     ..Default::default()
                 },
             );
         }
     }
 }
-fn prepare_textures(target: &[RenderTarget; 2], assets: &Assets, game: &Game, registry: &GameInfo) -> RenderTextures {
+
+fn bake_map_textures(
+    target0: &RenderTarget,
+    assets: &Assets,
+    game: &Game,
+    tile_pixels: &[Image],
+    blend_mode: BlendMode,
+) {
     let size = game.executor.gamemap.tilemap.size as u32;
-    let tile_size = (SIZE.0 as u32, SIZE.1 as u32);
-    debug!("CAMERA_CHANGE");
     let mut camera = Camera2D::from_display_rect(Rect::new(
         0.,
         SIZE.1 * size as f32,
         SIZE.0 * size as f32,
         -SIZE.1 * size as f32,
     ));
-    camera.render_target = Some(target[0].clone());
+    camera.render_target = Some(target0.clone());
     set_camera(&camera);
+    clear_background(Color::new(0., 0., 0., 0.));
+    let t_bake = std::time::Instant::now();
+    if blend_mode == BlendMode::Off {
+        draw_tiles(assets, &game.executor.gamemap.tilemap);
+        println!(
+            "baked map {}x{}: tiles {}, rt {}x{}, mode {:?}, {:.1}ms",
+            size,
+            size,
+            size * size,
+            SIZE.0 * size as f32,
+            SIZE.1 * size as f32,
+            blend_mode,
+            t_bake.elapsed().as_secs_f64() * 1000.
+        );
+    } else {
+        let t0 = std::time::Instant::now();
+        draw_tiles(assets, &game.executor.gamemap.tilemap);
+        let t_tiles = t0.elapsed().as_secs_f64() * 1000.;
+        let t0 = std::time::Instant::now();
+        let n_overlays =
+            draw_blend_overlays(&game.executor.gamemap.tilemap, tile_pixels, blend_mode);
+        let t_overlays = t0.elapsed().as_secs_f64() * 1000.;
+        println!(
+            "baked map {}x{}: tiles {}, overlays {}, rt {}x{}, mode {:?}, {:.1}ms (tiles {:.1}ms, overlays {:.1}ms)",
+            size,
+            size,
+            size * size,
+            n_overlays,
+            SIZE.0 * size as f32,
+            SIZE.1 * size as f32,
+            blend_mode,
+            t_bake.elapsed().as_secs_f64() * 1000.,
+            t_tiles,
+            t_overlays
+        );
+    }
+    }
 
-    let find_decos = |name: &'static str| {
-        game.executor
-            .gamemap
-            .decomap
-            .iter()
-            .filter(|deco| {
-                registry.objects.inner
-                    .iter()
-                    .find(|el| match el.obj_type {
-                        ObjectType::MapDeco { id } => id == deco.index,
-                        _ => false,
-                    })
-                    .is_some_and(|obj| obj.name.contains(name))
-            })
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    debug!("TILE DRAW");
-    draw_tiles(assets, &game.executor.gamemap.tilemap);
 
-    let mut camera = Camera2D::from_display_rect(Rect::new(
-        0.,
-        SIZE.1 * size as f32,
-        SIZE.0 * size as f32,
-        -SIZE.1 * size as f32,
-    ));
-    camera.render_target = Some(target[1].clone());
-    set_camera(&camera);
-    debug!("DECOS SEARCH");
-    let hills = find_decos("Hills");
-    let mountains = find_decos("Mountain");
-    let trees = find_decos("Tree");
-    let rocks = find_decos("Rocks");
-    debug!("HILLS DRAW");
-    draw_decos(assets, &hills, &registry.objects);
-    debug!("BUILDINGS DRAW");
-    draw_buildings(assets, &game.executor.gamemap.buildings, &registry.objects);
-    debug!("MOUNTAINS DRAW");
-    draw_decos(assets, &mountains, &registry.objects);
-    debug!("TREES DRAW");
-    draw_decos(assets, &trees, &registry.objects);
-    debug!("ROCKS DRAW");
-    draw_decos(assets, &rocks, &registry.objects);
+// ВРЕМЕННЫЙ ДАМП: проверка, что градиент наплыва реально есть в запечённом RT.
+// Печатает RGB по вертикали через границу вода→земля (пиксели тайла p, которой сверху
+// вода), цвет источника-полосы (низ мини-узора воды) и ожидаемый смешанный цвет шва.
+// Убирается после проверки.
+fn debug_check_gradient(target0: &RenderTarget, game: &Game, tile_pixels: &[Image]) {
+    set_default_camera();
+    unsafe { macroquad::window::get_internal_gl().flush() };
+    let img = target0.texture.get_texture_data();
+    let size = game.executor.gamemap.tilemap.size as usize;
+    let tilemap = &game.executor.gamemap.tilemap;
+    let (w, h) = (SIZE.0 as usize, SIZE.1 as usize);
+    let mut found = 0usize;
+    for j in 1..size {
+        for i in 0..size {
+            let id = tilemap[(j, i)];
+            let up = tilemap[(j - 1, i)];
+            if TILE_PRIORITY[up] > TILE_PRIORITY[id] && TILES[up].sprite() != TILES[id].sprite() {
+                let (bx, by) = (i * w, j * h);
+                let base = |k: usize| {
+                    let o = ((by + k) * img.width as usize + bx + 16) * 4;
+                    (
+                        img.bytes[o],
+                        img.bytes[o + 1],
+                        img.bytes[o + 2],
+                    )
+                };
+                println!(
+                    "boundary #{}: land {} at ({},{}) water {} above; rows px=16:",
+                    found, id, i, j, up
+                );
+                for k in 0..7 {
+                    let (r, g, b) = base(k);
+                    println!("  row +{k}: rgb({r},{g},{b})");
+                }
+                // источник: мини-узор воды, строки 18..21 (низ = край у шва), колонка 16
+                let pat = neighbor_pattern(&tile_pixels[up]);
+                for r in 18..22 {
+                    let o = (r * w + 16) * 3;
+                    println!(
+                        "  water mini row {r} col16: rgb({},{},{})",
+                        pat[o],
+                        pat[o + 1],
+                        pat[o + 2]
+                    );
+                }
+                let alpha0 = (OVERLAY_A.0 * smooth_falloff(0.5, SIZE.1 * OVERLAY_BAND)).round();
+                let (bg, br, bb) = base(6);
+                let o = (18 * w + 16) * 3;
+                let f = alpha0 / 255.;
+                let er = (pat[o] as f32 * f + bg as f32 * (1. - f)) as u8;
+                let eg = (pat[o + 1] as f32 * f + br as f32 * (1. - f)) as u8;
+                let eb = (pat[o + 2] as f32 * f + bb as f32 * (1. - f)) as u8;
+                println!(
+                    "  alpha0={alpha0:.0} expected seam rgb({er},{eg},{eb}) vs measured rgb({},{},{})",
+                    base(0).0,
+                    base(0).1,
+                    base(0).2
+                );
+                found += 1;
+                if found >= 2 {
+                    return;
+                }
+            }
+        }
+    }
+    println!("no water-land boundaries found");
+}
 
-    // Draw the rest of decos
-    draw_decos(
-        assets,
-        &game
-            .executor
-            .gamemap
-            .decomap
-            .iter()
-            .filter(|deco| {
-                [&hills, &mountains, &trees, &rocks]
-                    .iter()
-                    .all(|x| !x.contains(&deco))
-            })
-            .cloned()
-            .collect::<Vec<_>>(),
-		&registry.objects
-    );
+fn prepare_textures(
+    target: &[RenderTarget; 2],
+    assets: &Assets,
+    game: &Game,
+    registry: &GameInfo,
+    tile_pixels: &[Image],
+) -> RenderTextures {
+    bake_map_textures(&target[0], assets, game, tile_pixels, BlendMode::Rounded);
+    debug_check_gradient(&target[0], game, tile_pixels);
+    render_decos_layer(&target[1], assets, game, registry, 0, true);
     RenderTextures {
         map: target[0].texture.clone(),
         decos: target[1].texture.clone(),
@@ -1316,11 +1835,11 @@ fn draw_map(
         let mountains = find_decos("Mountain");
         let trees = find_decos("Tree");
         let rocks = find_decos("Rocks");
-        draw_decos(assets, &hills, &registry.objects);
+        draw_decos(assets, &hills, &registry.objects, settings.seed);
         draw_buildings(assets, &game.executor.gamemap.buildings, &registry.objects);
-        draw_decos(assets, &mountains, &registry.objects);
-        draw_decos(assets, &trees, &registry.objects);
-        draw_decos(assets, &rocks, &registry.objects);
+        draw_decos(assets, &mountains, &registry.objects, settings.seed);
+        draw_decos(assets, &trees, &registry.objects, settings.seed);
+        draw_decos(assets, &rocks, &registry.objects, settings.seed);
 
         // Draw the rest of decos
         draw_decos(
@@ -1337,7 +1856,8 @@ fn draw_map(
                 })
                 .cloned()
                 .collect::<Vec<_>>(),
-			&registry.objects
+			&registry.objects,
+            settings.seed
         );
     } else {
         draw_texture(&textures.map, 0., 0., WHITE);
@@ -1347,7 +1867,7 @@ fn draw_map(
         for j in 0..size {
 			let pos = (j as usize, i as usize);
 			let events = &game.executor.gamemap.eventmap[pos];
-			if events.len() > 0 {
+			if settings.event_render && events.len() > 0 {
 				draw_rectangle(i as f32 * SIZE.0, j as f32 * SIZE.1, SIZE.0, SIZE.1, BLUE)
 			}
 			let hit = game.executor.gamemap.hitmap[pos];
@@ -1440,6 +1960,24 @@ fn draw_map(
     if is_key_pressed(KeyCode::E) {
         settings.err_render = !settings.err_render;
     }
+    if is_key_pressed(KeyCode::B) {
+        settings.buildings_render = !settings.buildings_render;
+        settings.decos_dirty = true;
+    }
+    if is_key_pressed(KeyCode::N) {
+        settings.event_render = !settings.event_render;
+    }
+    if is_key_pressed(KeyCode::R) {
+        settings.seed = settings
+            .seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        settings.decos_dirty = true;
+    }
+    if is_key_pressed(KeyCode::G) {
+        settings.blend_mode = settings.blend_mode.next();
+        settings.blend_dirty = true;
+    }
 
     if is_key_down(KeyCode::Enter) {
         *battle = Some(BattleInfo::new(&mut gamemap.armys, 0, 1));
@@ -1448,65 +1986,114 @@ fn draw_map(
     if is_key_down(KeyCode::Escape) {
         return Some(Menu::Main);
     }
-    draw_text("Loading game map...", 0., 0., 0.5, BLACK);
+    let sw = screen_width();
+    let sh = screen_height();
+    let px = camera.zoom.x * sw * 0.5;
+    let py = camera.zoom.y * sh * 0.5;
+
+    // Передвижение WASD: камера едет в сторону клавиши (W — на север / вверх).
+    let pan_speed = 15.;
     if is_key_down(KeyCode::W) {
-        camera.offset += Vec2::new(0., -0.01)
-    }
-    if is_key_down(KeyCode::D) {
-        camera.offset += Vec2::new(-0.01, 0.);
-    }
-    if is_key_down(KeyCode::A) {
-        camera.offset += Vec2::new(0.01, 0.);
+        camera.target.y -= pan_speed / py;
     }
     if is_key_down(KeyCode::S) {
-        camera.offset += Vec2::new(0., 0.01);
+        camera.target.y += pan_speed / py;
     }
-    if is_key_down(KeyCode::Equal) {
-        camera.zoom /= Vec2::new(1.1, 1.1);
-        //camera.offset -= vec2(0.5, 0.5);
-        //camera.offset += dbg!(camera.screen_to_world(mouse_position().into())) / Vec2::from(screen_size()) / 100.;
+    if is_key_down(KeyCode::A) {
+        camera.target.x -= pan_speed / px;
     }
-    let wheel_diff = mouse_wheel().1;
-    if wheel_diff != 0. {
-        camera.zoom *= wheel_diff.abs()
-            * if wheel_diff > 0. {
-                vec2(1.1, 1.1)
-            } else {
-                Vec2::ONE / vec2(1.1, 1.1)
-            }
+    if is_key_down(KeyCode::D) {
+        camera.target.x += pan_speed / px;
     }
-    if is_key_down(KeyCode::Minus) {
-        camera.zoom *= Vec2::new(1.1, 1.1);
-        //camera.offset -= dbg!(camera.screen_to_world(mouse_position().into())) / Vec2::from(screen_size()) / 100.;
+
+    // Перетаскивание правой кнопкой: карта следует за курсором.
+    if is_mouse_button_down(MouseButton::Right) {
+        let delta = mouse_delta_position();
+        camera.target.x -= delta.x / px;
+        camera.target.y -= delta.y / py;
+    }
+
+    let clamp_zoom = |z: Vec2| {
+        let clamp_axis = |v: f32| v.signum() * v.abs().clamp(0.000008, 0.02);
+        Vec2::new(clamp_axis(z.x), clamp_axis(z.y))
+    };
+
+    // Колесо: зум к точке под курсором (точка мира под курсором остаётся на месте).
+    let wheel = mouse_wheel().1;
+    if wheel != 0. {
+        let factor = 1.2f32.powf(wheel.clamp(-4., 4.));
+        let anchor = camera.screen_to_world(mouse_position().into());
+        let zoom_before_x = camera.zoom.x;
+        camera.zoom = clamp_zoom(camera.zoom * factor);
+        let applied = camera.zoom.x / zoom_before_x;
+        if applied != 0. {
+            camera.target = anchor + (camera.target - anchor) / applied;
+        }
+    }
+
+    // "+" / "-": зум к центру экрана (target неподвижен).
+    if is_key_pressed(KeyCode::Equal) || is_key_pressed(KeyCode::KpAdd) {
+        camera.zoom = clamp_zoom(camera.zoom * 1.2);
+    }
+    if is_key_pressed(KeyCode::Minus) || is_key_pressed(KeyCode::KpSubtract) {
+        camera.zoom = clamp_zoom(camera.zoom / 1.2);
     }
     //if is_key_released(KeyCode::I) {
     let map_size = gamemap.tilemap.size;
     let tile_size = vec2(SIZE.0, SIZE.1);
     let pos = camera.screen_to_world(mouse_position().into());
     let tile = (pos / tile_size).floor();
-    draw_text(&format!("{tile:?}"), 0., -60., 50., BLACK);
     if is_mouse_button_released(MouseButton::Left) {
-        game.executor.message_handler(
-            dt_lib::network::server::ClientMessage::GoTo((
-                tile.x as usize % map_size,
-                tile.y as usize % map_size,
-            )),
-            0,
-			registry
-        );
-    }
-    if !game.executor.players[0].execution_queue.is_empty() {
+         game.executor.message_handler(
+             dt_lib::network::server::ClientMessage::GoTo((
+                 tile.x as usize % map_size,
+                 tile.y as usize % map_size,
+             )),
+             0,
+             registry
+         );
+     }
+if !game.executor.players[0].execution_queue.is_empty() {
         if let Execute::Message(msg) = game.executor.players[0].execution_queue.remove(0) {
-            dbg!(&msg);
             return Some(Menu::Message(msg));
         }
     }
-    if is_mouse_button_down(MouseButton::Right) {
-        //camera.offset += camera.screen_to_world(mouse_position().into()) / vec2(-SIZE.0 * 50., SIZE.1 * 30.);
-        camera.offset += mouse_delta_position() * vec2(-1., 1.);
-        //dbg!(camera.screen_to_world(mouse_position().into()) / vec2(-SIZE.0 * 50., SIZE.1 * 30.));
-    }
-    draw_text(&format!("{}", get_fps()), 0., 0., 50., BLACK);
+     // HUD поверх карты: в экранных координатах, чтобы не зумился вместе с картой.
+     set_default_camera();
+     let hud_font = assets.get_font(BENGUIAT);
+     draw_text_ex(
+         &format!("Tile: {tile:?}"),
+         10.,
+         70.,
+         TextParams {
+             font: Some(hud_font),
+             font_size: 40,
+             color: DARKGRAY,
+             ..Default::default()
+         },
+     );
+     draw_text_ex(
+         &format!("{} FPS", get_fps()),
+         10.,
+         115.,
+         TextParams {
+             font: Some(hud_font),
+             font_size: 24,
+             color: DARKGRAY,
+             ..Default::default()
+         },
+     );
+     draw_text_ex(
+         &format!("[T] тайлы  [Y] декор  [B] билдинги  [N] ивенты  [R] сид: {}  [G] бленд: {:?}", settings.seed, settings.blend_mode),
+         10.,
+         145.,
+         TextParams {
+             font: Some(hud_font),
+             font_size: 40,
+             color: Color::from_rgba(30, 30, 30, 255),
+             ..Default::default()
+         },
+     );
 	*delta += get_frame_time();
 	if *delta > 0.2 {
 		game.executor.tick(registry);
@@ -1521,7 +2108,6 @@ fn process_event(game: &mut Game, event: IncomingEvent) {
     };
     match event {
         IncomingEvent::Id(army) => {
-            debug!("My id is {army}");
             conn.army = army;
         }
         IncomingEvent::Game(g) => {
@@ -1535,9 +2121,7 @@ fn process_event(game: &mut Game, event: IncomingEvent) {
             "Room full" => {
                 conn.status = ConnectionStatus::Full(false);
             }
-            _ => {
-                dbg!(text);
-            }
+            _ => {}
         },
         IncomingEvent::Acceptance(a) => {
             if a == [true, true] {
@@ -1557,10 +2141,17 @@ async fn main() {
         render_target(tile_size.0 * size as u32, tile_size.1 * size as u32),
         render_target(tile_size.0 * size as u32, tile_size.1 * size as u32),
     ];
-    debug!("START");
-    state.textures = prepare_textures(&target, &state.assets, &state.game, &state.registry);
+    clear_background(WHITE);
+    draw_text(
+        "Loading map...",
+        0.,
+        screen_height() / 2.,
+        20.,
+        BLACK,
+    );
+    next_frame().await;
+    state.textures = prepare_textures(&target, &state.assets, &state.game, &state.registry, &state.tile_pixels);
     set_default_camera();
-    debug!("DEFAULT CAMERA SET");
     clear_background(WHITE);
     draw_text(
         "Loading game assets...",
@@ -1665,7 +2256,6 @@ async fn main() {
                                 -SIZE.1 * 50.,
                             ));
                             camera.rotation = 0.;
-                            dbg!(&camera);
                             state.ui.main = Menu::Map(MapRenderSettings {
                                 camera,
                                 ..Default::default()
@@ -1714,6 +2304,31 @@ async fn main() {
                     draw_map(&state.assets, settings, &state.textures, &mut state.game, &mut state.delta, &state.registry)
                 {
                     state.ui.main = menu;
+                }
+                if let Menu::Map(settings) = &mut state.ui.main {
+                    if settings.decos_dirty {
+                        render_decos_layer(
+                            &target[1],
+                            &state.assets,
+                            &state.game,
+                            &state.registry,
+                            settings.seed,
+                            settings.buildings_render,
+                        );
+                        set_default_camera();
+                        settings.decos_dirty = false;
+                    }
+                    if settings.blend_dirty {
+                        bake_map_textures(
+                            &target[0],
+                            &state.assets,
+                            &state.game,
+                            &state.tile_pixels,
+                            settings.blend_mode,
+                        );
+                        set_default_camera();
+                        settings.blend_dirty = false;
+                    }
                 };
             }
             Menu::Message(msg) => {
@@ -2204,13 +2819,11 @@ async fn main() {
                 if connecting {
                     // Beware, this sometimes fills the root partition with zeroes
                     let ip = format!("{}:{}", state.registry.settings.ip.to_string(), state.registry.settings.port);
-                    debug!("CONNECTING TO {}", &ip);
 
                     let conn =
                         state
                             .rt
                             .block_on(connect(ip, input.clone(), hwid::get_id().unwrap()));
-                    debug!("{:?}", conn);
                     let conn = if conn.is_err() {
                         warn!("CAN'T CONNECT TO MAIN SERVER");
                         state.rt.block_on(connect(

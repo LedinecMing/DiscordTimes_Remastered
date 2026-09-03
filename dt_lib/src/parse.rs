@@ -282,7 +282,6 @@ pub async fn parse_units<Reader: FileAccess>(
 		let unit = UnitInfo::from_section(prop.clone(), Default::default()).unwrap_or_else(|err| {
 			panic!("{err}: {:?}", prop.clone());
 		});
-		dbg!(&unit);
 		let name = unit.0.name.clone();
 		req_assets.push(format!("unit_{}.png", unit.0.icon_index - 1));
 		registry.units.register(unit.0, name);

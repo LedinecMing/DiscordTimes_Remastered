@@ -113,7 +113,7 @@ mod hwid {
         let id = comps.list().iter().map(|comp| comp.label()).join("\n");
         let mut hasher = DefaultHasher::new();
         id.hash(&mut hasher);
-        Ok(dbg!(hasher.finish().to_string()))
+        Ok(hasher.finish().to_string())
     }
 }
 #[cfg(target_os = "android")]
