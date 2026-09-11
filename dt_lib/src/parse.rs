@@ -226,9 +226,9 @@ pub fn match_magictype(
     direction: MagicDirection,
 ) -> Option<MagicType> {
     match magic_type {
-        "LifeMagic" => Some(Life),
-        "ElementalMagic" => Some(Elemental),
-        "DeathMagic" => Some(Death),
+        "LifeMagic" => Some(LifeMagic),
+        "ElementalMagic" => Some(ElementalMagic),
+        "DeathMagic" => Some(DeathMagic),
         "NoMagic" | "" => None,
         _ => {
             collect_errors(

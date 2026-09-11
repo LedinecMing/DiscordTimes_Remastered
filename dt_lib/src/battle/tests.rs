@@ -14,6 +14,7 @@ use crate::{
         unitstats::{ModifyUnitStats, Modify, ModifyPower},
     },
     items::item::{Item, ItemInfo, ArtifactType, WeaponType, MagicVariants},
+    map::object::{Market, RecruitUnit, Recruitment},
     bonuses::BonusInfo,
     effects::{EffectInfo, EffectLifetime},
 };
@@ -31,7 +32,7 @@ fn make_test_registry() -> GameInfo {
             str_id: format!("generic_unit_{}", i),
             name: format!("Generic Unit {}", i),
             descript: "".into(),
-            cost: 0, cost_hire: 0, icon_index: i,
+            cost: 0, cost_hire: 0, icon_index: i + 1,
             size: (1, 1),
             unit_type: if i == 1 { UnitType::Undead } else { UnitType::People },
             next_unit: vec![],
@@ -79,7 +80,7 @@ fn make_test_registry() -> GameInfo {
     registry.units.inner.push(UnitInfo {
         id: 22, str_id: "death_mage".into(), name: "Death Mage".into(), descript: "".into(),
         cost: 0, cost_hire: 0, icon_index: 22, size: (1, 1), unit_type: UnitType::People,
-        next_unit: vec![], magic_type: Some(MagicType::Death),
+        next_unit: vec![], magic_type: Some(MagicType::DeathMagic),
         magic_direction: MagicDirection::ToAll,
         surrender: None, bonus: None, settings: AttackSettings::default(),
         stats: UnitStats {
@@ -93,7 +94,7 @@ fn make_test_registry() -> GameInfo {
     registry.units.inner.push(UnitInfo {
         id: 23, str_id: "life_mage".into(), name: "Life Mage".into(), descript: "".into(),
         cost: 0, cost_hire: 0, icon_index: 23, size: (1, 1), unit_type: UnitType::People,
-        next_unit: vec![], magic_type: Some(MagicType::Life),
+        next_unit: vec![], magic_type: Some(MagicType::LifeMagic),
         magic_direction: MagicDirection::ToAll,
         surrender: None, bonus: None, settings: AttackSettings::default(),
         stats: UnitStats {
@@ -115,6 +116,24 @@ fn make_test_registry() -> GameInfo {
         rules: Default::default(),
         power_scales: false,
         power_scales_with_lifetime: false,
+    });
+
+    // Unit 24 = elemental mage (ToEnemy) — аналог Архимага из Units.ini
+    registry.units.inner.push(UnitInfo {
+        id: 24, str_id: "elemental_mage".into(), name: "Elemental Mage".into(), descript: "".into(),
+        cost: 0, cost_hire: 0, icon_index: 24, size: (1, 1), unit_type: UnitType::People,
+        next_unit: vec![], magic_type: Some(MagicType::ElementalMagic),
+        magic_direction: MagicDirection::ToEnemy,
+        surrender: None, bonus: None, settings: AttackSettings::default(),
+        stats: UnitStats {
+            hp: 50, max_hp: 50, moves: 2, max_moves: 2, speed: 8,
+            damage: Power { magic: 25, ranged: 0, hand: 0 },
+            defence: Defence::default(),
+            flank_mod: Default::default(), pierce: Default::default(),
+            true_damage: Default::default(), vamp: Default::default(),
+            regen: Default::default(),
+        },
+        lvl: LevelUpInfo::default(),
     });
 
     registry.effects.inner.push(EffectInfo {
@@ -139,6 +158,18 @@ fn make_test_registry() -> GameInfo {
         added_modify: Default::default(),
         rules: Default::default(),
         power_scales: false,
+        power_scales_with_lifetime: false,
+    });
+    registry.effects.inner.push(EffectInfo {
+        id: "abstract_effect".into(),
+        name: "Abstract".into(),
+        desc: "".into(),
+        kind: "abstract".into(),
+        lifetime: EffectLifetime::default(),
+        stacks: true,
+        added_modify: Default::default(),
+        rules: Default::default(),
+        power_scales: true,
         power_scales_with_lifetime: false,
     });
 	registry.effects.inner.push(EffectInfo {
@@ -900,3 +931,665 @@ fn large_damage_kills_target() {
         assert_eq!(after, before, "ally hp must be unchanged");
     }
 
+    #[test]
+    fn front_row_mage_vs_blocked_path_game_layout() {
+        // Репродукция игрового кейса: Elemental ToEnemy маг стоит во ФРОНТОВОМ
+        // ряду (слот 8 -> Field::Front), перед ним свои (слот 7), враг во
+        // фронте врага (слот 10) с прикрытием (слот 9). is_path_empty = false,
+        // is_in_back = false, field_checks = false (враг).
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(20, 7), (24, 8)]); // свой фронт + маг
+        let army2 = make_army_from_ids(&registry, &[(0, 9), (0, 10)]); // враг с прикрытием
+        let mut armies = vec![army1, army2];
+        let active = BattleUnit { army: 0, index: 1 }; // маг
+        let mut battle = battle_with_active(&armies, active, &registry);
+
+        let interact = battle.can_interact.as_ref().unwrap();
+        println!("DEBUG front mage can_interact = {:?}", interact);
+        assert!(
+            interact.contains(&BattleUnitPos { army: 1, pos: 10 }),
+            "front-row elemental mage MUST be able to strike enemy (game reports no magic at all)"
+        );
+        let effects = handle_action((10, 1), &mut battle, &mut armies, &registry);
+        assert!(effects.is_some(), "handle_action must apply magic damage");
+    }
+
+    #[test]
+    fn back_row_mage_control_group() {
+        // Контроль: тот же маг в заднем ряду колдует нормально.
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(24, 1)]); // маг в бэке
+        let army2 = make_army_from_ids(&registry, &[(0, 9)]);
+        let mut armies = vec![army1, army2];
+        let active = BattleUnit { army: 0, index: 0 };
+        let mut battle = battle_with_active(&armies, active, &registry);
+        let effects = handle_action((9, 1), &mut battle, &mut armies, &registry);
+        assert!(effects.is_some(), "back-row mage must cast");
+    }
+
+    // =====================
+    // UNITS.INI PARSING (гипотеза: Magic=... не парсится в magic_type)
+    // =====================
+
+    #[test]
+    fn units_ini_archmage_full_section_parses() {
+        use advini::Sections;
+        // Секция скопирована дословно из dt/Units.ini ([2 Архимаг]).
+        let ini = r#"
+[2 Архимаг]
+GlobalIndex=2
+Name=Архимаг
+Descript=Архимаг способен обращаться к могущественным силам мирозданья, неподвластным простым людям.
+Cost=300
+CostMultipler=100
+CostGoldDiv=1
+Magic=ElementalMagic
+MagicDirection=ToEnemy
+StartExpirience=90
+LevelMultipler=160
+IconIndex=76
+// боевые характеристики
+Hits=50
+MagicPower=25
+ProtectLife=35
+ProtectDeath=35
+ProtectElemental=35
+Initiative=26
+Manevres=2
+// поуровневые изменения характеристики
+d-Hits=4
+d-MagicPower=5
+d-ProtectLife=10
+d-ProtectDeath=10
+d-ProtectElemental=10
+d-Initiative=1
+"#;
+        let sections = advini::parse_for_sections(ini);
+        assert_eq!(sections.len(), 1, "one section expected");
+        let (unit, _) = UnitInfo::from_section(sections[0].1.clone(), Default::default()).unwrap();
+        println!("PARSED UNIT = {unit:#?}");
+
+        // КРИТИЧНО: тип и направление магии обязаны распарситься, иначе маг
+        // в бою не сможет колдовать (attack вернёт None).
+        assert_eq!(
+            unit.magic_type,
+            Some(MagicType::ElementalMagic),
+            "Magic=ElementalMagic must parse into Some(Elemental)"
+        );
+        assert_eq!(unit.magic_direction, MagicDirection::ToEnemy);
+
+        // Остальные поля секции — на месте (маппинг: Hits->max_hp,
+        // MagicPower->damage.magic, Manevres->max_moves, Initiative->speed).
+        assert_eq!(unit.name, "Архимаг");
+        assert_eq!(unit.stats.damage.magic, 25, "MagicPower -> damage.magic");
+        assert_eq!(unit.stats.max_hp, 50, "Hits -> max_hp");
+        assert_eq!(unit.stats.max_moves, 2, "Manevres -> max_moves");
+        assert_eq!(unit.stats.speed, 26, "Initiative -> speed");
+        // GlobalIndex и IconIndex алиасятся на одно поле — побеждает первый
+        // найденный ключ (GlobalIndex=2). Поведение парсера, не бага магии.
+        assert_eq!(unit.icon_index, 2);
+    }
+
+    #[test]
+    fn elemental_mage_cannot_buff_elemental_mage() {
+        // Правило пользователя: элементальную магию нельзя баффать на
+        // элементального мага (он и так под своим стихийным резонансом).
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(24, 1), (24, 2)]); // маг + маг-союзник
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+        let mut armies = vec![army1, army2];
+        let active = BattleUnit { army: 0, index: 0 }; // элементальный маг
+        let mut battle = battle_with_active(&armies, active, &registry);
+
+        assert!(
+            !battle
+                .can_interact
+                .as_ref()
+                .unwrap()
+                .contains(&BattleUnitPos { army: 0, pos: 2 }),
+            "elemental ally mage must NOT be a buff target"
+        );
+
+        let effects = handle_action((2, 0), &mut battle, &mut armies, &registry);
+        assert!(effects.is_none(), "buff on elemental mage must be rejected");
+    }
+
+    #[test]
+    fn magic_cannot_target_enemy_in_reserve() {
+        // Враг в резерве (slot 0 = Field::Reserve) недостижим для ЛЮБОЙ магии.
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(22, 1)]); // death mage ToAll, back
+        let army2 = make_army_from_ids(&registry, &[(0, 0)]); // враг в резерве
+        let mut armies = vec![army1, army2];
+        armies[0].troops[0].get().unit.moves = 2;
+        armies[1].troops[0].get().unit.moves = 2;
+        let active = BattleUnit { army: 0, index: 0 };
+        let mut battle = battle_with_active(&armies, active, &registry);
+
+        assert!(
+            !battle
+                .can_interact
+                .as_ref()
+                .unwrap()
+                .contains(&BattleUnitPos { army: 1, pos: 0 }),
+            "reserve enemy must not be in can_interact"
+        );
+        let effects = handle_action((0, 1), &mut battle, &mut armies, &registry);
+        assert!(effects.is_none(), "magic vs reserve enemy must be forbidden");
+    }
+
+    #[test]
+    fn blessed_ally_not_target_and_move_not_wasted() {
+        // Уже благословлённый союзник: не цель, повторный клик не тратит ход.
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(22, 1), (1, 0)]); // маг + undead союзник
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+        let mut armies = vec![army1, army2];
+        armies[0].troops[0].get().unit.moves = 3;
+        let mage = BattleUnit { army: 0, index: 0 };
+
+        // Первый каст: благословление ложится (эффект id 1).
+        let mut battle = battle_with_active(&armies, mage, &registry);
+        let effects = handle_action((0, 0), &mut battle, &mut armies, &registry);
+        assert_eq!(effects.map(|(r, _)| r), Some(ActionResult::Buff));
+        assert!(armies[0].troops[1].get().unit.has_effect_id(1), "bless must land");
+
+        // Новый ход того же мага: повторный каст на благословлённого = None,
+        // маневры не тратятся.
+        let moves_before = armies[0].troops[0].get().unit.moves;
+        let mut battle = battle_with_active(&armies, mage, &registry);
+        assert!(
+            !battle
+                .can_interact
+                .as_ref()
+                .unwrap()
+                .contains(&BattleUnitPos { army: 0, pos: 0 }),
+            "blessed ally must not be in can_interact"
+        );
+        let effects = handle_action((0, 0), &mut battle, &mut armies, &registry);
+        assert!(effects.is_none(), "re-bless must be rejected");
+        let moves_after = armies[0].troops[0].get().unit.moves;
+        assert_eq!(
+            moves_after, moves_before,
+            "rejected action must not consume maneuvers"
+        );
+    }
+
+    #[test]
+    fn life_mage_heals_wounded_people_ally() {
+        // Life-маг (ToAll) лечит раненого People-союзника: Buff + HP растёт.
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(23, 1), (0, 0)]);
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+        {
+            let mut ally = army1.troops[1].get();
+            ally.unit.hp = 10;
+        }
+        let mut armies = vec![army1, army2];
+        armies[0].troops[0].get().unit.moves = 2;
+        let active = BattleUnit { army: 0, index: 0 };
+        let mut battle = battle_with_active(&armies, active, &registry);
+
+        assert!(
+            battle
+                .can_interact
+                .as_ref()
+                .unwrap()
+                .contains(&BattleUnitPos { army: 0, pos: 0 }),
+            "wounded people ally must be a valid life-mage target"
+        );
+        let before = armies[0].troops[1].get().unit.hp;
+        let effects = handle_action((0, 0), &mut battle, &mut armies, &registry);
+        assert_eq!(effects.map(|(r, _)| r), Some(ActionResult::Buff));
+        let after = armies[0].troops[1].get().unit.hp;
+        assert!(after > before, "ally must be healed ({} -> {})", before, after);
+    }
+
+    #[test]
+    fn turn_rollover_recomputes_can_interact() {
+        // Когда маневры текущего хода кончились и ход переходит дальше,
+        // can_interact ОБЯЗАН пересчитаться под нового активного юнита,
+        // а не остаться мусором от прошлого активного.
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(22, 1)]); // death mage
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+        let mut armies = vec![army1, army2];
+        let mage = BattleUnit { army: 0, index: 0 };
+        let mut battle = battle_with_active(&armies, mage, &registry);
+
+        // Симуляция перехода хода: активный сброшен, can_interact — мусор.
+        battle.active_unit = None;
+        battle.can_interact = Some(vec![BattleUnitPos { army: 1, pos: 8 }]);
+
+        battle.after_single_move(&mut armies, &registry);
+
+        let expected = battle
+            .active_unit
+            .map(|a| search_interactions(&mut battle, a, &armies, &registry));
+        assert_eq!(
+            battle.can_interact, expected,
+            "can_interact must be recomputed for the new active unit on turn rollover"
+        );
+    }
+
+    #[test]
+    fn reserve_mage_cannot_cast_on_allies_without_perk() {
+        // Маг в резерве БЕЗ перка attacks_from_reserve не действует вовсе,
+        // в том числе на своих в резерве.
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(22, 0), (1, 2)]); // маг в резерве + союзник вне резерва
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+        {
+            let mut ally = army1.troops[1].get();
+            ally.unit.hp = 10;
+        }
+        let mut armies = vec![army1, army2];
+        armies[0].troops[0].get().unit.moves = 2;
+        let active = BattleUnit { army: 0, index: 0 }; // маг в резерве
+        let mut battle = battle_with_active(&armies, active, &registry);
+
+        assert!(
+            !battle
+                .can_interact
+                .as_ref()
+                .unwrap()
+                .contains(&BattleUnitPos { army: 0, pos: 2 }),
+            "reserve mage without perk must not act on allies outside reserve"
+        );
+        let before = armies[0].troops[1].get().unit.hp;
+        let effects = handle_action((2, 0), &mut battle, &mut armies, &registry);
+        assert!(effects.is_none(), "reserve cast without perk must be rejected");
+        let after = armies[0].troops[1].get().unit.hp;
+        assert_eq!(after, before, "no effect must apply");
+    }
+
+    #[test]
+    fn reserve_mage_with_perk_casts_on_reserve_ally() {
+        // С перком attacks_from_reserve маг в резерве действует на своих
+        // в резерве.
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(22, 0), (1, 5)]);
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+        {
+            let mut ally = army1.troops[1].get();
+            ally.unit.hp = 10;
+        }
+        {
+            let mut mage = army1.troops[0].get();
+            mage.unit.settings.attacks_from_reserve = true;
+        }
+        let mut armies = vec![army1, army2];
+        armies[0].troops[0].get().unit.moves = 2;
+        let active = BattleUnit { army: 0, index: 0 };
+        let mut battle = battle_with_active(&armies, active, &registry);
+
+        assert!(
+            battle
+                .can_interact
+                .as_ref()
+                .unwrap()
+                .contains(&BattleUnitPos { army: 0, pos: 5 }),
+            "reserve ally must be targetable with attacks_from_reserve perk"
+        );
+        let before = armies[0].troops[1].get().unit.hp;
+        let effects = handle_action((5, 0), &mut battle, &mut armies, &registry);
+        assert_eq!(effects.map(|(r, _)| r), Some(ActionResult::Buff));
+        let after = armies[0].troops[1].get().unit.hp;
+        assert!(after > before, "ally must be healed ({} -> {})", before, after);
+    }
+
+    #[test]
+    fn reserve_mage_interacts_with_reserve_ally_without_perk() {
+        // Оба союзных юнита в резерве — взаимодействовать можно (field_checks,
+        // правило «оба в резерве и союзники — можно»), перк не требуется.
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(22, 0), (1, 5)]); // оба в резерве
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+        {
+            let mut ally = army1.troops[1].get();
+            ally.unit.hp = 10;
+        }
+        let mut armies = vec![army1, army2];
+        armies[0].troops[0].get().unit.moves = 2;
+        let active = BattleUnit { army: 0, index: 0 }; // маг в резерве
+        let mut battle = battle_with_active(&armies, active, &registry);
+
+        assert!(
+            battle
+                .can_interact
+                .as_ref()
+                .unwrap()
+                .contains(&BattleUnitPos { army: 0, pos: 5 }),
+            "both-in-reserve allies must be able to interact"
+        );
+        let before = armies[0].troops[1].get().unit.hp;
+        let effects = handle_action((5, 0), &mut battle, &mut armies, &registry);
+        assert_eq!(effects.map(|(r, _)| r), Some(ActionResult::Buff));
+        let after = armies[0].troops[1].get().unit.hp;
+        assert!(after > before, "ally must be healed ({} -> {})", before, after);
+    }
+
+    // =====================
+    // ЭФФЕКТЫ: тик/спад, конец боя, статы, стакание
+    // =====================
+
+    #[test]
+    fn effect_adds_and_reverts_stats() {
+        let registry = make_test_registry();
+        // Юнит от РЕЕСТРОВОЙ базы: recalc считает от registry.units[20], а не
+        // от крафтовых статов make_test_unit.
+        let mut unit = Unit {
+            id: 20,
+            hp: registry.units[20].stats.hp,
+            moves: registry.units[20].stats.moves,
+            modified: registry.units[20].stats.clone(),
+            modify: ModifyUnitStats::default(),
+            settings: registry.units[20].settings.clone(),
+            lvl: UnitLvl::default(),
+            bonus: None,
+            effects: vec![],
+            inventory: UnitInventory { items: vec![None; 4] },
+        };
+        let base_hand = unit.modified.damage.hand;
+
+        let modify = ModifyUnitStats {
+            damage: crate::units::unitstats::ModifyPower {
+                hand: Modify { add: Some(-3), ..Default::default() },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(crate::effects::effect::add_modify_effect(&mut unit, modify.clone(), 2, &registry));
+        // В игре modified пересчитывается на тике; в тесте — явно.
+        unit.recalc(&registry);
+        assert!(unit.has_effect_id(2), "curse effect must be present");
+        assert!(
+            unit.modified.damage.hand < base_hand,
+            "curse must reduce hand attack ({} -> {})",
+            base_hand, unit.modified.damage.hand
+        );
+
+        // Откат: removal возвращает added_modify из modify.
+        let effect = unit.get_effect_by_id(2).unwrap().clone();
+        effect.removal(&mut unit, &registry);
+        unit.recalc(&registry);
+        assert_eq!(
+            unit.modified.damage.hand, base_hand,
+            "removal must restore attack ({} -> {})",
+            base_hand, unit.modified.damage.hand
+        );
+    }
+
+    #[test]
+    fn stacking_true_effect_accumulates_lifetime() {
+        // Стакающийся эффект (id 1, stacks=true): повторное наложение
+        // суммирует lifetime и возвращает true.
+        let registry = make_test_registry();
+        let mut unit = make_test_unit(20, 100, 3, 5, 65, 0, 0);
+        let modify = ModifyUnitStats::default();
+
+        assert!(crate::effects::effect::add_modify_effect(&mut unit, modify.clone(), 1, &registry), "first bless ok");
+        assert!(crate::effects::effect::add_modify_effect(&mut unit, modify, 1, &registry), "second bless stacks");
+        let effect = unit.get_effect_by_id(1).unwrap();
+        assert_eq!(
+            effect.lifetime.lifetime,
+            Some(2),
+            "two blesses with lifetime 1 must stack to 2"
+        );
+        assert_eq!(unit.effects.iter().filter(|e| e.id == 1).count(), 1, "one slot");
+    }
+
+    #[test]
+    fn stacking_false_effect_rejects_second_add() {
+        // Не-стакающийся эффект (id 2, stacks=false): повторное наложение
+        // возвращает false, слот один.
+        let registry = make_test_registry();
+        let mut unit = make_test_unit(20, 100, 3, 5, 65, 0, 0);
+        let modify = ModifyUnitStats::default();
+
+        assert!(crate::effects::effect::add_modify_effect(&mut unit, modify.clone(), 2, &registry), "first curse ok");
+        assert!(
+            !crate::effects::effect::add_modify_effect(&mut unit, modify, 2, &registry),
+            "non-stacking curse must reject second add"
+        );
+        assert_eq!(unit.effects.iter().filter(|e| e.id == 2).count(), 1, "one slot");
+    }
+
+    #[test]
+    fn effects_decay_and_expire_on_turn_tick() {
+        // Абстрактный эффект (id 4, lifetime Some(1), decay 1) обязан спасть
+        // на следующем ходу: тик обнуляет lifetime и снимает эффект,
+        // добавленные модификаторы откатываются.
+        let registry = make_test_registry();
+        // База от реестра: recalc считает от registry.units[20].
+        let mut unit = Unit {
+            id: 20,
+            hp: registry.units[20].stats.hp,
+            moves: registry.units[20].stats.moves,
+            modified: registry.units[20].stats.clone(),
+            modify: ModifyUnitStats::default(),
+            settings: registry.units[20].settings.clone(),
+            lvl: UnitLvl::default(),
+            bonus: None,
+            effects: vec![],
+            inventory: UnitInventory { items: vec![None; 4] },
+        };
+        let base_hand = registry.units[20].stats.damage.hand;
+        let modify = ModifyUnitStats {
+            damage: crate::units::unitstats::ModifyPower {
+                hand: Modify { add: Some(-2), ..Default::default() },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(crate::effects::effect::add_modify_effect(&mut unit, modify, 4, &registry));
+        assert!(unit.has_effect_id(4));
+
+        unit.tick(&registry);
+        assert!(
+            !unit.has_effect_id(4),
+            "effect with lifetime 1 must expire after one tick"
+        );
+        assert_eq!(unit.modified.damage.hand, base_hand, "stats must revert");
+    }
+
+    #[test]
+    fn battle_end_removes_battle_effects() {
+        // remove_on_battle_end=true: по окончании боя эффекты сняты,
+        // добавленные модификаторы откачены.
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(20, 7)]);
+        let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+        let mut armies = vec![army1, army2];
+        let base_hand = armies[0].troops[0].get().unit.modified.damage.hand;
+
+        let mut battle = BattleInfo {
+            army1: 0, army2: 1,
+            armies_moved: [
+                vec![false; armies[0].max_troops],
+                vec![false; armies[1].max_troops],
+            ],
+            ..Default::default()
+        };
+        let modify = ModifyUnitStats {
+            damage: crate::units::unitstats::ModifyPower {
+                hand: Modify { add: Some(-3), ..Default::default() },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        {
+            let mut t = armies[0].troops[0].get();
+            assert!(crate::effects::effect::add_modify_effect(&mut t.unit, modify, 2, &registry));
+        }
+        battle.winner = Some(0);
+
+        battle.end(&mut armies, &registry);
+
+        let t = armies[0].troops[0].get();
+        assert!(
+            !t.unit.has_effect_id(2),
+            "battle end must clear battle effects"
+        );
+        assert_eq!(
+            t.unit.modified.damage.hand, base_hand,
+            "battle end must revert added stat modifies"
+        );
+    }
+
+// =====================
+// BUILDING SERVICES (найм/лечение/воскрешение/рынок)
+// =====================
+
+fn make_building_registry() -> GameInfo {
+    let mut registry = make_test_registry();
+    // Юнит 0: cost_hire = 50, cost = 100 для ценовых тестов.
+    registry.units[0].cost_hire = 50;
+    registry.units[0].cost = 100;
+    // Предмет 0: стоимость 100, продаётся; предмет 1: не продаётся (sells=false).
+        registry.items.inner.push(ItemInfo {
+        name: "Sword".into(),
+        description: "".into(),
+        cost: 100,
+        icon: "".into(),
+        sells: true,
+        itemtype: ArtifactType::Item,
+        magic_req: MagicVariants::Any,
+        bonus: None,
+        modify: Default::default(),
+    });
+        registry.items.inner.push(ItemInfo {
+        name: "QuestItem".into(),
+        description: "".into(),
+        cost: 500,
+        icon: "".into(),
+        sells: false,
+        itemtype: ArtifactType::Item,
+        magic_req: MagicVariants::Any,
+        bonus: None,
+        modify: Default::default(),
+    });
+    registry
+}
+
+#[test]
+fn recruitment_buy_spends_gold_and_adds_troop() {
+    let mut registry = make_building_registry();
+    let mut army = make_army_from_ids(&registry, &[(20, 7)]);
+    army.stats.gold = 200;
+    let mut rec = Recruitment::new(vec![RecruitUnit { unit: 0, count: 2 }], 1.0);
+    // Успех: 50 <= 200, счётчик 2 -> 1, золото 200 -> 150, юнит добавлен.
+    assert!(rec.buy(&mut army, 0, &registry).is_ok());
+    assert_eq!(army.stats.gold, 150);
+    assert_eq!(rec.units[0].count, 1);
+    assert_eq!(army.troops.len(), 2);
+    // Исчерпание счётчика: count=0 -> Err, золото не меняется.
+    assert!(rec.buy(&mut army, 0, &registry).is_ok());
+    assert_eq!(rec.units[0].count, 0);
+    let gold = army.stats.gold;
+    assert!(rec.buy(&mut army, 0, &registry).is_err());
+    assert_eq!(army.stats.gold, gold);
+}
+
+#[test]
+fn market_buy_takes_item_and_gold() {
+    let registry = make_building_registry();
+    let mut army = make_army_from_ids(&registry, &[(20, 7)]);
+    army.stats.gold = 150;
+    let mut market = Market::new((0, 1000), vec![Item { index: 0 }], 5);
+    market.buy(&mut army, 0, &registry.items);
+    assert_eq!(army.stats.gold, 50); // 150 - 100
+    assert_eq!(market.items.len(), 0);
+    assert!(army.inventory.iter().any(|it| it.is_some()));
+}
+
+#[test]
+fn market_sell_pays_half_and_refills() {
+    let registry = make_building_registry();
+    let mut army = make_army_from_ids(&registry, &[(20, 7)]);
+    army.stats.gold = 0;
+    army.add_item(Item { index: 0 });
+    let mut market = Market::new((0, 1000), vec![], 5);
+    let revenue = market.sell(&mut army, 0, &registry.items).unwrap();
+    assert_eq!(revenue, 50); // 50% от 100
+    assert_eq!(army.stats.gold, 50);
+    assert!(army.inventory[0].is_none(), "слот инвентаря освобождён");
+    assert_eq!(market.items.len(), 1, "предмет вернулся на рынок");
+    // Пустой слот продать нельзя.
+    assert!(market.sell(&mut army, 0, &registry.items).is_err());
+}
+
+#[test]
+fn heal_for_gold_partial_and_full() {
+    let registry = make_building_registry();
+    let mut army = make_army_from_ids(&registry, &[(0, 7)]);
+    // Раним юнита: 100 -> 40.
+    army.troops[0].get().unit.hp = 40;
+    let troop = &mut army.troops[0];
+    let mut troop = troop.get();
+    // Частичное лечение: 30 золота = 30 HP.
+    let spent = crate::map::object::heal_for_gold(&mut troop, 30, &registry).unwrap();
+    assert_eq!(spent, 30);
+    assert_eq!(troop.unit.hp, 70);
+    // Лечение до конца: просим 1000, потратится только 30 (недостаёт 30).
+    let spent = crate::map::object::heal_for_gold(&mut troop, 1000, &registry).unwrap();
+    assert_eq!(spent, 30);
+    assert_eq!(troop.unit.hp, 100);
+    // Полный юнит лечить нельзя.
+    assert!(crate::map::object::heal_for_gold(&mut troop, 10, &registry).is_err());
+    let cost = crate::map::object::heal_cost(&troop);
+    assert_eq!(cost, 0);
+}
+
+#[test]
+fn resurrect_dead_troop_costs_hire() {
+    let registry = make_building_registry();
+    let mut army = make_army_from_ids(&registry, &[(0, 7)]);
+    army.stats.gold = 200;
+    // Убиваем юнита.
+    army.troops[0].get().unit.kill(&registry);
+    assert!(army.troops[0].get().is_dead());
+    {
+        let troop = &mut army.troops[0];
+        let mut troop = troop.get();
+        let cost = crate::map::object::resurrect_cost(&troop, &registry);
+        assert_eq!(cost, 50); // cost_hire юнита 0
+        let spent = crate::map::object::resurrect(&mut troop, army.stats.gold, &registry).unwrap();
+        army.stats.gold -= spent;
+        assert_eq!(troop.unit.hp, 100, "воскрешение даёт полное здоровье");
+    }
+    assert_eq!(army.stats.gold, 150);
+    // Живого воскресить нельзя.
+    {
+        let troop = &mut army.troops[0];
+        let mut troop = troop.get();
+        assert!(crate::map::object::resurrect(&mut troop, army.stats.gold, &registry).is_err());
+    }
+    // Не хватает золота.
+    army.stats.gold = 10;
+    army.troops[0].get().unit.kill(&registry);
+    {
+        let troop = &mut army.troops[0];
+        let mut troop = troop.get();
+        assert!(crate::map::object::resurrect(&mut troop, army.stats.gold, &registry).is_err());
+        assert!(troop.unit.is_dead(), "юнит не воскрешён при нехватке денег");
+    }
+}
+#[test]
+fn spell_learn_records_book_without_applying_effect() {
+    let registry = make_building_registry();
+    let mut army = make_army_from_ids(&registry, &[(20, 7)]);
+    let hero_effects_before = army.troops[0].get().unit.effects.len();
+    // Изучение: id попадает в книгу армии.
+    assert_eq!(army.learn_spell(3), Ok(true));
+    assert!(army.spells.contains(&3));
+    // Эффект на юнита-героя НЕ накладывается.
+    assert_eq!(
+        army.troops[0].get().unit.effects.len(),
+        hero_effects_before,
+        "изучение не даёт эффектов — только запись в книгу"
+    );
+    // Повторное изучение того же заклинания отклонено.
+    assert_eq!(army.learn_spell(3), Ok(false));
+    assert_eq!(army.spells.iter().filter(|s| **s == 3).count(), 1);
+}

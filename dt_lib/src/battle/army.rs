@@ -69,6 +69,9 @@ pub struct Army {
     pub control: Control,
     pub pc_settings: Option<PC_ControlSetings>,
     pub path: Vec<(usize, usize)>,
+    /// Книга заклинаний армии: id изученных эффектов (реестр Effects).
+    /// Изучение НЕ накладывает эффект на юнитов — это список известного.
+    pub spells: Vec<usize>,
 }
 pub type TroopType = SendMut<Troop>;
 
@@ -102,6 +105,7 @@ impl Army {
             pos,
             active,
             path: Vec::new(),
+            spells: Vec::new(),
         };
         for troop in troops {
             army.add_troop(troop, &registry.units).ok();
@@ -286,6 +290,16 @@ impl Army {
         let first = self.inventory.iter().position(|x| x.is_none());
         if let Some(index) = first {
             self.inventory[index] = Some(item);
+        }
+    }
+    /// Записать заклинание в книгу армии (id реестра Effects).
+    /// НЕ накладывает эффект на юнитов. Ok(false) — уже в книге.
+    pub fn learn_spell(&mut self, spell: usize) -> Result<bool, ()> {
+        if self.spells.contains(&spell) {
+            Ok(false)
+        } else {
+            self.spells.push(spell);
+            Ok(true)
         }
     }
     pub fn remove_item(&mut self, rem_item: usize) {

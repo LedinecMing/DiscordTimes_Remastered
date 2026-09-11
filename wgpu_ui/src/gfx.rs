@@ -344,7 +344,30 @@ impl Gfx {
         id
     }
 
-    /// Радиальный градиент (свечение карточек): белый центр -> прозрачный край.
+    /// Кольцевое свечение (радиальный ореол вокруг карточки): прозрачный центр,
+    /// гауссов пик на r=0.78, спад к краю. Юнит в центре остаётся видимым.
+    pub fn push_glow_ring(&mut self, size: u32) -> TexId {
+        let mut rgba = vec![0u8; (size * size * 4) as usize];
+        let c = (size as f32 - 1.) / 2.;
+        let radius = c.max(1.);
+        for y in 0..size {
+            for x in 0..size {
+                let dx = x as f32 - c;
+                let dy = y as f32 - c;
+                let r = ((dx * dx + dy * dy).sqrt() / radius).clamp(0., 1.);
+                let t = (r - 0.78) / 0.16;
+                let a = (-t * t).exp();
+                let i = ((y * size + x) * 4) as usize;
+                rgba[i] = 255;
+                rgba[i + 1] = 255;
+                rgba[i + 2] = 255;
+                rgba[i + 3] = (a * 255.) as u8;
+            }
+        }
+        self.push_texture_rgba(&rgba, size, size, Filter::Linear)
+    }
+
+    /// Радиальный градиент (белый центр -> прозрачный край).
     pub fn push_radial_gradient(&mut self, size: u32, inner: [f32; 4], outer: [f32; 4]) -> TexId {
         let mut rgba = vec![0u8; (size * size * 4) as usize];
         let center = (size as f32 - 1.) / 2.;

@@ -259,7 +259,7 @@ impl ModifyPower {
     pub fn apply(&self, power: &Power, magic_type: Option<MagicType>) -> Power {
         let mut n_power = Power::default();
         let expected_min = match magic_type {
-            Some(MagicType::Death) => 25,
+            Some(MagicType::DeathMagic) => 25,
             Some(_) => 15,
             _ => 0,
         };

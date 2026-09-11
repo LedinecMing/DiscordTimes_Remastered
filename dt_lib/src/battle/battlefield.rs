@@ -170,8 +170,49 @@ impl BattleInfo {
             }
         }
 
+        // TEMP-ДИАГНОСТИКА: дамп магических статов на старте боя.
+        for (a, army) in [&armies[self.army1], &armies[self.army2]].iter().enumerate() {
+            for (i, troop) in army.troops.iter().enumerate() {
+                let t = troop.get();
+                let info = t.unit.get_info(&registry.units);
+                println!(
+                    "DEBUG start: army {a} idx {i} id {} ({}), pos {:?}, magic_type {:?}, dir {:?}, dmg.magic {}, field {:?}",
+                    info.id,
+                    info.name,
+                    t.pos,
+                    info.magic_type,
+                    info.magic_direction,
+                    t.unit.modified.damage.magic,
+                    field_type(t.pos.whole(army.max_troops / 2), army.max_troops),
+                );
+            }
+        }
+        eprintln!("DBG start: bonuses done, -> after_single_move");
         self.winner = None;
-        self.after_single_move(armies, registry);
+        eprintln!("DBG after_single_move: enter");
+        self.recalc_hitmaps(armies, registry);
+        eprintln!("DBG after_single_move: hitmaps ok");
+        check_win(self, &armies, registry);
+        eprintln!("DBG after_single_move: check_win ok");
+        check_row_fall(self, armies, registry);
+        eprintln!("DBG after_single_move: row_fall ok");
+        self.search_next_active(&armies);
+        eprintln!("DBG after_single_move: next_active ok");
+        if self.winner.is_none() {
+            if let Some(active_unit) = self.active_unit {
+                self.can_interact = Some(search_interactions(self, active_unit, &armies, registry));
+                eprintln!("DBG after_single_move: can_interact ok");
+            } else {
+                self.next_move_seq(armies, registry);
+                self.search_next_active(&armies);
+                eprintln!("DBG after_single_move: next_move_seq ok");
+            }
+        } else {
+            self.end(armies, registry);
+            eprintln!("DBG after_single_move: end ok");
+        }
+        println!("DEBUG start: after_single_move active={:?} can_interact={:?}",
+            self.active_unit, self.can_interact);
     }
 	pub fn recalc_event_listeners(&mut self, armies: &Vec<Army>, registry: &GameInfo) {
 		let mut event_listeners: Vec<[Vec<BattleUnit>; 2]> = (0..(AbilityCondition::Skips as u8)).map(|_| [vec!{}, vec!{}]).collect();
@@ -448,7 +489,7 @@ pub fn lower_magic(troops: &mut Vec<TroopType>, registry: &GameInfo) {
         let unit = &mut troop.unit;
 		let unit_info = unit.get_info(&registry.units);
         let minus = match unit_info.magic_type {
-            Some(MagicType::Death | MagicType::Life) => -2,
+            Some(MagicType::DeathMagic | MagicType::LifeMagic) => -2,
             Some(_) => -5,
             None => {
                 continue;
@@ -469,7 +510,7 @@ fn lower_magic_indexed(army: usize, armies: &mut Vec<Army>, registry: &GameInfo)
         let unit = &mut t.unit;
         let unit_info = unit.get_info(&registry.units);
         match unit_info.magic_type {
-            Some(MagicType::Death | MagicType::Life) => {
+            Some(MagicType::DeathMagic | MagicType::LifeMagic) => {
                 // TODO: apply magic lowering effect
             },
             Some(_) => {
@@ -703,8 +744,8 @@ pub(crate) fn unit_interaction(
                 {
                     let unit_type = info.unit_type;
                     match magic_type {
-                        MagicType::Death | MagicType::Life => { heal_bless(unit, damage, magic_type, unit_type, registry); },
-                        MagicType::Elemental => { elemental_bless(unit, damage, unit_type, info.magic_type, registry); },
+                        MagicType::DeathMagic | MagicType::LifeMagic => { heal_bless(unit, damage, magic_type, unit_type, registry); },
+                        MagicType::ElementalMagic => { elemental_bless(unit, damage, unit_type, info.magic_type, registry); },
                     };
                 }
             }
@@ -739,8 +780,10 @@ pub fn handle_action(
         return None;
     }
     let active = battle.active_unit;
+    println!("DEBUG handle_action: clicked army {army} pos {pos}, active={active:?}, can_interact={:?}", battle.can_interact);
     let res = unit_interaction(battle, armies, (army, BattleUnitInfo::Pos(pos)), registry);
     battle.after_single_move(armies, registry);
+    println!("DEBUG handle_action: result={res:?}, new_active={:?}", battle.active_unit);
     res.and_then(|v| Some((v, active.unwrap())))
 }
 

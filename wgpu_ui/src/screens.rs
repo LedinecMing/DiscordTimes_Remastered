@@ -790,6 +790,7 @@ pub fn battle_setup(ctx: &mut Ctx) {
                     .conn
                     .send_action(dt_client::dt_server::Incoming::Status(!was_ready));
             } else if !was_ready {
+                eprintln!("DBG setup: -> Menu::Battle, calling battle.start()");
                 *menu = Menu::Battle;
                 game.executor.battle.as_mut().and_then(|x| {
                     Some(x.start(&mut game.executor.gamemap.armys, registry))

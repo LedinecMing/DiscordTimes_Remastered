@@ -84,8 +84,10 @@ fn match_quote(data: &DataEnum, ident: &Ident) -> TokenStream {
         ));
     }
     quote!(
+        // String::eat возвращает (остаток, распарсенное значение): матчить надо
+        // имя варианта (res), а не остаток __input (иначе всегда "Wrong variant").
         let (__input, res) = <String as advini::Ini>::eat(__input, _additional)?;
-        match __input {
+        match res.as_str() {
             #(#variants)*
             _ => { Err(advini::IniParseError::Error("Wrong variant!".into())) }
         }

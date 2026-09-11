@@ -184,9 +184,9 @@ pub enum MagicDirection {
 #[derive(Copy, Clone, Debug, PartialEq, Ini)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub enum MagicType {
-    Life,
-    Death,
-    Elemental,
+    LifeMagic,
+    DeathMagic,
+    ElementalMagic,
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Sections)]
@@ -358,10 +358,10 @@ pub fn heal_unit(
 	target_unit_type: UnitType,
 ) -> Option<ActionResult> {
     return match (target_unit_type, magic_type) {
-        (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
-        (UnitType::Undead, Life) => None,
+        (UnitType::Rogue | UnitType::Hero | UnitType::People, DeathMagic) => None,
+        (UnitType::Undead, LifeMagic) => None,
         _ => {
-            if let MagicType::Elemental = magic_type {
+            if let MagicType::ElementalMagic = magic_type {
                 damage.magic /= 2;
             }
             if unit.modified.max_hp <= unit.hp {
@@ -379,17 +379,17 @@ pub fn heal_unit(
 
 fn bless_unit(target: &mut Unit, damage: Power, magic_type: MagicType, target_unit_type: UnitType, registry: &GameInfo) -> Option<ActionResult> {
     match (target_unit_type, magic_type) {
-        (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
-        (UnitType::Undead, Life) => None,
+        (UnitType::Rogue | UnitType::Hero | UnitType::People, DeathMagic) => None,
+        (UnitType::Undead, LifeMagic) => None,
         (UnitType::Mecha, _) => None,
         _ => {
 			let mut res = ModifyUnitStats::default();
 			let magic = damage.magic as i64;
 			let (add_damage, add_defence) = match magic_type {
-				MagicType::Death => {
+				MagicType::DeathMagic => {
 					(1 + magic  / 6, 1 + magic / 12)
 				},
-				MagicType::Life => {
+				MagicType::LifeMagic => {
 					(1 + magic / 8, 1 + magic / 4)
 				},
 				_ => { (1, 1) }
@@ -409,9 +409,9 @@ fn bless_unit(target: &mut Unit, damage: Power, magic_type: MagicType, target_un
 
 pub fn heal_bless(target: &mut Unit, damage: Power, magic_type: MagicType, target_unit_type: UnitType, registry: &GameInfo) -> Option<ActionResult> {
     match (target_unit_type, magic_type) {
-        (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
-        (UnitType::Undead, Life) => None,
-        (UnitType::Mecha, Death | Life) => None,
+        (UnitType::Rogue | UnitType::Hero | UnitType::People, DeathMagic) => None,
+        (UnitType::Undead, LifeMagic) => None,
+        (UnitType::Mecha, DeathMagic | LifeMagic) => None,
         _ => {
             if heal_unit(target, damage, magic_type, target_unit_type).is_none() {
                 return bless_unit(target, damage, magic_type, target_unit_type, registry);
@@ -422,9 +422,9 @@ pub fn heal_bless(target: &mut Unit, damage: Power, magic_type: MagicType, targe
 }
 
 pub fn elemental_bless(target: &mut Unit, damage: Power, target_unit_type: UnitType, target_magic_type: Option<MagicType>, registry: &GameInfo) -> Option<ActionResult> {
-    if heal_unit(target, damage, Elemental, target_unit_type).is_none() {
+    if heal_unit(target, damage, ElementalMagic, target_unit_type).is_none() {
         return if !target.has_effect_id(1)
-            && !matches!(target_magic_type, Some(MagicType::Elemental))
+            && !matches!(target_magic_type, Some(MagicType::ElementalMagic))
         {
 			let mut res = ModifyUnitStats::default();
 			let magic = damage.magic as i64;
@@ -470,7 +470,7 @@ fn apply_magic_curse_indexed(
 
     let mut damage = *damage;
     match (target_unit_type, magic_type) {
-        (UnitType::Undead, Life) => {
+        (UnitType::Undead, LifeMagic) => {
             damage.magic *= 2;
         }
         _ => {}
@@ -486,8 +486,8 @@ fn apply_magic_curse_indexed(
 
     let magic = damage.magic as i64;
     let (add_damage, add_defence) = match magic_type {
-        MagicType::Death => (1 + magic / 5, 1 + magic / 10),
-        MagicType::Life => (1 + magic / 10, 1 + magic / 3),
+        MagicType::DeathMagic => (1 + magic / 5, 1 + magic / 10),
+        MagicType::LifeMagic => (1 + magic / 10, 1 + magic / 3),
         _ => (1, 1)
     };
 
@@ -552,9 +552,9 @@ fn compute_attack_damage(
 
     if let Some(magic_type) = target_magic_type {
         let magic_def = match magic_type {
-            MagicType::Life => target_defence.life_magic,
-            MagicType::Death => target_defence.death_magic,
-            MagicType::Elemental => target_defence.elemental_magic,
+            MagicType::LifeMagic => target_defence.life_magic,
+            MagicType::DeathMagic => target_defence.death_magic,
+            MagicType::ElementalMagic => target_defence.elemental_magic,
         };
         dmg.magic = (percent_100 - magic_def).calc(dmg.magic.saturating_sub(target_defence.magic_units));
     }
@@ -650,6 +650,19 @@ pub fn attack(
     let dist = target_pos.0.abs_diff(my_pos.0);
     let is_path_empty = is_path_empty(target_hitmap, my_pos, target_pos, columns);
 
+    // Резерв:
+    //  - враг в резерве недостижим всегда;
+    //  - союзник в резерве достижим только если маг сам в резерве (оба в
+    //    резерве — взаимодействовать можно, field_checks);
+    //  - маг в резерве без перка attacks_from_reserve действует только на
+    //    союзников в резерве, во всех остальных случаях — нельзя.
+    if is_enemy && enemy_in_reserve { return None; }
+    if me_in_reserve && !can_reserve && !(!is_enemy && enemy_in_reserve) {
+        return None;
+    }
+
+	dbg!("Attack try: {}, {}", &m.unit.get_info(&registry.units).name, &t.unit.get_info(&registry.units).name);
+	
     if field_checks
         && damage.hand > 0 && !is_in_back && target_pos.1 == 1 && is_enemy
         && (is_path_empty || dist < 2)
@@ -667,7 +680,7 @@ pub fn attack(
         return Some(ActionResult::Ranged);
     }
 
-	let can_magic = (enemy_field == Field::Front && is_path_empty && dist > 1)
+	let can_magic = (enemy_in_reserve && is_path_empty && dist > 1)
 		|| (enemy_field == Field::Back && is_front_empty)
         || is_in_back
 		|| field_checks;
@@ -694,56 +707,58 @@ pub fn attack(
 	dbg!("Selecting magic");
     // Пер-таргет ограничения (бывший can_attack): тип цели + уже висящие эффекты.
     match (my_info_data.magic_direction, magic_type, is_enemy) {
+		// нельзя накладывать баффы элементальные на элементальных магов
+		(_, ElementalMagic, false) if target_info_data.magic_type == Some(ElementalMagic) => None,
         (ToAlly, _, false) => match magic_type {
-            Death | Life => match (target_info_data.unit_type, magic_type) {
-                (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
-                (UnitType::Undead, Life) => None,
+            DeathMagic | LifeMagic => match (target_info_data.unit_type, magic_type) {
+                (UnitType::Rogue | UnitType::Hero | UnitType::People, DeathMagic) => None,
+                (UnitType::Undead, LifeMagic) => None,
                 _ if is_blessed => None,
                 _ => Some(ActionResult::Buff),
             },
-            Elemental if has_elemental_sup => None,
-            Elemental => Some(ActionResult::Buff),
+            ElementalMagic if has_elemental_sup => None,
+            ElementalMagic => Some(ActionResult::Buff),
         },
         (ToAll, _, _) => match (magic_type, is_enemy) {
-			(Death | Life, true) if is_cursed => {
+			(DeathMagic | LifeMagic, true) if is_cursed => {
 				Some(ActionResult::MagicDamage)
 			},
-			(Death | Life, true) => {
+			(DeathMagic | LifeMagic, true) => {
 				Some(ActionResult::Debuff)
 			},
-            (Death | Life, false) => match (target_info_data.unit_type, magic_type) {
-                (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
-                (UnitType::Undead, Life) => None,
-                (UnitType::Mecha, Death | Life) => None,
+            (DeathMagic | LifeMagic, false) => match (target_info_data.unit_type, magic_type) {
+                (UnitType::Rogue | UnitType::Hero | UnitType::People, DeathMagic) => None,
+                (UnitType::Undead, LifeMagic) => None,
+                (UnitType::Mecha, DeathMagic | LifeMagic) => None,
                 _ if is_blessed => None,
                 _ => Some(ActionResult::Buff),
             },
-			(Elemental, true) if is_cursed => Some(ActionResult::MagicDamage),
-            (Elemental, true) => Some(ActionResult::Debuff),
-            (Elemental, false) if has_elemental_sup => {
+			(ElementalMagic, true) if is_cursed => Some(ActionResult::MagicDamage),
+            (ElementalMagic, true) => Some(ActionResult::Debuff),
+            (ElementalMagic, false) if has_elemental_sup => {
                 None
             }
-            (Elemental, false) => Some(ActionResult::Buff),
+            (ElementalMagic, false) => Some(ActionResult::Buff),
         },
 		(ToEnemy, _, true) if is_cursed => Some(ActionResult::MagicDamage),
         (ToEnemy, _, true) => Some(ActionResult::Debuff),
         (CurseOnly, _, true) if !is_cursed => Some(ActionResult::Debuff),
         (StrikeOnly, _, true) => Some(ActionResult::MagicDamage),
         (BlessOnly, _, false) => match magic_type {
-            Life | Death => match (target_info_data.unit_type, magic_type) {
-                (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
-                (UnitType::Undead, Life) => None,
-                (UnitType::Mecha, Death | Life) => None,
+            LifeMagic | DeathMagic => match (target_info_data.unit_type, magic_type) {
+                (UnitType::Rogue | UnitType::Hero | UnitType::People, DeathMagic) => None,
+                (UnitType::Undead, LifeMagic) => None,
+                (UnitType::Mecha, DeathMagic | LifeMagic) => None,
                 _ if is_blessed => None,
                 _ => Some(ActionResult::Buff),
             },
-            Elemental if has_elemental_sup => None,
-            Elemental => Some(ActionResult::Buff),
+            ElementalMagic if has_elemental_sup => None,
+            ElementalMagic => Some(ActionResult::Buff),
         },
         (CureOnly, _, false) => match (target_info_data.unit_type, magic_type) {
-            (UnitType::Rogue | UnitType::Hero | UnitType::People, Death) => None,
-            (UnitType::Undead, Life) => None,
-            (UnitType::Mecha, Death | Life) => None,
+            (UnitType::Rogue | UnitType::Hero | UnitType::People, DeathMagic) => None,
+            (UnitType::Undead, LifeMagic) => None,
+            (UnitType::Mecha, DeathMagic | LifeMagic) => None,
             // Невозможно лечить полного (в can_attack была инвертированная опечатка).
             _ if t.unit.hp >= t.unit.modified.max_hp => None,
             _ => Some(ActionResult::Buff),
@@ -785,8 +800,8 @@ pub fn apply_attack(
         ActionResult::Debuff => {
             let Some(magic_type) = my_info.magic_type else { return 0; };
             let curse = match magic_type {
-                Death | Life => apply_magic_curse_indexed(me, target, armies, &damage, magic_type, registry),
-                Elemental => apply_elemental_curse_indexed(me, target, armies, &damage, magic_type, registry),
+                DeathMagic | LifeMagic => apply_magic_curse_indexed(me, target, armies, &damage, magic_type, registry),
+                ElementalMagic => apply_elemental_curse_indexed(me, target, armies, &damage, magic_type, registry),
             };
             if curse.is_none() {
                 // Фоллбек оригинального attack: проклятие не легло — чистый магический урон.
@@ -807,13 +822,13 @@ pub fn apply_attack(
             let unit = &mut t.unit;
             match my_info.magic_direction {
                 BlessOnly => match magic_type {
-                    Life | Death => { bless_unit(unit, damage, magic_type, target_unit_type, registry); }
-                    Elemental => { elemental_bless(unit, damage, target_unit_type, target_magic_type, registry); }
+                    LifeMagic | DeathMagic => { bless_unit(unit, damage, magic_type, target_unit_type, registry); }
+                    ElementalMagic => { elemental_bless(unit, damage, target_unit_type, target_magic_type, registry); }
                 },
                 CureOnly => { heal_unit(unit, damage, magic_type, target_unit_type); }
                 ToAlly | ToAll => match magic_type {
-                    Death | Life => { heal_bless(unit, damage, magic_type, target_unit_type, registry); }
-                    Elemental => { elemental_bless(unit, damage, target_unit_type, target_magic_type, registry); }
+                    DeathMagic | LifeMagic => { heal_bless(unit, damage, magic_type, target_unit_type, registry); }
+                    ElementalMagic => { elemental_bless(unit, damage, target_unit_type, target_magic_type, registry); }
                 },
                 _ => {}
             }
@@ -1062,9 +1077,9 @@ impl Unit {
 
 		if let Some(magic_type) = magic_type {
 			let magic_def = match magic_type {
-				MagicType::Life => defence.life_magic,
-				MagicType::Death => defence.death_magic,
-				MagicType::Elemental => defence.elemental_magic,
+				MagicType::LifeMagic => defence.life_magic,
+				MagicType::DeathMagic => defence.death_magic,
+				MagicType::ElementalMagic => defence.elemental_magic,
 			};
 			damage.magic = (percent_100 - magic_def)
 				.calc(damage.magic.saturating_sub(defence.magic_units));
@@ -1086,10 +1101,37 @@ impl Unit {
 		}
 	}
     pub fn tick(&mut self, registry: &GameInfo) -> bool {
-        let mut _effects = self.effects.clone();
         self.heal(self.modified.regen.calc(self.modified.max_hp));
+        // Спад lifetime эффектов: блесс/курс спадают на следующий ход.
+        for effect in &mut self.effects {
+            if let Some(lifetime) = &mut effect.lifetime.lifetime {
+                *lifetime = lifetime.saturating_sub(effect.lifetime.decay);
+            }
+        }
+        // Снятие истёкших эффектов с откатом добавленных модификаторов.
+        let (kept, expired): (Vec<_>, Vec<_>) = self
+            .effects
+            .drain(..)
+            .partition(|e| !e.lifetime.lifetime.is_some_and(|l| l == 0));
+        for effect in &expired {
+            effect.removal(self, registry);
+        }
+        self.effects = kept;
         self.recalc(registry);
         true
+    }
+
+    /// Конец боя: боевые эффекты снимаются, добавленные модификаторы откатываются.
+    pub fn on_battle_end(&mut self, registry: &GameInfo) {
+        let (kept, removed): (Vec<_>, Vec<_>) = self
+            .effects
+            .drain(..)
+            .partition(|e| !e.lifetime.remove_on_battle_end);
+        for effect in &removed {
+            effect.removal(self, registry);
+        }
+        self.effects = kept;
+        self.recalc(registry);
     }
 }
 pub fn display_unit(unit: &Unit, registry: &GameInfo) -> Vec<String> {
@@ -1171,7 +1213,7 @@ pub fn display_unit(unit: &Unit, registry: &GameInfo) -> Vec<String> {
             let damage;
 
             match magic_type {
-                MagicType::Death => {
+                MagicType::DeathMagic => {
                     add_attack = 1 + magic / 6;
                     add_defence = magic / 12;
                     minus_defence = magic / 10;
@@ -1179,7 +1221,7 @@ pub fn display_unit(unit: &Unit, registry: &GameInfo) -> Vec<String> {
                     add_hp = magic;
                     damage = magic;
                 }
-                MagicType::Life => {
+                MagicType::LifeMagic => {
                     add_attack = magic / 8;
                     add_defence = 1 + magic / 4;
                     minus_defence = 1 + magic / 3;
@@ -1187,7 +1229,7 @@ pub fn display_unit(unit: &Unit, registry: &GameInfo) -> Vec<String> {
                     add_hp = magic;
                     damage = magic;
                 }
-                MagicType::Elemental => {
+                MagicType::ElementalMagic => {
                     add_moves = match magic {
                         0..=19 => 0,
                         20..=44 => 1,

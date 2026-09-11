@@ -89,6 +89,8 @@ impl BlendMode {
 #[derive(Debug, Clone)]
 pub struct MapRenderSettings {
     pub camera: Camera,
+    /// Зум-лимиты карты (вся карта..ZOOM_IN×): false — legacy-кламп [8e-6; 0.02].
+    pub zoom_limits: bool,
     pub deco_render: bool,
     pub buildings_render: bool,
     pub event_render: bool,
@@ -103,6 +105,7 @@ pub struct MapRenderSettings {
 impl Default for MapRenderSettings {
     fn default() -> Self {
         Self {
+            zoom_limits: true,
             camera: Camera::from_display_rect(0., SIZE.1 * 50., SIZE.0 * 50., -SIZE.1 * 50.),
             deco_render: true,
             buildings_render: true,
@@ -128,6 +131,33 @@ pub enum Menu {
     Battle,
     RoomCreation,
     BattleSetup,
+    /// Окно строения: индекс в gamemap.buildings + активная вкладка.
+    Building(usize, BuildingTab),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildingTab {
+    Main,
+    Market,
+    Recruits,
+    Spells,
+}
+
+/// Состояние окна строения: выделения списков рынка, карта статов, лог сделки.
+#[derive(Debug, Default)]
+pub struct BuildingUi {
+    /// Выбранные к покупке (индексы market.items).
+    pub market_pick: Vec<usize>,
+    /// Выбранные к продаже (позиции army.inventory).
+    pub player_pick: Vec<usize>,
+    /// Hover/выбранный юнит найма для карты статов (юнит из реестра).
+    pub inspect_unit: Option<usize>,
+    /// Выбранный юнит в армии для клик-мува (позиция слота).
+    pub drag_from: Option<usize>,
+    /// Результат последней сделки.
+    pub deal_log: Vec<String>,
+    /// Последний клик ЛКМ на карте (время, тайл) — дабл-клик по строению.
+    pub last_click: Option<(f64, [usize; 2])>,
 }
 
 /// Порт struct Ui (quad_ui main.rs:531): текущее меню, UI-камера, стек.
@@ -151,6 +181,8 @@ pub struct State {
     pub textures: RenderTextures,
     pub game: Game,
     pub ui: UiState,
+    /// Состояние окна строения (выделения рынка, лог сделки, дабл-клик).
+    pub building_ui: BuildingUi,
     pub delta: f32,
     pub rt: Runtime,
     /// Пиксельные снапшоты тайлов (TILES), для генерации наплывов.
@@ -393,6 +425,7 @@ pub async fn game_init(gfx: &mut Gfx, text: &mut TextRenderer) -> State {
         },
         game,
         tile_pixels,
+        building_ui: BuildingUi::default(),
     }
 }
 

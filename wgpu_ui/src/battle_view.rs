@@ -158,6 +158,7 @@ pub fn unit_card_battle(
     is_in_focus: bool,
     is_battle_active: bool,
     is_my_move: bool,
+    move_cells: &Vec<usize>,
 ) -> bool {
     // Пустая клетка (нет войска): текстура поля + undercell + пульсирующая рамка.
     let armies = &ctx.game.executor.gamemap.armys;
@@ -184,18 +185,12 @@ pub fn unit_card_battle(
             WHITE,
         );
         if let Some(active_unit) = battle.active_unit {
-            let old_pos = armies[active_unit.army].troops[active_unit.index].get().pos;
-            if army == active_unit.army
-                && (old_pos.0.abs_diff(unit_pos % (12 / 2)) < 2
-                    || field_type(unit_pos, 12) == Field::Reserve
-                    || field_type(old_pos.whole(6), 12) == Field::Reserve)
-            {
-                let outline_color = crate::gfx::rgba(
-                    22,
-                    22,
-                    255,
-                    (crate::time_secs().sin() * 128. + 64.) as u8,
-                );
+            if army == active_unit.army && move_cells.contains(&unit_pos) {
+                // Плавный цикл свечения клетки хода: альфа никогда не нулевая.
+                let pulse =
+                    0.5 - 0.5 * (crate::time_secs() as f32 * std::f32::consts::TAU / 2.5).cos();
+                let outline_color =
+                    crate::gfx::rgba(22, 22, 255, (96. + 140. * pulse) as u8);
                 ctx.gfx.draw_rect_lines(
                     pos.0,
                     pos.1,
@@ -228,37 +223,39 @@ pub fn unit_card_battle(
     let draw_rect = Rect::new(pos.0, pos.1, draw_size.0, draw_size.1);
     let stats = &troop.unit.modified;
     let hp = 1. - troop.unit.hp as f32 / stats.max_hp as f32;
-    // Свечение рисуется ПОД карточкой: радиальный квад с pad поверх фона,
-    // затем спрайт юнита закрывает центр, оставляя мягкий ореол.
+    ctx.gfx
+        .draw_texture(unit_texture, pos.0, pos.1, draw_size.0, draw_size.1, WHITE);
+    // Радиальное кольцо-свечение ПОВЕРХ карточки: прозрачный центр (юнит виден),
+    // гауссов пик кольца по периметру карточки. Пульс слабое -> сильное, альфа
+    // никогда не нулевая. Рисуется ПОСЛЕ чёрных подложек клеток — иначе клетки-
+    // соседи перекрывают свечение (причина «подсветки совсем не видно»).
     if let Some(active_unit) = battle.active_unit {
         if is_my_move && is_interactable {
             let glow_color = if armies[army].hitmap[unit_pos]
                 .is_some_and(|index| active_unit == BattleUnit { army, index })
             {
-                [0.1, 1., 0.1]
+                [0.15, 1., 0.15]
             } else if active_unit.army != army {
-                [1., 0.1, 0.1]
+                [1., 0.15, 0.15]
             } else {
-                [0.1, 0.1, 1.]
+                [0.15, 0.15, 1.]
             };
-            // Период ~2.5с: 0.5-0.5*cos(2π t/T) — плавный цикл слабое -> сильное,
-            // альфа 60..170 — никогда не нулевая.
+            // Период ~2.5с: 0.5-0.5*cos(2π t/T) — плавный цикл 0..1..0.
             let pulse = 0.5 - 0.5 * (crate::time_secs() as f32 * std::f32::consts::TAU / 2.5).cos();
-            let alpha = (60. + 110. * pulse) / 255.;
-            let pad = 26.;
+            let alpha = (90. + 130. * pulse) / 255.;
+            // Свечение до краёв карточки: квад накрывает карточку целиком,
+            // кольцо текстуры тянется от центра к её границам.
             let quad = [
-                [pos.0 - pad, pos.1 - pad],
-                [pos.0 + draw_size.0 + pad, pos.1 - pad],
-                [pos.0 + draw_size.0 + pad, pos.1 + draw_size.1 + pad],
-                [pos.0 - pad, pos.1 + draw_size.1 + pad],
+                [pos.0, pos.1],
+                [pos.0 + draw_size.0, pos.1],
+                [pos.0 + draw_size.0, pos.1 + draw_size.1],
+                [pos.0, pos.1 + draw_size.1],
             ];
             let uv = [[0., 0.], [1., 0.], [1., 1.], [0., 1.]];
             ctx.gfx
                 .draw_quad(ctx.glow_tex, quad, uv, [glow_color[0], glow_color[1], glow_color[2], alpha]);
         }
     }
-    ctx.gfx
-        .draw_texture(unit_texture, pos.0, pos.1, draw_size.0, draw_size.1, WHITE);
     draw_stats(
         ctx.gfx,
         ctx.text,
@@ -381,6 +378,22 @@ pub fn draw_battle(ctx: &mut Ctx, is_battle_active: bool) -> Option<usize> {
             focus.pos = (focus.pos.saturating_sub(1)) % (half * 2);
         }
     }
+    // Клетки, доступные активному юниту для манёвра (для подсветки пустых клеток).
+    let move_cells: Vec<usize> = match (
+        ctx.game.executor.battle.as_ref().and_then(|b| b.active_unit),
+        ctx.game.executor.gamemap.armys
+            .get(ctx.game.executor.battle.as_ref().and_then(|b| b.active_unit).map(|u| u.army).unwrap_or(0))
+            .map(|a| a.max_troops / 2),
+    ) {
+        (Some(active), Some(columns)) => {
+            let from = ctx.game.executor.gamemap.armys[active.army].troops[active.index]
+                .get()
+                .pos
+                .whole(columns);
+            dt_lib::battle::battlefield::possible_movement(from, columns)
+        }
+        _ => Vec::new(),
+    };
     let half_troops = 12 / 2;
     for army in 0..=1 {
         for row in 0..=1 {
@@ -427,6 +440,7 @@ pub fn draw_battle(ctx: &mut Ctx, is_battle_active: bool) -> Option<usize> {
                     is_focused,
                     is_battle_active,
                     is_my_move,
+                    &move_cells,
                 );
                 if clicked && ctx.game.executor.battle.as_ref().unwrap().winner.is_none() {
                     ctx.game.focus = BattleUnitPos {

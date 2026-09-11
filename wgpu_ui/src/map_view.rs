@@ -1,16 +1,28 @@
 // Экран карты: запечённая карта, камера (пан/зум/хоткеи), армии, HUD, переходы.
 // Порт quad_ui main.rs:1802-2104 (+ rebake ветки из главного цикла 2302-2332).
 use crate::bake::{bake_map_textures, render_decos_layer};
-use crate::camera::default_camera;
+use crate::camera::{default_camera, Camera};
 use crate::gfx::{colors, Target, WHITE};
 use crate::Ctx;
-use crate::state::{Menu, MapRenderSettings, SIZE};
+use crate::state::{BuildingTab, Menu, MapRenderSettings, SIZE};
 use dt_lib::battle::battlefield::BattleInfo;
 use dt_lib::battle::control::Control;
 use dt_lib::map::event::Execute;
 use dt_lib::network::server::ClientMessage;
 use dt_lib::units::unit::UnitType;
 use winit::keyboard::KeyCode;
+
+/// Максимальное приближение карты: кратное от вида «вся карта на экране».
+const ZOOM_IN: f32 = 12.;
+
+/// Кламп зума карты: с лимитами — «вся карта..ZOOM_IN×», без — legacy [8e-6; 0.02].
+fn clamp_map_zoom(camera: &mut Camera, limited: bool, min: [f32; 2], max: [f32; 2]) {
+    if limited {
+        camera.clamp_zoom_between(min, max);
+    } else {
+        camera.clamp_zoom();
+    }
+}
 
 pub fn map_screen(ctx: &mut Ctx) {
     let mut settings = match &ctx.ui.main {
@@ -173,6 +185,9 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
         settings.blend_mode = settings.blend_mode.next();
         settings.blend_dirty = true;
     }
+    if ctx.input.key_pressed(KeyCode::KeyZ) {
+        settings.zoom_limits = !settings.zoom_limits;
+    }
     // Переход к бою по Enter на карте УБРАН (пользователь): запускается
     // только через PvE в меню или PvP-сетап.
     if ctx.input.key_down(KeyCode::Escape) {
@@ -204,6 +219,9 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
         camera.target[0] -= delta[0] / px;
         camera.target[1] -= delta[1] / py;
     }
+    // Границы зума: min — вся карта в кадре; max — ZOOM_IN-кратное приближение.
+    let min_zoom = [2. / (SIZE.0 * size as f32), 2. / (SIZE.1 * size as f32)];
+    let max_zoom = [min_zoom[0] * ZOOM_IN, min_zoom[1] * ZOOM_IN];
     let wheel = ctx.input.wheel;
     if wheel != 0. {
         let factor = 1.2f32.powf(wheel.clamp(-4., 4.));
@@ -211,7 +229,7 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
         let zoom_before_x = camera.zoom[0];
         camera.zoom[0] *= factor;
         camera.zoom[1] *= factor;
-        camera.clamp_zoom();
+        clamp_map_zoom(camera, settings.zoom_limits, min_zoom, max_zoom);
         let applied = camera.zoom[0] / zoom_before_x;
         if applied != 0. {
             camera.target = [
@@ -223,13 +241,27 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
     if ctx.input.key_pressed(KeyCode::Equal) || ctx.input.key_pressed(KeyCode::NumpadAdd) {
         camera.zoom[0] *= 1.2;
         camera.zoom[1] *= 1.2;
-        camera.clamp_zoom();
     }
     if ctx.input.key_pressed(KeyCode::Minus) || ctx.input.key_pressed(KeyCode::NumpadSubtract) {
         camera.zoom[0] /= 1.2;
         camera.zoom[1] /= 1.2;
-        camera.clamp_zoom();
     }
+    // Кламп каждый кадр: снап в границы при включении лимитов [Z] и удержание
+    // стартового вида в пределах карты (границы — от фактического размера карты).
+    clamp_map_zoom(camera, settings.zoom_limits, min_zoom, max_zoom);
+    // Границы движения камеры: видимая область не выходит за карту.
+    let (map_w, map_h) = (SIZE.0 * size as f32, SIZE.1 * size as f32);
+    let (vis_w, vis_h) = (2. / camera.zoom[0], 2. / camera.zoom[1]);
+    camera.target[0] = if vis_w >= map_w {
+        map_w * 0.5
+    } else {
+        camera.target[0].clamp(vis_w * 0.5, map_w - vis_w * 0.5)
+    };
+    camera.target[1] = if vis_h >= map_h {
+        map_h * 0.5
+    } else {
+        camera.target[1].clamp(vis_h * 0.5, map_h - vis_h * 0.5)
+    };
 
     let map_size = ctx.game.executor.gamemap.tilemap.size;
     let pos = settings
@@ -237,14 +269,33 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
         .screen_to_world(ctx.input.mouse_position(), viewport);
     let tile = [(pos[0] / SIZE.0).floor(), (pos[1] / SIZE.1).floor()];
     if ctx.input.mouse_button_released(0) {
-        ctx.game.executor.message_handler(
-            ClientMessage::GoTo((
-                tile[0] as usize % map_size,
-                tile[1] as usize % map_size,
-            )),
-            0,
-            ctx.registry,
-        );
+        let tile = [
+            tile[0] as usize % map_size,
+            tile[1] as usize % map_size,
+        ];
+        let now = crate::time_secs();
+        // Дабл-клик по тайлу строения (< 400 мс, тот же тайл): если армия
+        // игрока стоит в хитбоксе строения — открыть окно, иначе обычный GoTo.
+        let clicked_building = ctx.game.executor.gamemap.hitmap[(tile[0], tile[1])].building;
+        let mut double_open = false;
+        if let Some(building) = clicked_building {
+            if let Some((t, last_tile)) = ctx.building_ui.last_click {
+                if now - t < 0.4 && last_tile == tile {
+                    let player_army = ctx.game.executor.players[0].army;
+                    let (ax, ay) = ctx.game.executor.gamemap.armys[player_army].pos;
+                    double_open =
+                        ctx.game.executor.gamemap.hitmap[(ax, ay)].building == Some(building);
+                }
+            }
+        }
+        ctx.building_ui.last_click = Some((now, tile));
+        if double_open {
+            ctx.building_ui.last_click = None;
+            return Some(Menu::Building(clicked_building.unwrap(), BuildingTab::Main));
+        }
+        ctx.game
+            .executor
+            .message_handler(ClientMessage::GoTo((tile[0], tile[1])), 0, ctx.registry);
     }
     if !ctx.game.executor.players[0].execution_queue.is_empty() {
         if let Execute::Message(msg) = ctx.game.executor.players[0].execution_queue.remove(0) {
@@ -279,8 +330,10 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
     ctx.text.draw_text(
         ctx.gfx,
         &format!(
-            "[T] тайлы  [Y] декор  [B] билдинги  [N] ивенты  [R] сид: {}  [G] бленд: {:?}",
-            settings.seed, settings.blend_mode
+            "[T] тайлы  [Y] декор  [B] билдинги  [N] ивенты  [R] сид: {}  [G] бленд: {:?}  [Z] зум-лимиты: {}",
+            settings.seed,
+            settings.blend_mode,
+            if settings.zoom_limits { "вкл" } else { "выкл" }
         ),
         10.,
         145.,

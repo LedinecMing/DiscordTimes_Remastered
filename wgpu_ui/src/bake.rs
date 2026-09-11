@@ -6,7 +6,7 @@ use crate::state::{BlendMode, Game, SIZE};
 use ahash::RandomState;
 use dt_lib::map::deco::MapDeco;
 use dt_lib::map::map::*;
-use dt_lib::map::object::{MapBuildingdata, ObjectType};
+use dt_lib::map::object::ObjectType;
 use dt_lib::map::tile::TILES;
 use dt_lib::registry::{GameInfo, Objects};
 use std::collections::HashMap;
@@ -75,7 +75,9 @@ fn draw_tiles(gfx: &mut Gfx, assets: &crate::assets::Assets, tilemap: &TileMap<u
 // «Наплывы» вместо «автотайлинга клеток»: базовые тайлы рисуются как раньше (без
 // пересэмплирования, чётко), а поверх — только зоны смешения у границ клеток.
 // Наплыв ОДНОСТОРОННИЙ по приоритету тайла: тайл с большим приоритетом «наплывает»
-// на соседа с меньшим (вода на всё, дорога на землю). Одинаковые спрайты не смешиваются.
+// на соседа с меньшим (вода на всё, дорога на землю). Бленд есть у ЛЮБОЙ пары
+// разных спрайтов; при равном приоритете направление — от большего id к меньшему.
+// Одинаковые спрайты не смешиваются (полоса была бы невидимой).
 const TILE_PRIORITY: [u8; 16] = [
     3, 3, 3, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1,
 ]; // вода 3 > дорога/болото 2 > земля 1
@@ -227,6 +229,10 @@ pub fn draw_blend_overlays(
             let id = tilemap[(j, i)];
             let same = |n: usize| n == id || TILES[n].sprite() == TILES[id].sprite();
             let pri = TILE_PRIORITY[id];
+            // Наплыв: сосед «даёт край» на этот тайл. Направление — по
+            // (приоритет, id): строго больший приоритет наплывает как раньше,
+            // при равном — больший id; пары разных спрайтов не пропускаются.
+            let bleeds = |n: usize| !same(n) && (TILE_PRIORITY[n], n) > (pri, id);
             let (cx, cy) = (i as f32 * SIZE.0, j as f32 * SIZE.1);
             // 4 стороны: вода/приоритетная сторона наплывает на соседа.
             let mut side = |di: isize, dj: isize, s: usize| {
@@ -235,7 +241,7 @@ pub fn draw_blend_overlays(
                     return;
                 }
                 let n = tilemap[(nj as usize, ni as usize)];
-                if same(n) || pri >= TILE_PRIORITY[n] {
+                if !bleeds(n) {
                     return;
                 }
                 let key = (id, n, s);
@@ -264,7 +270,7 @@ pub fn draw_blend_overlays(
                         return;
                     }
                     let n = tilemap[(nj as usize, ni as usize)];
-                    if same(n) || pri >= TILE_PRIORITY[n] {
+                    if !bleeds(n) {
                         return;
                     }
                     let key = (id, n, c);
@@ -483,6 +489,7 @@ pub fn prepare_textures(
     )
 }
 
+
 // ВРЕМЕННАЯ проверка: печатает RGB через границу вода→земля в запечённом RT —
 // доказательство, что градиент наплыва реально есть (порт debug_check_gradient).
 pub fn debug_check_gradient(
@@ -547,4 +554,20 @@ pub fn debug_check_gradient(
     }
     println!("no water-land boundaries found");
     let _ = colors::BLACK;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Наплыв: только пары разных спрайтов; при равном приоритете — больший id.
+    #[test]
+    fn bleeds_direction_by_priority_then_id() {
+        let pri = |id: usize| TILE_PRIORITY[id];
+        // равный приоритет: больший id наплывает на меньший
+        assert!((pri(7), 7usize) > (pri(6), 6usize));
+        assert!(!((pri(6), 6usize) > (pri(7), 7usize)));
+        // вода (pri 3) наплывает на землю (pri 1)
+        assert!((pri(1), 1usize) > (pri(6), 6usize));
+    }
 }

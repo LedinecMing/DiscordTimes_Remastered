@@ -3,6 +3,7 @@
 pub mod assets;
 pub mod bake;
 pub mod battle_view;
+pub mod building_view;
 pub mod camera;
 pub mod files;
 pub mod gfx;
@@ -97,6 +98,8 @@ pub struct Ctx<'a> {
     pub rt: &'a tokio::runtime::Runtime,
     /// Сохранённые настройки карты (камера/флаги) на время просмотра событий.
     pub map_settings: std::cell::RefCell<Option<state::MapRenderSettings>>,
+    /// Состояние окна строения: выделения рынка, дабл-клик, лог сделки.
+    pub building_ui: &'a mut state::BuildingUi,
     /// Радиальная градиент-текстура свечения (белая, альфа-фейд к краю).
     pub glow_tex: TexId,
 }
@@ -150,6 +153,7 @@ impl App {
             delta,
             tile_pixels,
             textures,
+            building_ui,
             ..
         } = state;
         if frame_dt > 0.1 {
@@ -170,6 +174,7 @@ impl App {
             textures,
             rts: self.rts.as_ref().unwrap(),
             window: self.window.as_ref().unwrap(),
+            building_ui,
             delta,
             rt: &state.rt,
             map_settings: std::cell::RefCell::new(None),
@@ -209,6 +214,13 @@ fn dispatch(ctx: &mut Ctx) {
         Menu::BattleSetup => screens::battle_setup(ctx),
         Menu::Battle => screens::battle(ctx),
         Menu::Map(_) => map_view::map_screen(ctx),
+        Menu::Building(..) => {
+            if building_view::building_screen(ctx) {
+                // Выход из окна: восстановить карту с сохранённой камерой.
+                let settings = ctx.map_settings.borrow_mut().take().unwrap_or_default();
+                ctx.ui.main = Menu::Map(settings);
+            }
+        }
     }
 }
 
@@ -255,7 +267,7 @@ impl ApplicationHandler for App {
             map: textures.0,
             decos: textures.1,
         };
-        let glow_tex = gfx.push_radial_gradient(128, [1., 1., 1., 1.], [1., 1., 1., 0.]);
+        let glow_tex = gfx.push_glow_ring(192);
         // Сабмит запечённых пассов (экрана в этом кадре нет — present no-op).
         gfx.end_frame();
         println!("init: bake submitted, rts ready");

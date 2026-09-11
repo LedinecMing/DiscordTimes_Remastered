@@ -46,19 +46,8 @@ impl Troop {
         true
     }
     pub fn on_battle_end(&mut self, registry: &GameInfo) {
-        let unit = &mut self.unit;
-        let mut i = 0;
-        loop {
-            if i + 1 >= unit.effects.len() {
-                break;
-            }
-			// TODO
-            if i + 1 >= unit.effects.len() {
-                break;
-            }
-            i += 1;
-        }
-        unit.recalc(registry);
+        // Жизненный цикл боевых эффектов — на юните.
+        self.unit.on_battle_end(registry);
     }
     pub fn is_dead(&self) -> bool {
         self.unit.is_dead()

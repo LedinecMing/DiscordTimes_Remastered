@@ -154,9 +154,9 @@ pub fn magic_relates(magic_type: Option<MagicType>, magic_variant: MagicVariants
         return matches!(magic_variant, MagicVariants::Any);
     };
     match (magic_type, magic_variant) {
-        (MagicType::Death, MagicVariants::Death) => true,
-        (MagicType::Life, MagicVariants::Life) => true,
-        (MagicType::Elemental, MagicVariants::Elemental) => true,
+        (MagicType::DeathMagic, MagicVariants::Death) => true,
+        (MagicType::LifeMagic, MagicVariants::Life) => true,
+        (MagicType::ElementalMagic, MagicVariants::Elemental) => true,
         (_, MagicVariants::Any) => true,
         (_, _) => false,
     }

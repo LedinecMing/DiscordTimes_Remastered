@@ -121,14 +121,14 @@ pub struct Market {
     pub max_items: usize,
 }
 impl Market {
-    fn new(itemcost_range: (u64, u64), items: Vec<Item>, max_items: usize) -> Self {
+    pub fn new(itemcost_range: (u64, u64), items: Vec<Item>, max_items: usize) -> Self {
         Self {
             itemcost_range,
             items,
             max_items,
         }
     }
-    fn update(&mut self, items: &Items) {
+    pub fn update(&mut self, items: &Items) {
         for _ in self.max_items - self.items.len()..0 {
             let nice_items = items
                 .inner
@@ -146,7 +146,7 @@ impl Market {
             );
         }
     }
-    fn buy(&mut self, buyer: &mut Army, item_num: usize, registry: &Items) {
+    pub fn buy(&mut self, buyer: &mut Army, item_num: usize, registry: &Items) {
         if self.can_buy(buyer, item_num, registry) {
             buyer.stats.gold = buyer
                 .stats
@@ -155,14 +155,30 @@ impl Market {
             buyer.add_item(self.items.remove(item_num));
         }
     }
-    fn can_buy(&self, buyer: &Army, item_num: usize, registry: &Items) -> bool {
+    pub fn can_buy(&self, buyer: &Army, item_num: usize, registry: &Items) -> bool {
         if self.items[item_num].get_info(&registry).sells {
             return buyer.stats.gold >= self.get_item_cost(item_num, registry);
         }
         false
     }
-    fn get_item_cost(&self, item_num: usize, registry: &Items) -> u64 {
+    pub fn get_item_cost(&self, item_num: usize, registry: &Items) -> u64 {
         self.items[item_num].get_info(&registry).cost
+    }
+
+    /// Продажа артефакта из инвентаря армии на рынок: 50% стоимости.
+    /// Ok(выручка) при успехе; Err если предмета нет в инвентаре.
+    pub fn sell(&mut self, seller: &mut Army, inventory_pos: usize, registry: &Items) -> Result<u64, ()> {
+        let Some(item) = seller.inventory.get(inventory_pos).copied().flatten() else {
+            return Err(());
+        };
+        let revenue = item.get_info(registry).cost / 2;
+        seller.inventory[inventory_pos] = None;
+        seller.stats.gold = seller.stats.gold.saturating_add(revenue);
+        // Рынок принимает предмет, если есть место (Иначе предмет просто исчезает).
+        if self.items.len() < self.max_items {
+            self.items.push(item);
+        }
+        Ok(revenue)
     }
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -197,24 +213,25 @@ impl Recruitment {
     pub fn new(units: Vec<RecruitUnit>, cost_modify: f64) -> Self {
         Self { units, cost_modify }
     }
-    pub fn buy(&mut self, buyer: &mut Army, unit_num: usize, registry: &GameInfo) -> Result<(), ()> {
-        if self.can_buy(buyer, unit_num, &registry.units) {
-            buyer.add_troop(
-                Troop {
-                    unit: (registry.units[self.units[unit_num].unit].clone(), &registry.bonuses).into(),
-					was_payed: true,
-					is_free: false,
-					is_main: false,
-					pos: UnitPos::from_index(0, 6),
-					custom_name: None,
-                }
-                .into(),
-				&registry.units
-            )?;
-            self.units[unit_num].count -= 1;
-            buyer.stats.gold -= registry.units[self.units[unit_num].unit].cost_hire;
+    /// Найм юнита в армию: списывает золото, уменьшает доступный счётчик.
+    /// Ok(новая позиция в армии) при успехе.
+    pub fn buy(&mut self, buyer: &mut Army, unit_num: usize, registry: &GameInfo) -> Result<usize, ()> {
+        if !self.can_buy(buyer, unit_num, &registry.units) {
+            return Err(());
         }
-        Err(())
+        let info = registry.units[self.units[unit_num].unit].clone();
+        buyer.stats.gold = buyer.stats.gold.saturating_sub(info.cost_hire);
+        self.units[unit_num].count -= 1;
+        let troop = Troop {
+            unit: (info, &registry.bonuses).into(),
+            was_payed: true,
+            is_free: false,
+            is_main: false,
+            pos: UnitPos::from_index(0, 6),
+            custom_name: None,
+        };
+        buyer.add_troop(troop.into(), &registry.units)?;
+        Ok(buyer.troops.len() - 1)
     }
     pub fn can_buy(&self, buyer: &Army, unit_num: usize, registry: &Units) -> bool {
 		let recruit = &self.units[unit_num];
@@ -223,3 +240,46 @@ impl Recruitment {
         //* (RECRUIT_COST * self.cost_modify)) as u64;
     }
 }
+
+// ------------------- Услуги строения (лечение/воскрешение) -------------------
+
+/// Цена лечения юнита: 1 золото за 1 HP недостающего.
+pub fn heal_cost(troop: &Troop) -> u64 {
+    (troop.unit.modified.max_hp - troop.unit.hp).max(0) as u64
+}
+/// Лечение за указанное золото (до конца, если хватает). Возвращает
+/// фактическую потраченную сумму. Мёртвых не лечит (это resurrect).
+pub fn heal_for_gold(troop: &mut Troop, gold: u64, _registry: &GameInfo) -> Result<u64, ()> {
+    if troop.is_dead() || gold == 0 {
+        return Err(());
+    }
+    let missing = (troop.unit.modified.max_hp - troop.unit.hp).max(0) as u64;
+    if missing == 0 {
+        return Err(());
+    }
+    let spent = gold.min(missing);
+    troop.unit.heal(spent as i64);
+    Ok(spent)
+}
+
+/// Воскрешение мёртвого юнита армии за cost_hire из реестра.
+/// Юнит возвращается с полным здоровьем. `gold` — доступные деньги армии,
+/// возвращается потраченная сумма. Troop берётся отдельно от Army: troop
+/// живёт в `army.troops`, caller снимает guard и сам списывает золото
+/// (см. resurrect: Caller subtracts `spent` from army gold).
+pub fn resurrect_cost(troop: &Troop, registry: &GameInfo) -> u64 {
+    registry.units[troop.unit.id].cost_hire
+}
+
+pub fn resurrect(troop: &mut Troop, gold: u64, registry: &GameInfo) -> Result<u64, ()> {
+    if !troop.is_dead() {
+        return Err(());
+    }
+    let cost = resurrect_cost(troop, registry);
+    if gold < cost {
+        return Err(());
+    }
+    troop.unit.restore();
+    Ok(cost)
+}
+
