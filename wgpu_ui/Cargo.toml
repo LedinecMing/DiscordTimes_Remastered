@@ -19,6 +19,9 @@ fontdue = "0.9"
 bytemuck = { version = "1.16", features = ["derive"] }
 pollster = "0.4"
 discord-rich-presence = "1.1"
+rfd = "0.15"
+egui = { version = "0.36", default-features = false }
+egui-wgpu = { version = "0.36", default-features = false }
 
 [dev-dependencies]
 # Тесты rich_presence: сериализация Activity в JSON без подключения к Discord.
