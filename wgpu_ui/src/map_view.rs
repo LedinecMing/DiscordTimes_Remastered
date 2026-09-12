@@ -123,7 +123,11 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
         let map_size = ctx.game.executor.gamemap.hitmap.size;
         for (flat, hit) in ctx.game.executor.gamemap.hitmap.inner.iter().enumerate() {
             if let Some(building) = hit.building {
-                let (tx, ty) = (flat % map_size, flat / map_size);
+                // TileMap::index((x, y)) = inner[y + x*size], значит по linear
+                // индексу x = flat / size, y = flat % size (НЕ наоборот —
+                // перепутанные местами координаты зеркалили слой по диагонали,
+                // баг «слой смещён»). Индексация как у eventmap/goto_tile.
+                let (tx, ty) = (flat / map_size, flat % map_size);
                 let [r, g, b, _] = building_ownership_color(building);
                 ctx.gfx.draw_rect(
                     tx as f32 * SIZE.0,
