@@ -1,0 +1,12 @@
+[package]
+name = "editor-validators"
+version = "0.1.0"
+edition = "2021"
+description = "Map validators: structural checks for known game crashes (guide section 9)."
+
+[dependencies]
+editor-core = { path = "../editor-core" }
+dt_lib = { path = "../../dt_lib" }
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
