@@ -1,6 +1,6 @@
 //! Тесты бонусов юнитов (Bonus1-21, dt/Rus_Locale.ini «bonus_*»).
 //! Изолированы от tests.rs (там сценарии occupancy другого агента).
-use super::tests::{make_army_from_ids, make_test_registry};
+use super::tests::{make_army_from_ids, make_test_registry, perform_attack};
 use crate::{
     battle::{BattleInfo, BattleUnit},
     bonuses::{AbilityCondition, AbilityTowardsTroop, ListenTo, Mechanic, MechanicCondition},
@@ -10,6 +10,7 @@ use crate::{
         unitstats::{Modify, ModifyUnitStats},
     },
 };
+use math_thingies::Percent;
 
 /// Регистрация бонуса с BattleStart-правилом поверх тестового реестра.
 fn register_battle_start_bonus(
@@ -259,3 +260,168 @@ fn artillery_gains_30_initiative_at_start() {
         "artillery must gain +30 speed at battle start (5 base → 35)"
     );
 }
+
+// =====================
+// BONUS 3 / 14 / 19-«Шквал»-часть (Проникающий Удар): pierce — доля
+// units-защиты цели, которую удар проходит мимо. Бонус = стат pierce
+// (add_modify), движок читает универсальный стат в compute_attack_damage.
+// =====================
+
+#[test]
+fn defencepiercing_bypasses_unit_defence() {
+    let registry = make_test_registry();
+    // Атакующий 20 (30 рукопашного), цель — юнит 0 с сильной units-защитой.
+    let mut army1 = make_army_from_ids(&registry, &[(20, 7)]);
+    {
+        let id = registry.bonuses.str_to_id(&"defencepiercing".to_string()).unwrap();
+        let mut troop = army1.troops[0].get();
+        troop.unit.bonus = Some(id);
+    }
+    let mut army2 = make_army_from_ids(&registry, &[(0, 8)]);
+    {
+        // hand_units 20: без pierce 30−20=10; с pierce 100% защита мимо → 30.
+        let mut troop = army2.troops[0].get();
+        troop.unit.modified.defence.hand_units = 20;
+    }
+    let mut armies = vec![army1, army2];
+
+    // Старт боя применяет add_modify бонуса (pierce 100%), затем атака.
+    full_battle(&mut armies, &registry);
+    perform_attack(
+        &registry,
+        &mut armies,
+        BattleUnit { army: 0, index: 0 },
+        BattleUnit { army: 1, index: 0 },
+    );
+
+    let hp = armies[1].troops[0].get().unit.hp;
+    assert_eq!(
+        hp, 70,
+        "pierce 100% must fully bypass hand_units defence: 30 dmg, hp 100−30"
+    );
+}
+
+#[test]
+fn pierce_is_percent_of_defence_not_extra_damage() {
+    let registry = make_test_registry();
+    let mut army1 = make_army_from_ids(&registry, &[(20, 7)]);
+    {
+        // Тот же канал, что у бонуса: modified.pierce.percent_add 50% —
+        // сквозь защиту идёт 50% урона: 30 − (20*50%)=10 → 20 урона.
+        let mut troop = army1.troops[0].get();
+        troop.unit.modified.pierce.percent_add = Some(Percent::new(50));
+    }
+    let mut army2 = make_army_from_ids(&registry, &[(0, 8)]);
+    {
+        let mut troop = army2.troops[0].get();
+        troop.unit.modified.defence.hand_units = 20;
+    }
+    let mut armies = vec![army1, army2];
+
+    perform_attack(
+        &registry,
+        &mut armies,
+        BattleUnit { army: 0, index: 0 },
+        BattleUnit { army: 1, index: 0 },
+    );
+
+    assert_eq!(
+        armies[1].troops[0].get().unit.hp, 80,
+        "pierce 50% must halve effective unit defence (30 − 10 = 20 урона)"
+    );
+}
+
+// =====================
+// BONUS 7/8 (Кара Господня / Гнев Господен): +10/+20 урона сверх атаки,
+// игнорируя любые защиты — через стат true_damage (add_modify бонуса).
+// =====================
+
+#[test]
+fn godanger_adds_10_true_damage() {
+    let registry = make_test_registry();
+    let mut army1 = make_army_from_ids(&registry, &[(20, 7)]);
+    {
+        let id = registry.bonuses.str_to_id(&"godanger".to_string()).unwrap();
+        let mut troop = army1.troops[0].get();
+        troop.unit.bonus = Some(id);
+    }
+    // Цель с огромной units-защитой: обычный урон уходит в 0, true_damage нет.
+    let mut army2 = make_army_from_ids(&registry, &[(0, 8)]);
+    {
+        let mut troop = army2.troops[0].get();
+        troop.unit.modified.defence.hand_units = 1000;
+    }
+    let mut armies = vec![army1, army2];
+
+    full_battle(&mut armies, &registry);
+    perform_attack(
+        &registry,
+        &mut armies,
+        BattleUnit { army: 0, index: 0 },
+        BattleUnit { army: 1, index: 0 },
+    );
+
+    let hp = armies[1].troops[0].get().unit.hp;
+    assert_eq!(
+        hp, 90,
+        "godanger: 30 hand урона в ноль от защиты, но +10 true_damage мимо неё"
+    );
+}
+
+#[test]
+fn godstrike_adds_20_true_damage() {
+    let registry = make_test_registry();
+    let mut army1 = make_army_from_ids(&registry, &[(20, 7)]);
+    {
+        let id = registry.bonuses.str_to_id(&"godstrike".to_string()).unwrap();
+        let mut troop = army1.troops[0].get();
+        troop.unit.bonus = Some(id);
+    }
+    let mut army2 = make_army_from_ids(&registry, &[(0, 8)]);
+    {
+        let mut troop = army2.troops[0].get();
+        troop.unit.modified.defence.hand_units = 1000;
+    }
+    let mut armies = vec![army1, army2];
+
+    full_battle(&mut armies, &registry);
+    perform_attack(
+        &registry,
+        &mut armies,
+        BattleUnit { army: 0, index: 0 },
+        BattleUnit { army: 1, index: 0 },
+    );
+
+    assert_eq!(
+        armies[1].troops[0].get().unit.hp, 80,
+        "godstrike: обычный урон в ноль, +20 true_damage игнорирует защиту"
+    );
+}
+
+#[test]
+fn true_damage_reverts_after_battle_end() {
+    let registry = make_test_registry();
+    let mut army1 = make_army_from_ids(&registry, &[(20, 7)]);
+    {
+        let id = registry.bonuses.str_to_id(&"godanger".to_string()).unwrap();
+        let mut troop = army1.troops[0].get();
+        troop.unit.bonus = Some(id);
+    }
+    let army2 = make_army_from_ids(&registry, &[(0, 8)]);
+    let mut armies = vec![army1, army2];
+
+    let mut battle = full_battle(&mut armies, &registry);
+    assert_eq!(
+        armies[0].troops[0].get().unit.modified.true_damage.add,
+        Some(10),
+        "в бою бонус поднял true_damage +10"
+    );
+    battle.winner = Some(0);
+    battle.end(&mut armies, &registry);
+    assert_ne!(
+        armies[0].troops[0].get().unit.modified.true_damage.add,
+        Some(10),
+        "после боя add_modify бонуса откатывается (+10 больше не действует)"
+    );
+}
+

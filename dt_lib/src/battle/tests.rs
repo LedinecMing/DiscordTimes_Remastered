@@ -283,7 +283,8 @@ pub fn make_army_from_ids(registry: &GameInfo, unit_placements: &[(u32, usize)])
 }
 
 /// Perform a single attack between two units, returning the action result.
-fn perform_attack(
+/// Публичен для bonus_tests.rs (тесты бонусов через полный канал атаки).
+pub fn perform_attack(
     registry: &GameInfo,
     armies: &mut Vec<Army>,
     attacker: BattleUnit,

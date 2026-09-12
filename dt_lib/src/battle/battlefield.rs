@@ -167,6 +167,17 @@ impl BattleInfo {
         chosen
     }
     pub fn start(&mut self, armies: &mut Vec<Army>, registry: &GameInfo) {
+        // Постоянные статы бонусов (add_modify: pierce/true_damage/…) применяются
+        // на старте боя и откатываются в end() — вне боя юниты их не несут.
+        for army_idx in [self.army1, self.army2] {
+            for troop in armies[army_idx].troops.iter() {
+                let bonus = troop.get().unit.get_bonus(registry).cloned();
+                if let Some(bonus) = bonus {
+                    troop.get().unit.add_bonus(&bonus, registry);
+                }
+            }
+        }
+
         // Process army1: collect all data first, then apply_rules
         let bonuses_and_pos1: Vec<_> = (0..armies[self.army1].troops.len()).map(|index| {
             let mut t = armies[self.army1].troops[index].get();
@@ -317,8 +328,15 @@ impl BattleInfo {
     }
     pub fn end(&mut self, armies: &mut Vec<Army>, registry: &GameInfo) {
         fn trigger_end(armys: &mut Vec<Army>, battle: &mut BattleInfo, registry: &GameInfo) {
-            for troop in &mut armys[battle.army1].troops {
-                troop.get().on_battle_end(registry);
+            // Обе армии: откат боевых эффектов и постоянных бонусов (add_modify).
+            for army_idx in [battle.army1, battle.army2] {
+                for troop in &mut armys[army_idx].troops {
+                    troop.get().on_battle_end(registry);
+                    let bonus = troop.get().unit.get_bonus(registry).cloned();
+                    if let Some(bonus) = bonus {
+                        troop.get().unit.remove_bonus(&bonus, registry);
+                    }
+                }
             }
         }
         fn move_goods(

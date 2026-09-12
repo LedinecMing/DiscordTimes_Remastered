@@ -437,7 +437,9 @@ impl BonusInfo {
 		unit.settings = unit.get_info(&registry.units).settings;
 	}
 	pub fn apply_rules(&self, rule: AbilityCondition, BattleUnit { army, index }: BattleUnit, my_pos: usize, armies: &mut Vec<Army>, ability_units: &Vec<BattleUnit>, battle: &BattleInfo, registry: &GameInfo) {
-		for mechanic in &self.rules[&rule].1 {
+		// Не у каждого бонуса есть правила на каждое условие — пусто = нет механик.
+		let Some((_, mechanics)) = self.rules.get(&rule) else { return; };
+		for mechanic in mechanics {
 			mechanic.apply(1, index, my_pos, armies, ability_units, battle, registry);
 		}
 	}

@@ -540,15 +540,24 @@ fn apply_elemental_curse_indexed(
 
 /// Чистый расчёт урона по цели: защита от магии/рукопашной/стрельбы, фланг.
 /// Никаких мутаций — только вычисление скорректированного суммарного урона.
+/// pierce атакующего — доля units-защиты цели (hand/ranged/magic_units),
+/// которую удар проходит мимо; процентная защита цели действует как обычно.
 fn compute_attack_damage(
     _target_info: UnitType,
     target_defence: &Defence,
     target_magic_type: Option<MagicType>,
     damage: &Power,
     is_flank_attack: bool,
+    attacker_pierce: Modify<i64>,
+    attacker_true_damage: Modify<i64>,
 ) -> u64 {
     let percent_100 = Percent::new(100);
     let mut dmg = *damage;
+
+    // Pierce: (100+pierce)% от units-защиты цели ПРОХОДИТ сквозь удар —
+    // эффективная защита = def * (100 − pierce) / 100 (pierce 100 → 0 защиты).
+    let percent_keep = Percent::new(100) - attacker_pierce.percent_add.unwrap_or(Percent::new(0));
+    let skip_defence = |def: u64| percent_keep.calc(def);
 
     if let Some(magic_type) = target_magic_type {
         let magic_def = match magic_type {
@@ -556,7 +565,7 @@ fn compute_attack_damage(
             MagicType::DeathMagic => target_defence.death_magic,
             MagicType::ElementalMagic => target_defence.elemental_magic,
         };
-        dmg.magic = (percent_100 - magic_def).calc(dmg.magic.saturating_sub(target_defence.magic_units));
+        dmg.magic = (percent_100 - magic_def).calc(dmg.magic.saturating_sub(skip_defence(target_defence.magic_units)));
     }
 
     let hand_defence = if is_flank_attack {
@@ -566,10 +575,12 @@ fn compute_attack_damage(
         target_defence.hand_units
     };
 
-    dmg.ranged = (percent_100 - target_defence.ranged_percent).calc(dmg.ranged.saturating_sub(target_defence.ranged_units));
-    dmg.hand = (percent_100 - target_defence.hand_percent).calc(dmg.hand.saturating_sub(hand_defence));
+    dmg.ranged = (percent_100 - target_defence.ranged_percent).calc(dmg.ranged.saturating_sub(skip_defence(target_defence.ranged_units)));
+    dmg.hand = (percent_100 - target_defence.hand_percent).calc(dmg.hand.saturating_sub(skip_defence(hand_defence)));
 
-    (dmg.magic + dmg.ranged + dmg.hand).max(1)
+    // True damage поверх защиты: Кара/Гнев Господен (+10/+20 сверх атаки).
+    let true_damage = attacker_true_damage.apply(0).max(0) as u64;
+    (dmg.magic + dmg.ranged + dmg.hand + true_damage).max(1)
 }
 
 /// Index-based: target is attacked by sender. Short-lived guards.
@@ -581,12 +592,12 @@ pub fn being_attacked(
     battle: &BattleInfo, registry: &GameInfo,
 ) -> u64 {
     // READ PHASE: read from both
-    let (target_info, is_flank_attack, target_defence, target_magic_type, sender_vamp) = {
+    let (target_info, is_flank_attack, target_defence, target_magic_type, sender_vamp, sender_pierce, sender_true_damage) = {
         let t = armies[target.army].troops[target.index].get();
         let s = armies[sender.army].troops[sender.index].get();
         let info = t.unit.get_info(&registry.units);
         let is_flank = t.pos.0.abs_diff(attacker_pos.0) > 1;
-        (info.unit_type, is_flank, t.unit.modified.defence, info.magic_type, s.unit.modified.vamp)
+        (info.unit_type, is_flank, t.unit.modified.defence, info.magic_type, s.unit.modified.vamp, s.unit.modified.pierce, s.unit.modified.true_damage)
     };
 
     let corrected_damage_units = compute_attack_damage(
@@ -595,6 +606,8 @@ pub fn being_attacked(
         target_magic_type,
         damage,
         is_flank_attack,
+        sender_pierce,
+        sender_true_damage,
     );
 
     // MUTATE target: apply damage
@@ -934,6 +947,18 @@ impl Unit {
     }
 	pub fn get_effect_by_id(&mut self, id: EffectId) -> Option<&mut StatusEffect> {
 		self.effects.iter_mut().find(|x| x.id == id)
+    }
+
+    /// Применить постоянные модификаторы бонуса (add_modify + attack_settings).
+    /// Вызывается на старте боя; откат — remove_bonus в конце боя.
+    pub fn add_bonus(&mut self, bonus: &BonusInfo, registry: &GameInfo) {
+        bonus.added(self);
+        self.recalc(registry);
+    }
+    /// Откат постоянных модификаторов бонуса в конце боя.
+    pub fn remove_bonus(&mut self, bonus: &BonusInfo, registry: &GameInfo) {
+        bonus.removed(self, registry);
+        self.recalc(registry);
     }
 	
     pub fn kill(&mut self, registry: &GameInfo) {
