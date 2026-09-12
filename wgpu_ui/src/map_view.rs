@@ -309,6 +309,31 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
         .camera
         .screen_to_world(ctx.input.mouse_position(), viewport);
     let tile = [(pos[0] / SIZE.0).floor(), (pos[1] / SIZE.1).floor()];
+    // F10: дебаг-дамп цепочки клика (дабл-клик меню строения). Владелец
+    // воспроизводит проблему и присылает stderr.
+    if ctx.input.key_pressed(KeyCode::F10) {
+        let hsize = ctx.game.executor.gamemap.hitmap.size;
+        let t = (tile[0] as usize % hsize, tile[1] as usize % hsize);
+        let hit = &ctx.game.executor.gamemap.hitmap[t];
+        let army_in = hit.building.is_some_and(|b| army_inside_building(ctx, b));
+        eprintln!(
+            "F10 DBG: tile=({},{}) | hitmap[tile]: building={:?} army={:?} passable={} | \
+             lmb_building={:?} last_click={:?} (сек) pending_open={:?} goto_tile={:?} | \
+             army_in={} player_army={:?} battle={}",
+            t.0,
+            t.1,
+            hit.building,
+            hit.army,
+            hit.passable(),
+            ctx.building_ui.lmb_building,
+            ctx.building_ui.last_click,
+            ctx.building_ui.pending_open,
+            ctx.building_ui.goto_tile,
+            army_in,
+            ctx.game.executor.players.first().map(|p| p.army),
+            ctx.game.executor.battle.is_some(),
+        );
+    }
     if ctx.input.mouse_button_released(0) {
         let tile = [
             tile[0] as usize % map_size,
@@ -318,6 +343,15 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
         let clicked_building = ctx.game.executor.gamemap.hitmap[(tile[0], tile[1])].building;
         // Обводка строения: любая клетка его хитбокса выделяет весь спрайт.
         ctx.building_ui.lmb_building = clicked_building;
+        eprintln!(
+            "map_click: tile=({},{}) building={:?} army_in={} now={:.3} last_click={:?}",
+            tile[0],
+            tile[1],
+            clicked_building,
+            clicked_building.is_some_and(|b| army_inside_building(ctx, b)),
+            now,
+            ctx.building_ui.last_click,
+        );
         // Дабл-клик по тайлу строения (< 400 мс, тот же тайл):
         // армия в хитбоксе — открыть окно; иначе — идти к строению и
         // открыть окно по прибытии (pending_open).
@@ -338,13 +372,21 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
                 }
             }
         }
+        eprintln!(
+            "map_click: double_open={} double_go={} (окно 0.4с, time_secs={:.3})",
+            double_open, double_go, now
+        );
+        // ФИКС (баг владельца «дабл-клик не открывает меню»): last_click
+        // нигде не устанавливался — только сбрасывался в None, поэтому
+        // double_open/double_go были мёртвыми ветками. Ставим всегда.
+        ctx.building_ui.last_click = Some((now, tile));
         if double_open {
             ctx.building_ui.last_click = None;
             ctx.building_ui.pending_open = None;
             return Some(Menu::Building(clicked_building.unwrap(), BuildingTab::Main));
         }
         if double_go {
-            // Одинарный клик уже отправил GoTo к этому тайлу; фиксируем
+            // Второй клик дабл-клика: первый уже отправил GoTo; фиксируем
             // намерение открыть окно по прибытии армии к строению.
             ctx.building_ui.pending_open = clicked_building;
         } else {
