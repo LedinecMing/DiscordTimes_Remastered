@@ -5,6 +5,10 @@ pub mod bake;
 pub mod battle_view;
 pub mod building_view;
 pub mod camera;
+pub mod egui_layer;
+
+use egui as egui_crate;
+pub mod editor_view;
 pub mod files;
 pub mod gfx;
 pub mod map_view;
@@ -103,6 +107,10 @@ pub struct Ctx<'a> {
     pub building_ui: &'a mut state::BuildingUi,
     /// ПВП-лобби: ник, мок RoomManager, фильтры (Этапы 1-2).
     pub pvp: &'a mut state::PvpState,
+    /// Редактор карт: проект, история, запечка (экран Menu::Editor).
+    pub editor: &'a mut state::EditorUi,
+    /// egui-слой редактора: экран рисует панели через ctx.egui.run(...).
+    pub egui: &'a mut crate::egui_layer::EguiLayer,
     /// Радиальная градиент-текстура свечения (белая, альфа-фейд к краю).
     pub glow_tex: TexId,
 }
@@ -120,6 +128,8 @@ struct App {
     fps_frames: u32,
     fps_since: std::time::Instant,
     glow_tex: TexId,
+    /// egui-слой (оболочка редактора): ввод+рендер поверх игровых пассов.
+    egui: Option<crate::egui_layer::EguiLayer>,
 }
 
 impl App {
@@ -158,6 +168,7 @@ impl App {
             textures,
             building_ui,
             pvp,
+            editor,
             ..
         } = state;
         if frame_dt > 0.1 {
@@ -180,17 +191,42 @@ impl App {
             window: self.window.as_ref().unwrap(),
             building_ui,
             pvp,
+            editor,
             delta,
             rt: &state.rt,
             map_settings: std::cell::RefCell::new(None),
             glow_tex: self.glow_tex,
+            egui: self.egui.as_mut().expect("egui layer"),
         };
         let t0 = std::time::Instant::now();
         dispatch(&mut ctx);
         let t1 = std::time::Instant::now();
         drop(ctx);
+        // egui: буферы (тесселяция/текстуры) — до submit игровых пассов.
+        let egui_had_frame = self
+            .egui
+            .as_ref()
+            .is_some_and(|egui| egui.has_output());
+        {
+            let gfx = self.gfx.as_mut().unwrap();
+            gfx.egui_pending = egui_had_frame;
+        }
+        if let (Some(egui), Some(gfx)) = (self.egui.as_mut(), self.gfx.as_mut()) {
+            let mut encoder = gfx
+                .device
+                .create_command_encoder(&Default::default());
+            egui.finish(&gfx.device, &gfx.queue, &mut encoder);
+            gfx.queue.submit([encoder.finish()]);
+        }
         self.input.end_frame();
         self.gfx.as_mut().unwrap().end_frame();
+        // egui: рендер поверх кадра (present внутри render_egui).
+        if egui_had_frame {
+            let egui = self.egui.as_mut().unwrap();
+            let gfx = self.gfx.as_mut().unwrap();
+            gfx.render_egui(|rpass| egui.render(rpass));
+            egui.after_render();
+        }
         // Discord Rich Presence: статус по активному экрану (не в Ctx, чтобы
         // экраны не трогали IPC; идемпотентно — внутри дедуп по стейту).
         self.update_presence();
@@ -281,6 +317,13 @@ impl App {
                     recent_wins,
                 }
             }
+            Menu::Editor => rich_presence::PresenceState::Map {
+                scenario,
+                gold,
+                in_battle: false,
+                enemy,
+                recent_wins,
+            },
             Menu::Main | Menu::Atlas | Menu::Info => rich_presence::PresenceState::Menu,
         };
         state.rpc.update(&presence);
@@ -300,6 +343,11 @@ fn dispatch(ctx: &mut Ctx) {
         Menu::BattleSetup => screens::battle_setup(ctx),
         Menu::Battle => screens::battle(ctx),
         Menu::Map(_) => map_view::map_screen(ctx),
+        Menu::Editor => {
+            if !editor_view::editor_screen(ctx) {
+                ctx.ui.main = Menu::Main;
+            }
+        }
         Menu::Building(..) => {
             if building_view::building_screen(ctx) {
                 // Выход из окна: восстановить карту с сохранённой камерой.
@@ -361,6 +409,12 @@ impl ApplicationHandler for App {
         bake::debug_check_gradient(&gfx, &rt0, &state.game, &state.tile_pixels);
         let skins = Skins::build(&mut gfx, &state.assets);
         self.glow_tex = glow_tex;
+        // egui-слой (оболочка редактора) на тех же device/queue и формате
+        // экрана; ввод конвертируется вручную (см. egui_layer).
+        self.egui = Some(crate::egui_layer::EguiLayer::new(
+            &gfx.device,
+            gfx.config.format,
+        ));
         self.rts = Some((rt0, rt1));
         self.skins = Some(skins);
         self.gfx = Some(gfx);
@@ -472,6 +526,7 @@ pub fn run() {
         fps_frames: 0,
         fps_since: std::time::Instant::now(),
         glow_tex: gfx::TexId(0),
+        egui: None,
     };
     let event_loop = EventLoop::new().unwrap();
     event_loop.run_app(&mut app).unwrap();
@@ -506,6 +561,7 @@ fn android_main(app: android_activity::AndroidApp) {
         fps_frames: 0,
         fps_since: std::time::Instant::now(),
         glow_tex: gfx::TexId(0),
+        egui: None,
     };
     event_loop.run_app(&mut app_state).unwrap();
 }

@@ -143,6 +143,74 @@ pub enum Menu {
     PvpRoom,
     /// Окно строения: индекс в gamemap.buildings + активная вкладка.
     Building(usize, BuildingTab),
+    /// Экран редактора карт: состояние живёт в State.editor (EditorUi).
+    Editor,
+}
+
+/// Состояние вкладки «Редактор карт»: проект, история команд, запечка.
+/// По образцу PvpState/BuildingUi — живёт в State, не в Menu.
+pub struct EditorUi {
+    pub project: editor_core::MapProject,
+    pub history: editor_core::CommandHistory,
+    pub state: editor_core::EditorState,
+    pub tool: editor_core::Tool,
+    /// Запечённая карта (единый bake-путь игры): TexId RT-текстуры.
+    pub baked: Option<TexId>,
+    /// RT, в который запекается карта редактора.
+    pub rt: Option<crate::gfx::Rt>,
+    /// Камера канваса (пан/зум — как у игровой карты).
+    pub cam: crate::camera::Camera,
+    /// Строка статуса (последняя операция/ошибка).
+    pub status: String,
+    /// Путь проекта (Save/Save As).
+    pub project_path: Option<std::path::PathBuf>,
+    /// Счётчик имён новых объектов (декор/строения/армии).
+    pub counter: usize,
+    /// Кэш результата валидаторов (Lint / перед сохранением).
+    pub issues: Vec<editor_validators::Issue>,
+    /// Грязный флаг: документ менялся с последнего запека.
+    pub bake_dirty: bool,
+    /// Активный тайл в палитре (кисть).
+    pub active_tile: usize,
+    /// Выделенная клетка (рамка egui-пейнтера).
+    pub selected: Option<(usize, usize)>,
+}
+
+impl std::fmt::Debug for EditorUi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditorUi")
+            .field("size", &self.project.size())
+            .field("undo", &self.history.undo_len())
+            .field("tool", &self.tool)
+            .field("path", &self.project_path)
+            .finish()
+    }
+}
+
+impl Default for EditorUi {
+    fn default() -> Self {
+        Self {
+            project: editor_core::MapProject::new(50, 0),
+            history: editor_core::CommandHistory::new(),
+            state: editor_core::EditorState::new(editor_core::MapProject::new(50, 0)),
+            tool: editor_core::Tool::default(),
+            baked: None,
+            rt: None,
+            cam: crate::camera::Camera::from_display_rect(
+                0.,
+                SIZE.1 * 50.,
+                SIZE.0 * 50.,
+                -SIZE.1 * 50.,
+            ),
+            status: String::new(),
+            project_path: None,
+            counter: 0,
+            issues: Vec::new(),
+            bake_dirty: true,
+            active_tile: 0,
+            selected: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +306,8 @@ pub struct State {
     pub building_ui: BuildingUi,
     /// ПВП-лобби: локальный ник, фильтры, мок RoomManager до сетевого слоя.
     pub pvp: PvpState,
+    /// Редактор карт: проект, история, запечка (экран Menu::Editor).
+    pub editor: EditorUi,
     pub delta: f32,
     /// Discord Rich Presence (клиент None, если Discord не запущен).
     pub rpc: crate::rich_presence::RichPresence,
@@ -485,6 +555,7 @@ pub async fn game_init(gfx: &mut Gfx, text: &mut TextRenderer) -> State {
         game,
         tile_pixels,
         building_ui: BuildingUi::default(),
+        editor: EditorUi::default(),
         pvp: PvpState::default(),
         rpc: crate::rich_presence::RichPresence::new(),
     }
