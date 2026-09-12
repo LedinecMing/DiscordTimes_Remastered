@@ -6,6 +6,7 @@ use crate::{
                       handle_action, search_interactions, BattleUnitPos},
         troop::Troop, control::Control,
     },
+    network::server::{ClientMessage, Executor},
     registry::GameInfo,
     units::{
         unit::{AttackSettings, LevelUpInfo, MagicDirection, MagicType, Power, Unit, UnitInfo,
@@ -1779,6 +1780,100 @@ fn tick_does_not_step_onto_occupied_tile() {
         );
     }
 }
+    // =====================
+    // ПРЕСЛЕДОВАНИЕ АРМИИ (дабл-клик по чужой армии)
+    // =====================
+
+    fn make_chase_executor() -> (Executor, GameInfo) {
+        let (mut gamemap, registry) = make_map_with_two_armies();
+        // Цель преследования — blocker в (3,3); игрок в (1,1).
+        let executor = Executor {
+            gamemap,
+            events: vec![],
+            battle: None,
+            execution_queue: vec![],
+            players: vec![crate::battle::control::Player {
+                army: 0,
+                questbook: None,
+                execution_queue: vec![],
+                wait_until: None,
+            }],
+            last_day: 0,
+        };
+        (executor, registry)
+    }
+
+    #[test]
+    fn follow_builds_path_to_adjacent_tile() {
+        // Приказ Follow: путь строится к СОСЕДНЕЙ клетке цели, не на её клетку.
+        let (mut executor, registry) = make_chase_executor();
+        executor.message_handler(ClientMessage::Follow(1), 0, &registry);
+        let army = &executor.gamemap.armys[0];
+        assert_eq!(army.chasing, Some(1), "состояние преследования установлено");
+        assert!(
+            !army.path.is_empty(),
+            "путь к цели построен"
+        );
+        let goal = *army.path.last().unwrap();
+        assert_ne!(goal, (3, 3), "путь не заканчивается на клетке цели");
+        let (gx, gy) = (goal.0 as isize, goal.1 as isize);
+        let (tx, ty) = (
+            executor.gamemap.armys[1].pos.0 as isize,
+            executor.gamemap.armys[1].pos.1 as isize,
+        );
+        assert!(
+            (gx - tx).abs() <= 1 && (gy - ty).abs() <= 1,
+            "конечная клетка пути соседняя с целью: {goal:?} vs ({tx},{ty})"
+        );
+    }
+
+    #[test]
+    fn follow_target_moving_repaths_per_tick() {
+        // Цель сместилась — путь перезапрашивается к её новой позиции,
+        // игрок приближается (дистанция Чебышёва сокращается).
+        let (mut executor, registry) = make_chase_executor();
+        executor.message_handler(ClientMessage::Follow(1), 0, &registry);
+        // Цель уходит в (0,3).
+        executor.gamemap.armys[1].pos = (0, 3);
+        executor.gamemap.recalc_armies_hitboxes();
+        for _ in 0..8 {
+            executor.tick(&registry);
+        }
+        let (p, t) = (executor.gamemap.armys[0].pos, executor.gamemap.armys[1].pos);
+        let d = (p.0 as isize - t.0 as isize).abs().max((p.1 as isize - t.1 as isize).abs());
+        assert!(d <= 1, "после тиков игрок рядом с целью: игрок {p:?}, цель {t:?}");
+        assert_ne!(p, t, "на клетку цели не заходим");
+        assert_eq!(
+            executor.gamemap.armys[0].chasing, None,
+            "при контакте (бой) преследование сброшено"
+        );
+        assert!(
+            executor.battle.is_some(),
+            "при соседстве с целью начался бой"
+        );
+    }
+
+    #[test]
+    fn follow_reset_on_new_order() {
+        // Новый приказ (GoTo) сбрасывает преследование.
+        let (mut executor, registry) = make_chase_executor();
+        executor.message_handler(ClientMessage::Follow(1), 0, &registry);
+        executor.message_handler(ClientMessage::GoTo((2, 2)), 0, &registry);
+        assert_eq!(
+            executor.gamemap.armys[0].chasing, None,
+            "новый приказ сбрасывает преследование"
+        );
+    }
+
+    #[test]
+    fn follow_dead_or_invalid_target_resets() {
+        // Несуществующая цель — приказ игнорируется целиком.
+        let (mut executor, registry) = make_chase_executor();
+        executor.message_handler(ClientMessage::Follow(99), 0, &registry);
+        assert_eq!(executor.gamemap.armys[0].chasing, None);
+        assert!(executor.gamemap.armys[0].path.is_empty());
+    }
+
 
     // =====================
     // COIN FLIP INITIATIVE (PVP §1.3)

@@ -92,8 +92,20 @@ impl Executor {
                 if let Some(path) = find_path(&self.gamemap, from, to, self.gamemap.armys[player_army].transport, registry) {
                     self.gamemap.armys[player_army].path = path.0;
                 };
+                // Новый приказ сбрасывает преследование.
+                self.gamemap.armys[player_army].chasing = None;
             }
-            Follow(who) => {}
+            Follow(who) => {
+                // Преследование чужой армии (дабл-клик по ней): путь к
+                // СОСЕДНЕЙ клетке цели — на её клетку зайти нельзя
+                if who != player_army && self.gamemap.armys.get(who).is_some() {
+                    let from = self.gamemap.armys[player_army].pos;
+                    let path = chase_path(from, who, &self.gamemap, registry);
+                    let army = &mut self.gamemap.armys[player_army];
+                    army.chasing = Some(who);
+                    army.path = path;
+                }
+            }
             _ => {}
         }
     }
@@ -237,6 +249,46 @@ impl Executor {
             }
         });
         handle_event_res(self, new, registry);
+        // Преследование: перезапрос пути при смещении цели + контактный бой.
+        // Отдельно от цикла players (цель может быть не игроком).
+        let mut contacts: Vec<(usize, usize)> = vec![];
+        for i in 0..self.gamemap.armys.len() {
+            let Some(target) = self.gamemap.armys[i].chasing else {
+                continue;
+            };
+            let Some(target_pos) = self.gamemap.armys.get(target).map(|a| a.pos) else {
+                // Цель исчезла (победлена/удалена) — сброс.
+                self.gamemap.armys[i].chasing = None;
+                continue;
+            };
+            let my = self.gamemap.armys[i].pos;
+            let chebyshev = (my.0 as isize - target_pos.0 as isize)
+                .abs()
+                .max((my.1 as isize - target_pos.1 as isize).abs());
+            if chebyshev <= 1 {
+                // Соседство: контакт — бой (как MapClick в net.rs).
+                contacts.push((i, target));
+                self.gamemap.armys[i].chasing = None;
+                self.gamemap.armys[i].path.clear();
+                continue;
+            }
+            // Цель ушла от конца текущего пути — перезапрос пути к её клетке.
+            let stale = self.gamemap.armys[i].path.last().is_none_or(|last| {
+                let (lx, ly) = (*last, *last);
+                let (lx, ly) = (lx.0 as isize, ly.1 as isize);
+                (lx - target_pos.0 as isize).abs() > 1
+                    || (ly - target_pos.1 as isize).abs() > 1
+            });
+            if stale {
+                let path = chase_path(my, target, &self.gamemap, registry);
+                self.gamemap.armys[i].path = path;
+            }
+        }
+        for (a, b) in contacts {
+            if self.battle.is_none() {
+                self.battle = Some(BattleInfo::new(&mut self.gamemap.armys, a, b));
+            }
+        }
         for player in &mut self.players {
             if let Some(execute) = player.execution_queue.get(0) {
                 let res = match execute {
@@ -272,5 +324,49 @@ impl Executor {
             }
         }
     }
-	
+}
+
+/// Путь преследования: до ближайшей проходимой СОСЕДНЕЙ клетки цели
+/// (на её клетку зайти нельзя — hitmap.army блокирует и step, и фильтр
+/// find_path). Пустой путь — цель недоступна.
+fn chase_path(
+    from: (usize, usize),
+    target: usize,
+    gamemap: &GameMap,
+    registry: &GameInfo,
+) -> Vec<(usize, usize)> {
+    let Some(target_pos) = gamemap.armys.get(target).map(|a| a.pos) else {
+        return vec![];
+    };
+    let (tx, ty) = (target_pos.0 as isize, target_pos.1 as isize);
+    let mut best: Option<Vec<(usize, usize)>> = None;
+    for (dx, dy) in [
+        (-1isize, 0isize),
+        (1, 0),
+        (0, -1),
+        (0, 1),
+        (-1, -1),
+        (1, -1),
+        (-1, 1),
+        (1, 1),
+    ] {
+        let (nx, ny) = (tx + dx, ty + dy);
+        if nx < 0 || ny < 0 {
+            continue;
+        }
+        let (nx, ny) = (nx as usize, ny as usize);
+        if nx >= gamemap.tilemap.size || ny >= gamemap.tilemap.size {
+            continue;
+        }
+        // Клетка соседа цели, свободная от армий: стартуем поиск в неё.
+        if gamemap.hitmap[(nx, ny)].army.is_some() {
+            continue;
+        }
+        if let Some((path, _)) = find_path(gamemap, from, (nx, ny), false, registry) {
+            if best.as_ref().is_none_or(|b| path.len() < b.len()) {
+                best = Some(path);
+            }
+        }
+    }
+    best.unwrap_or_default()
 }

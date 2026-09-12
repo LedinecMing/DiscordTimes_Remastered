@@ -69,6 +69,10 @@ pub struct Army {
     pub control: Control,
     pub pc_settings: Option<PC_ControlSetings>,
     pub path: Vec<(usize, usize)>,
+    /// Преследуемая армия (дабл-клик по чужой армии): индекс в gamemap.armys.
+    /// Путь перезапрашивается при смещении цели; сброс — бой/прибытие/новый
+    /// приказ.
+    pub chasing: Option<usize>,
     /// Книга заклинаний армии: id изученных эффектов (реестр Effects).
     /// Изучение НЕ накладывает эффект на юнитов — это список известного.
     pub spells: Vec<usize>,
@@ -105,6 +109,7 @@ impl Army {
             pos,
             active,
             path: Vec::new(),
+            chasing: None,
             spells: Vec::new(),
         };
         for troop in troops {
@@ -160,7 +165,11 @@ impl Army {
             self.troops.remove(*index);
         }
         if let Some(unit_id) = unit_id {
-            let new_unit_info = registry.units[unit_id].clone();
+            // id юнита из сети/UI — на битых картах может не быть в реестре:
+            // registry.units[] паникует, тихо пропускаем (AGENTS.md п.10).
+            let Some(new_unit_info) = registry.units.get(unit_id).cloned() else {
+                return;
+            };
             let dpos = UnitPos::from_index(pos, columns);
             if !Army::fit_to(
                 &self.hitmap,
