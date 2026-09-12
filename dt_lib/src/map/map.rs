@@ -235,16 +235,19 @@ impl GameMap {
             let size = objects.get(building.id).unwrap_or(&objects[0]).size;
             for x in 0..size.0 {
                 for y in 0..size.1 {
-                    if building.pos.0 + x as usize >= self.tilemap.size
-                        || building.pos.1 + y as usize >= self.tilemap.size
+                    // Хитбокс уходит ВЛЕВО-ВВЕРХ от якоря (якорь = правый-нижний
+                    // угол спрайта, как в рендере bake: draw от pos с минусом размера).
+                    let tx = building.pos.0 as isize - x as isize;
+                    let ty = building.pos.1 as isize - y as isize;
+                    if tx < 0 || ty < 0 || tx as usize >= self.tilemap.size
+                        || ty as usize >= self.tilemap.size
                     {
                         continue;
                     }
-                    let hitbox = &mut self.hitmap
-                        [(building.pos.0 + x as usize, building.pos.1 + y as usize)];
+                    let hitbox = &mut self.hitmap[(tx as usize, ty as usize)];
                     hitbox.building = Some(i);
                     hitbox.passable = TILES
-                        [self.tilemap[(building.pos.0 + x as usize, building.pos.1 + y as usize)]]
+                        [self.tilemap[(tx as usize, ty as usize)]]
                         .walkspeed
                         != 0;
                 }

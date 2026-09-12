@@ -413,8 +413,8 @@ fn outline_building(ctx: &mut Ctx, building: usize, color: [f32; 4]) {
     let (bx, by) = ctx.game.executor.gamemap.buildings[building].pos;
     let (w, h) = (obj.size.0 as f32, obj.size.1 as f32);
     ctx.gfx.draw_rect_lines(
-        bx as f32 * SIZE.0,
-        by as f32 * SIZE.1,
+        (bx as f32 - w) * SIZE.0,
+        (by as f32 - h) * SIZE.1,
         w * SIZE.0,
         h * SIZE.1,
         5.,
@@ -577,12 +577,16 @@ fn army_inside_building(ctx: &Ctx, building: usize) -> bool {
     let (w, h) = (obj.size.0 as usize, obj.size.1 as usize);
     for x in 0..w {
         for y in 0..h {
-            let (tx, ty) = (bx + x, by + y);
-            if tx >= ctx.game.executor.gamemap.hitmap.size
-                || ty >= ctx.game.executor.gamemap.hitmap.size
+            // Хитбокс уходит влево-вверх от якоря (calc_hitboxes).
+            let (tx, ty) = (bx as isize - x as isize, by as isize - y as isize);
+            if tx < 0
+                || ty < 0
+                || tx as usize >= ctx.game.executor.gamemap.hitmap.size
+                || ty as usize >= ctx.game.executor.gamemap.hitmap.size
             {
                 continue;
             }
+            let (tx, ty) = (tx as usize, ty as usize);
             if ctx.game.executor.gamemap.hitmap[(tx, ty)].army == Some(player_army) {
                 return true;
             }
