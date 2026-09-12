@@ -53,9 +53,11 @@ impl EditorState {
         &mut self.project
     }
 
-    pub(crate) fn set_cursor(&mut self, cursor: Pos) {
+    /// Курсор канваса — UI-настройка, не изменение документа.
+    pub fn set_cursor(&mut self, cursor: Pos) {
         self.cursor = cursor;
     }
+
 
 
     pub(crate) fn set_open_path(&mut self, path: Option<String>) {

@@ -6,7 +6,7 @@ description = "Map validators: structural checks for known game crashes (guide s
 
 [dependencies]
 editor-core = { path = "../editor-core" }
-dt_lib = { path = "../../dt_lib" }
+dt_lib = { path = "../dt_lib" }
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
