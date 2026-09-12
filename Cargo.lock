@@ -369,6 +369,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_repr",
+ "tokio",
  "url",
  "wayland-backend",
  "wayland-client",
@@ -6127,6 +6128,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -7300,10 +7302,13 @@ version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
  "android-activity",
+ "ashpd",
  "bytemuck",
  "discord-rich-presence",
  "dt_client",
  "dt_lib",
+ "editor-core",
+ "editor-validators",
  "egui 0.36.2",
  "egui-wgpu 0.36.2",
  "fontdue",
@@ -8121,6 +8126,7 @@ dependencies = [
  "rustix 1.1.4",
  "serde",
  "serde_repr",
+ "tokio",
  "tracing",
  "uds_windows",
  "uuid 1.26.1",

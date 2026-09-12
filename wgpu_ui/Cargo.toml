@@ -19,9 +19,14 @@ fontdue = "0.9"
 bytemuck = { version = "1.16", features = ["derive"] }
 pollster = "0.4"
 discord-rich-presence = "1.1"
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal"] }
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+# Пин унификации фич ashpd: только tokio-бекенд (rfd xdg-portal везёт zbus default-features=false;
+# без явного пина cargo включает zbus/async-io через чужие фичи и ashpd не собирается).
+ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
 egui = { version = "0.36", default-features = false }
 egui-wgpu = { version = "0.36", default-features = false }
+editor-core = { path = "../editor-core" }
+editor-validators = { path = "../editor-validators" }
 
 [dev-dependencies]
 # Тесты rich_presence: сериализация Activity в JSON без подключения к Discord.
