@@ -36,6 +36,9 @@ pub enum ClientMessage {
 
     GoTo((usize, usize)),
     Follow(usize),
+
+    /// Комнатный протокол ПВП (serde_json внутри; см. network::room).
+    Room(String),
 }
 
 #[derive(Clone, Debug)]
@@ -43,6 +46,9 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     State((Option<BattleInfo>, GameMap)),
     ChangeMenu(usize),
+
+    /// Комнатный протокол ПВП (serde_json внутри; см. network::room).
+    Room(String),
 }
 
 #[derive(Clone, Debug)]
