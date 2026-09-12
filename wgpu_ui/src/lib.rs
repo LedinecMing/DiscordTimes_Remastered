@@ -272,13 +272,15 @@ impl App {
                 recent_wins,
             },
             Menu::Map(_) | Menu::Building(..) | Menu::Message(_) | Menu::RoomCreation
-            | Menu::BattleSetup => rich_presence::PresenceState::Map {
-                scenario,
-                gold,
-                in_battle: false,
-                enemy,
-                recent_wins,
-            },
+            | Menu::BattleSetup | Menu::PvpLobby | Menu::PvpRoomSetup | Menu::PvpRoom => {
+                rich_presence::PresenceState::Map {
+                    scenario,
+                    gold,
+                    in_battle: false,
+                    enemy,
+                    recent_wins,
+                }
+            }
             Menu::Main | Menu::Atlas | Menu::Info => rich_presence::PresenceState::Menu,
         };
         state.rpc.update(&presence);

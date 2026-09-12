@@ -485,7 +485,6 @@ pub async fn game_init(gfx: &mut Gfx, text: &mut TextRenderer) -> State {
         game,
         tile_pixels,
         building_ui: BuildingUi::default(),
-        building_ui: BuildingUi::default(),
         pvp: PvpState::default(),
         rpc: crate::rich_presence::RichPresence::new(),
     }
