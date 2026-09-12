@@ -245,11 +245,18 @@ pub async fn parse_bonuses<Reader: FileAccess>(
     path: Option<&str>,
 	registry: &mut GameInfo
 ) -> Result<(&'static str, Vec<String>), String> {
-	let mut bonus = BonusInfo::default();
-	
-	let reg = json5::from_str::<Vec<BonusInfo>>(&Reader::read_as_string("bonuses.json5").await).unwrap();
-	std::fs::write("bonuses.json5", json5::to_string(&reg).unwrap());
 	let schema = schemars::schema_for!(BonusInfo);
+	let contents = Reader::read_as_string("bonuses.json5").await;
+	let reg: Vec<BonusInfo> = match json5::from_str(&contents) {
+		Ok(reg) => reg,
+		// bonuses.json5 может отсутствовать: бонусы тогда регистрируются
+		// программно (см. тест-хелпер make_test_registry), паниковать нельзя.
+		Err(_) if contents.trim().is_empty() => {
+			log::warn!("bonuses.json5 not found: bonus registry stays empty");
+			Vec::new()
+		}
+		Err(err) => return Err(format!("bonuses.json5: {err}")),
+	};
 	for bonus in reg {
 		let id = bonus.id.clone();
 		registry.bonuses.register(bonus, id);
@@ -861,4 +868,59 @@ pub async fn parse_story<Reader: FileAccess>(
         ..Default::default()
     };
     (gamemap, events)
+}
+
+#[cfg(test)]
+mod bonus_parse_tests {
+    use super::*;
+
+    /// Reader, у которого нет файла bonuses.json5 (пустая выдача → пустая строка).
+    struct MissingFileReader;
+    impl FileAccess for MissingFileReader {
+        async fn read(_path: &str) -> Vec<u8> {
+            vec![]
+        }
+    }
+
+    /// Reader, отдающий валидный bonuses.json5 с одним бонусом.
+    struct PresentFileReader;
+    impl FileAccess for PresentFileReader {
+        async fn read(_path: &str) -> Vec<u8> {
+            br#"[
+                {
+                    id: "test_bonus",
+                    name: "Test Bonus",
+                    desc: "test",
+                },
+            ]"#
+            .to_vec()
+        }
+    }
+
+    /// При отсутствии bonuses.json5 реестр бонусов остаётся пустым, паники нет.
+    #[tokio::test]
+    async fn parse_bonuses_missing_file_yields_empty_registry() {
+        let mut registry = GameInfo::default();
+        parse_bonuses::<MissingFileReader>(None, &mut registry)
+            .await
+            .expect("missing bonuses.json5 must not fail parsing");
+        assert!(
+            registry.bonuses.inner.is_empty(),
+            "no bonuses.json5 → empty bonus registry"
+        );
+    }
+
+    /// Присутствующий файл по-прежнему регистрирует бонусы по id.
+    #[tokio::test]
+    async fn parse_bonuses_present_file_registers_by_id() {
+        let mut registry = GameInfo::default();
+        parse_bonuses::<PresentFileReader>(None, &mut registry)
+            .await
+            .expect("valid bonuses.json5 must parse");
+        assert_eq!(
+            registry.bonuses.str_to_id(&"test_bonus".to_string()),
+            Some(0),
+            "bonus must be registered under its string id"
+        );
+    }
 }

@@ -184,6 +184,71 @@ fn make_test_registry() -> GameInfo {
         power_scales: false,
         power_scales_with_lifetime: false,
     });
+
+    // Тестовые бонусы (Bonus1-21 из ТЗ); регистрируются программно, т.к.
+    // bonuses.json5 в тестах не читается.
+    // 0: godanger — Кара Господня: +10 безусловного урона.
+    registry.bonuses.register(
+        BonusInfo {
+            id: "godanger".into(),
+            name: "God Anger".into(),
+            desc: "".into(),
+            add_modify: ModifyUnitStats {
+                true_damage: Modify { add: Some(10), ..Default::default() },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        "godanger",
+    );
+    // 1: godstrike — Гнев Господен: +20 безусловного урона.
+    registry.bonuses.register(
+        BonusInfo {
+            id: "godstrike".into(),
+            name: "God Strike".into(),
+            desc: "".into(),
+            add_modify: ModifyUnitStats {
+                true_damage: Modify { add: Some(20), ..Default::default() },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        "godstrike",
+    );
+    // 2: defencepiercing — Проникающий Удар: pierce 100%.
+    registry.bonuses.register(
+        BonusInfo {
+            id: "defencepiercing".into(),
+            name: "Defence Piercing".into(),
+            desc: "".into(),
+            add_modify: ModifyUnitStats {
+                pierce: Modify { percent_add: Some(Percent::new(100)), ..Default::default() },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        "defencepiercing",
+    );
+    // 3: speardefense — Длинное Оружие: утроенная защита на 1-й ход.
+    registry.bonuses.register(
+        BonusInfo {
+            id: "speardefense".into(),
+            name: "Spear Defense".into(),
+            desc: "".into(),
+            ..Default::default()
+        },
+        "speardefense",
+    );
+    // 4: counterblow — Контрудар: ответный удар на удар противника.
+    registry.bonuses.register(
+        BonusInfo {
+            id: "counterblow".into(),
+            name: "Counterblow".into(),
+            desc: "".into(),
+            ..Default::default()
+        },
+        "counterblow",
+    );
     registry
 }
 
