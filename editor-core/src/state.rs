@@ -14,8 +14,6 @@ pub struct EditorState {
     cursor: Pos,
     /// Активный тайл в палитре (инструмент «кисть»).
     active_tile: usize,
-    /// Имя открытого файла (None — проект ещё не сохранялся).
-    open_path: Option<String>,
 }
 
 impl EditorState {
@@ -43,9 +41,6 @@ impl EditorState {
         self.active_tile = tile.min(crate::project::TILE_COUNT - 1);
     }
 
-    pub fn open_path(&self) -> Option<&str> {
-        self.open_path.as_deref()
-    }
 
 
     /// Видимые UI-настройки меняются тоже через команды — но чтение свободное.
@@ -60,9 +55,6 @@ impl EditorState {
 
 
 
-    pub(crate) fn set_open_path(&mut self, path: Option<String>) {
-        self.open_path = path;
-    }
 }
 
 #[cfg(test)]
@@ -72,7 +64,7 @@ mod tests {
 
     #[test]
     fn state_is_read_only_from_outside() {
-        let mut state = EditorState::new(MapProject::new(4, 0));
+        let state = EditorState::new(MapProject::new(4, 0));
         assert_eq!(state.project().tile((1, 1)), Some(0));
         // Единственный способ изменения — команды; прямых сеттеров нет.
         assert_eq!(state.active_tile(), 0);

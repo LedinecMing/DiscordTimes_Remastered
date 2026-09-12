@@ -11,7 +11,7 @@
 //! снапшот не входят — их сериализация идёт через advini/alkahest в
 //! editor-serde (Phase 1, .DTm-совместимость).
 
-use dt_lib::map::event::{Event, Events};
+use dt_lib::map::event::Events;
 use dt_lib::map::map::{GameMap, TileMap};
 use dt_lib::map::object::MapBuildingdata;
 use serde::{Deserialize, Serialize};
@@ -64,7 +64,6 @@ pub struct MapProject {
     /// Фонарики (радиус 0..=24; валидатор RadiusRangeCheck).
     pub lights: Vec<Light>,
 }
-
 impl MapProject {
     /// Новый проект: квадратная карта `size`x`size` (50/100/200/400/800),
     /// залитая тайлом `tile` (как старый редактор: 50x50 воды).
@@ -194,7 +193,7 @@ pub fn default_building(id: usize, pos: Pos) -> MapBuildingdata {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use dt_lib::map::event::Event;
     #[test]
     fn new_project_defaults() {
         let p = MapProject::new(50, 0);

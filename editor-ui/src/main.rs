@@ -1,5 +1,7 @@
 //! Точка входа редактора карт (bin/editor, ТЗ §8).
 
+use eframe::egui;
+
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -10,6 +12,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "DT Map Editor",
         options,
-        Box::new(|_cc| Ok(editor_ui::MapEditorApp::new())),
+        Box::new(|_cc| Ok(Box::new(editor_ui::MapEditorApp::new()))),
     )
 }
