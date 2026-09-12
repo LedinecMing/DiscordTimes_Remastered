@@ -1,0 +1,13 @@
+[package]
+name = "editor-core"
+version = "0.1.0"
+edition = "2021"
+description = "Map editor domain: MapProject, EditorState, command trait and history."
+
+[dependencies]
+dt_lib = { path = "../dt_lib" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
