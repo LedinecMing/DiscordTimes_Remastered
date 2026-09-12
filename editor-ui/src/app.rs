@@ -13,12 +13,14 @@ use eframe::egui;
 use editor_core::command::{
     Command, CommandHistory, PaintTile, PlaceArmy, PlaceBuilding, PlaceDeco, ResizeMap,
 };
+use editor_core::render::BakedMap;
 use editor_core::project::MapProject;
 use editor_core::EditorState;
 use editor_validators::run_all;
 
 /// Размер тайла на канвасе в пикселях (Фаза 0: без зума).
 const TILE_SIZE: f32 = 16.0;
+const TILE_HALF: f32 = 8.0;
 
 /// Активный инструмент (палитра ТЗ §3 Map View, срез — четыре инструмента).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,7 +59,19 @@ pub struct MapEditorApp {
     /// Кэш результата валидаторов (обновляется по кнопке Lint / перед сохранением).
     issues: Vec<editor_validators::Issue>,
     dirty: bool,
+    /// Запечённая карта: RGBA-кэш + egui-текстура + флаг инвалидности.
+    bake: Option<BakedMap>,
+    bake_texture: Option<egui::TextureHandle>,
+    bake_dirty: bool,
+    /// Выделенная клетка (клик) — рамка поверх текстуры.
+    selected: Option<editor_core::project::Pos>,
+    /// Показывать сетку клеток.
+    show_grid: bool,
 }
+
+/// Директория ассетов относительно cwd (бинарник запускать из dt/, как клиент).
+const ASSETS_TERRAIN: &str = "assets/Terrain";
+const ASSETS_OBJECTS: &str = "assets/Objects";
 
 impl MapEditorApp {
     /// Новый редактор с картой 50x50, залитой водой (как старый редактор).
@@ -70,7 +84,41 @@ impl MapEditorApp {
             counter: 0,
             issues: Vec::new(),
             dirty: false,
+            bake: None,
+            bake_texture: None,
+            bake_dirty: true,
+            selected: None,
+            show_grid: true,
         }
+    }
+
+    /// Пересобрать RGBA-кэш запечки (tilemap + objects), пометить текстуру.
+    fn rebake(&mut self) {
+        let project = self.state.project().clone();
+        let sprites = editor_core::render::tile_sprites(ASSETS_TERRAIN);
+        let baked = editor_core::render::bake_tilemap(&project.map.tilemap, &sprites);
+        let mut cache = editor_core::render::SpriteCache::new();
+        let objects_layer = editor_core::render::bake_objects(
+            &project.map,
+            &self.registry_objects(),
+            &mut cache,
+            ASSETS_OBJECTS,
+        );
+        // Слой объектов поверх тайлов (альфа-блит уже в bake_objects).
+        let mut rgba = baked.rgba;
+        overlay(&mut rgba, &objects_layer.rgba);
+        self.bake = Some(BakedMap {
+            rgba,
+            width: baked.width,
+            height: baked.height,
+        });
+        self.bake_dirty = false;
+    }
+
+    /// Реестр объектов: лениво парсится Objects.ini; при ошибке — пустой.
+    fn registry_objects(&self) -> Vec<dt_lib::map::object::ObjectInfo> {
+        let ini = std::fs::read_to_string("Objects.ini").unwrap_or_default();
+        parse_objects_ini(&ini)
     }
 
     fn top_menu(&mut self, ui: &mut egui::Ui) {
@@ -177,9 +225,15 @@ impl MapEditorApp {
             Err(err) => eprintln!("save failed: {err}"),
         }
     }
-
-    /// Канвас-заглушка: tilemap прямоугольниками (Фаза 0; wgpu — позже).
+    /// Канвас: запечённая карта текстурой + объектные маркеры + сетка +
+    /// выделение клетки. Запечка — по флагу bake_dirty (не в кадре).
     fn canvas(&mut self, ui: &mut egui::Ui) {
+        if self.bake_dirty || self.bake.is_none() {
+            self.rebake();
+        }
+        let Some(baked) = self.bake.clone() else {
+            return;
+        };
         let project = self.state.project().clone();
         let size = project.size();
         let canvas_size = egui::vec2(size as f32 * TILE_SIZE, size as f32 * TILE_SIZE);
@@ -199,41 +253,87 @@ impl MapEditorApp {
             }
         }
 
-        // Клик -> команда активного инструмента.
+        // Клик -> выделение клетки + команда активного инструмента.
         if response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 if let Some(tile_pos) = tile_under(pos) {
+                    self.selected = Some(tile_pos);
                     self.apply_tool(tile_pos);
                 }
             }
         }
 
-        // Рендер: тайл цветом из палитры (tilemap.inner — построчно).
-        for (index, &tile) in project.map.tilemap.inner.iter().enumerate() {
-            let x = index % size;
-            let y = index / size;
-            let rect = egui::Rect::from_min_size(
-                response.rect.min + egui::vec2(x as f32 * TILE_SIZE, y as f32 * TILE_SIZE),
-                egui::vec2(TILE_SIZE, TILE_SIZE),
+        // Текстура карты: ColorImage из запечённого RGBA.
+        let texture = self.bake_texture.get_or_insert_with(|| {
+            ui.ctx().load_texture(
+                "map_baked",
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [baked.width as usize, baked.height as usize],
+                    &baked.rgba,
+                ),
+                egui::TextureOptions::NEAREST,
+            )
+        });
+        if texture.size() != [baked.width as usize, baked.height as usize] {
+            texture.set(
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [baked.width as usize, baked.height as usize],
+                    &baked.rgba,
+                ),
+                egui::TextureOptions::NEAREST,
             );
-            painter.rect_filled(rect, 0.0, tile_color(tile));
         }
-        // Фонарики — жёлтые, строения — синие, армии — красные, декор — зелёные.
+        // Содержимое могло измениться без смены размера — перезаливка по флагу.
+        if self.bake_dirty {
+            texture.set(
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [baked.width as usize, baked.height as usize],
+                    &baked.rgba,
+                ),
+                egui::TextureOptions::NEAREST,
+            );
+            self.bake_dirty = false;
+        }
+        painter.image(
+            texture.id(),
+            response.rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+
+        // Маркеры динамических объектов поверх запечённого слоя.
         for light in &project.lights {
             let center = object_center(response.rect.min, light.x, light.y);
-            painter.circle_filled(center, TILE_SIZE / 3.0, egui::Color32::YELLOW);
-        }
-        for building in &project.map.buildings {
-            let center = object_center(response.rect.min, building.pos.0, building.pos.1);
-            painter.circle_filled(center, TILE_SIZE / 2.5, egui::Color32::BLUE);
+            painter.circle_filled(center, TILE_SIZE * 0.33, egui::Color32::YELLOW);
         }
         for army in &project.map.armys {
             let center = object_center(response.rect.min, army.pos.0, army.pos.1);
-            painter.circle_filled(center, TILE_SIZE / 2.5, egui::Color32::RED);
+            painter.circle_filled(center, TILE_SIZE * 0.4, egui::Color32::RED);
         }
-        for deco in &project.map.decomap {
-            let center = object_center(response.rect.min, deco.x, deco.y);
-            painter.circle_filled(center, TILE_SIZE / 3.0, egui::Color32::GREEN);
+
+        // Сетка клеток.
+        if self.show_grid {
+            let stroke = egui::Stroke::new(1.0f32, egui::Color32::from_black_alpha(60));
+            for i in 0..=size {
+                let p = response.rect.min + egui::vec2(i as f32 * TILE_SIZE, i as f32 * TILE_SIZE);
+                painter.line_segment(
+                    [egui::pos2(p.x, response.rect.min.y), egui::pos2(p.x, response.rect.max.y)],
+                    stroke,
+                );
+                painter.line_segment(
+                    [egui::pos2(response.rect.min.x, p.y), egui::pos2(response.rect.max.x, p.y)],
+                    stroke,
+                );
+            }
+        }
+
+        // Выделение клетки.
+        if let Some((sx, sy)) = self.selected {
+            let rect = egui::Rect::from_min_size(
+                response.rect.min + egui::vec2(sx as f32 * TILE_SIZE, sy as f32 * TILE_SIZE),
+                egui::vec2(TILE_SIZE, TILE_SIZE),
+            );
+            painter.rect_stroke(rect, 0.0f32, egui::Stroke::new(2.0f32, egui::Color32::YELLOW), egui::StrokeKind::Inside);
         }
     }
 
@@ -255,8 +355,10 @@ impl MapEditorApp {
         };
         if self.history.execute(command, &mut self.state) == editor_core::CommandResult::Applied {
             self.dirty = true;
+            self.bake_dirty = true;
         }
     }
+
 
     /// Правая панель: палитра инструментов и тайлов (ТЗ §3, упрощённо).
     fn side_panel(&mut self, ui: &mut egui::Ui) {
@@ -339,10 +441,12 @@ impl eframe::App for MapEditorApp {
         if undo_hotkey {
             self.history.undo(&mut self.state);
             self.dirty = true;
+            self.bake_dirty = true;
         }
         if redo_hotkey {
             self.history.redo(&mut self.state);
             self.dirty = true;
+            self.bake_dirty = true;
         }
 
         egui::TopBottomPanel::top("top_menu").show(ctx, |ui| {
@@ -357,53 +461,97 @@ impl eframe::App for MapEditorApp {
 fn object_center(canvas_min: egui::Pos2, x: usize, y: usize) -> egui::Pos2 {
     canvas_min
         + egui::vec2(
-            x as f32 * TILE_SIZE + TILE_SIZE / 2.0,
-            y as f32 * TILE_SIZE + TILE_SIZE / 2.0,
+            x as f32 * TILE_SIZE + TILE_HALF,
+            y as f32 * TILE_SIZE + TILE_HALF,
         )
 }
 
-/// Цвет тайла по id (палитра-заглушка для TILES из dt_lib: вода, земля, ...).
-fn tile_color(tile: usize) -> egui::Color32 {
-    const COLORS: [egui::Color32; editor_core::project::TILE_COUNT] = [
-        egui::Color32::from_rgb(120, 170, 220), // Shallow
-        egui::Color32::from_rgb(70, 120, 200),  // Water
-        egui::Color32::from_rgb(30, 60, 140),   // DeepWater
-        egui::Color32::from_rgb(200, 80, 40),   // FlameLand
-        egui::Color32::from_rgb(150, 140, 120), // Road
-        egui::Color32::from_rgb(120, 160, 90),  // LowLand
-        egui::Color32::from_rgb(90, 150, 70),   // Land
-        egui::Color32::from_rgb(110, 170, 80),  // Plain
-        egui::Color32::from_rgb(130, 120, 70),  // Swamp
-        egui::Color32::from_rgb(90, 85, 50),    // DeepSwamp
-        egui::Color32::from_rgb(210, 190, 130), // Desert
-        egui::Color32::from_rgb(140, 110, 80),  // Badground
-        egui::Color32::from_rgb(120, 120, 120), // Rock
-        egui::Color32::from_rgb(180, 160, 120), // Dust
-        egui::Color32::from_rgb(230, 230, 235), // Snow
-        egui::Color32::from_rgb(220, 220, 230), // Snow (роща)
-    ];
-    COLORS[tile % COLORS.len()]
+/// Наложить слой объектов поверх запечённого тайлами слоя (альфа-блит).
+fn overlay(dst: &mut Vec<u8>, src: &[u8]) {
+    for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        if s[3] >= 128 {
+            d.copy_from_slice(s);
+        }
+    }
 }
 
-// Нативные диалоги файлов — Phase 1 (rfd); в каркасе путь вводится в консоль.
+/// Минимальный парсер Objects.ini: секция -> (index, path, obj_type-id).
+/// Полный парсер (advini-derive) — в dt_lib; здесь нужен только путь спрайта
+/// и id/индекс для декора и строений. Формат секции:
+/// [Tree000] index=1 type=MapDeco id=3 ...
+/// Путь спрайта: имя секции до первой цифры + %03d + ".png" (parse_objects).
+fn parse_objects_ini(ini: &str) -> Vec<dt_lib::map::object::ObjectInfo> {
+    use dt_lib::map::object::{ObjectInfo, ObjectType};
+    let mut objects = Vec::new();
+    let mut section: Option<String> = None;
+    let mut index = 0usize;
+    let mut deco_id = None;
+    let mut obj_kind = "";
+    let flush = |section: &Option<String>, index: usize, deco_id: Option<usize>, kind: &str, out: &mut Vec<ObjectInfo>| {
+        if let Some(name) = section {
+            let path = match name.find(|c: char| c.is_ascii_digit()) {
+                Some(at) => {
+                    let (a, b) = name.split_at(at);
+                    match b.parse::<usize>() {
+                        Ok(num) => format!("{a}{num:03}.png"),
+                        Err(_) => format!("{name}.png"),
+                    }
+                }
+                None => format!("{name}.png"),
+            };
+            let obj_type = match kind {
+                "MapDeco" => ObjectType::MapDeco {
+                    id: deco_id.unwrap_or(0),
+                },
+                _ => ObjectType::Building { group: 0, variant: 0 },
+            };
+            out.push(ObjectInfo {
+                name: name.clone(),
+                path,
+                category: String::new(),
+                obj_type,
+                index,
+                size: (1, 1),
+            });
+        }
+    };
+    for line in ini.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix('[') {
+            let Some(name) = rest.strip_suffix(']') else { continue };
+            flush(&section, index, deco_id, obj_kind, &mut objects);
+            section = Some(name.to_string());
+            index = 0;
+            deco_id = None;
+            obj_kind = "";
+        } else if section.is_some() {
+            let Some((key, value)) = line.split_once('=') else { continue };
+            let key = key.trim();
+            let value = value.trim();
+            match key {
+                "index" => index = value.parse().unwrap_or(0),
+                "id" => deco_id = value.parse().ok(),
+                "type" => obj_kind = value,
+                _ => {}
+            }
+        }
+    }
+    flush(&section, index, deco_id, obj_kind, &mut objects);
+    objects
+}
+// Нативные диалоги файлов (rfd). Блокирующий вызов допустим: диалог модален
+// по смыслу, пользователь не работает с канвасом, пока он открыт.
 fn pick_open_path() -> Option<PathBuf> {
-    console_prompt("путь для открытия")
+    rfd::FileDialog::new()
+        .set_title("Открыть проект карты")
+        .add_filter("Проект редактора (JSON)", &["json"])
+        .pick_file()
 }
 
 fn pick_save_path() -> Option<PathBuf> {
-    console_prompt("путь для сохранения")
-}
-
-fn console_prompt(what: &str) -> Option<PathBuf> {
-    use std::io::Write;
-    print!("{what}: ");
-    std::io::stdout().flush().ok()?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line).ok()?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(trimmed))
-    }
+    rfd::FileDialog::new()
+        .set_title("Сохранить проект карты")
+        .add_filter("Проект редактора (JSON)", &["json"])
+        .set_file_name("map.json")
+        .pick_file()
 }
