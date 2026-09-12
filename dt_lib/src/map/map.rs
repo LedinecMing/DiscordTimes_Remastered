@@ -232,7 +232,16 @@ impl GameMap {
         }
         self.recalc_armies_hitboxes();
         for (i, building) in self.buildings.iter().enumerate() {
-            let size = objects.get(building.id).unwrap_or(&objects[0]).size;
+            // building.id — декларативный ObjectInfo.index из Objects.ini
+            // (сопоставление (group,variant) в convert.rs), а не позиция в
+            // векторе реестра. Позиционный lookup давал всем строениям размер
+            // заглушки objects[0] (1×1) — хитбоксы схлопывались в тайл якоря.
+            let Some(size) = objects.iter().find(|o| o.index == building.id).map(|o| o.size)
+            else {
+                // Грязный id из карты: строение без спрайта/хитбокса, не паникуем.
+                log::warn!("calc_hitboxes: building id {} не найден в Objects", building.id);
+                continue;
+            };
             for x in 0..size.0 {
                 for y in 0..size.1 {
                     // Хитбокс уходит ВЛЕВО-ВВЕРХ от якоря (якорь = правый-нижний
