@@ -1747,3 +1747,70 @@ fn tick_does_not_step_onto_occupied_tile() {
     }
 }
 
+    // =====================
+    // COIN FLIP INITIATIVE (PVP §1.3)
+    // =====================
+
+    /// Инициатива одной из армий +1 на старте боя по детерминированному сиду.
+    #[test]
+    fn coin_flip_initiative_deterministic_by_seed() {
+        let registry = make_test_registry();
+        let army1 = make_army_from_ids(&registry, &[(20, 7), (20, 8)]);
+        let army2 = make_army_from_ids(&registry, &[(21, 1), (21, 2)]);
+        let mut armies = vec![army1.clone(), army2.clone()];
+        let mut battle = BattleInfo::new(&armies, 0, 1);
+
+        let flip = battle.coin_flip_initiative(&mut armies, &registry, 42);
+        assert!(flip == 0 || flip == 1);
+        let (s1, s2): (Vec<i64>, Vec<i64>) = (
+            (0..2).map(|i| armies[0].troops[i].get().unit.modified.speed).collect(),
+            (0..2).map(|i| armies[1].troops[i].get().unit.modified.speed).collect(),
+        );
+        if flip == 0 {
+            assert!(s1.iter().all(|&s| s == 6), "army1 +1 speed: {s1:?}");
+            assert!(s2.iter().all(|&s| s == 5), "army2 untouched: {s2:?}");
+        } else {
+            assert!(s1.iter().all(|&s| s == 5), "army1 untouched: {s1:?}");
+            assert!(s2.iter().all(|&s| s == 6), "army2 +1 speed: {s2:?}");
+        }
+
+        // Детерминизм: тот же сид — тот же результат.
+        let again = {
+            let mut armies = vec![army1, army2];
+            let mut b2 = BattleInfo::new(&armies, 0, 1);
+            b2.coin_flip_initiative(&mut armies, &registry, 42)
+        };
+        assert_eq!(flip, again, "same seed must give same flip");
+        // Распределение ~50/50 на большой выборке сидов.
+        let mut heads = 0;
+        for seed in 0..1000 {
+            let mut armies = vec![
+                make_army_from_ids(&registry, &[(20, 7)]),
+                make_army_from_ids(&registry, &[(21, 1)]),
+            ];
+            let mut b = BattleInfo::new(&armies, 0, 1);
+            if b.coin_flip_initiative(&mut armies, &registry, seed) == 0 {
+                heads += 1;
+            }
+        }
+        assert!(
+            (380..=620).contains(&heads),
+            "coin flip должен быть ~50/50, heads={heads}/1000"
+        );
+    }
+
+    /// Победитель броска ходит первым в move_order (выше speed => раньше).
+    #[test]
+    fn coin_flip_winner_moves_first_in_move_order() {
+        let registry = make_test_registry();
+        let mut armies = vec![
+            make_army_from_ids(&registry, &[(20, 7)]),
+            make_army_from_ids(&registry, &[(21, 1)]),
+        ];
+        let mut battle = BattleInfo::new(&armies, 0, 1);
+        let flip = battle.coin_flip_initiative(&mut armies, &registry, 7);
+        battle.search_next_active(&armies);
+        let first = battle.move_order[0];
+        assert_eq!(first.army, flip, "победитель броска ходит первым");
+    }
+

@@ -49,6 +49,10 @@ pub enum ServerMessage {
 
     /// Комнатный протокол ПВП (serde_json внутри; см. network::room).
     Room(String),
+
+    /// Ваша армия в ПВП-бою (§1.8): индекс логической стороны (0 = army1,
+    /// 1 = army2) + сид монетки инициативы (§1.3) для синхронного старта.
+    YourArmy { your_army: usize, ini_seed: u64 },
 }
 
 #[derive(Clone, Debug)]

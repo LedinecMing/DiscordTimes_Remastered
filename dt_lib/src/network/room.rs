@@ -842,6 +842,43 @@ mod tests {
         }
     }
 
+    /// Сервер -> клиент: YourArmy (алкэhest-транспорт) + монетка инициативы
+    /// применяется к BattleInfo по сиду одинаково у обеих сторон.
+    #[test]
+    fn your_army_and_coin_flip_over_protocol() {
+        use crate::battle::tests::{make_army_from_ids, make_test_registry};
+        use crate::battle::BattleInfo;
+        use crate::network::server::ServerMessage;
+        let registry = make_test_registry();
+        let mut armies = vec![
+            make_army_from_ids(&registry, &[(20, 7)]),
+            make_army_from_ids(&registry, &[(21, 1)]),
+        ];
+        // Серверная сторона: YourArmy уходит каждому игроку со своим your_army
+        // и общим сидом монетки.
+        let msg = ServerMessage::YourArmy {
+            your_army: 1,
+            ini_seed: 42,
+        };
+        let ServerMessage::YourArmy { your_army, ini_seed } = msg else {
+            panic!("variant must roundtrip")
+        };
+        // Оба клиента применяют монетку по одному сиду — одинаковый исход.
+        let mut battle = BattleInfo::new(&armies, 0, 1);
+        let flip_here = battle.coin_flip_initiative(&mut armies, &registry, ini_seed);
+        let mut armies2 = vec![
+            make_army_from_ids(&registry, &[(20, 7)]),
+            make_army_from_ids(&registry, &[(21, 1)]),
+        ];
+        let mut battle2 = BattleInfo::new(&armies2, 0, 1);
+        let flip_there = battle2.coin_flip_initiative(&mut armies2, &registry, ini_seed);
+        assert_eq!(flip_here, flip_there);
+        assert_eq!(your_army, 1);
+        // your_army попадает в BattleInfo для рендера (§1.8).
+        battle.your_army = Some(your_army);
+        assert_eq!(battle.your_army, Some(1));
+    }
+
     #[test]
     fn check_army_limit_gold() {
         let registry = make_test_registry();

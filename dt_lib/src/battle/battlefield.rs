@@ -124,7 +124,9 @@ pub struct BattleInfo {
 	// Indexed by AbilityTroopCondition's num tag
 	pub event_listeners: Vec<[Vec<BattleUnit>; 2]>,
     pub winner: Option<usize>,
-    pub dead: Vec<TroopType>,
+    /// Ваша армия глазами этого клиента (PVP your_army, §1.8): 0 = army1,
+    /// 1 = army2; None — сингл/наблюдатель (обе армии нейтральные).
+    pub your_army: Option<usize>,
 }
 impl BattleInfo {
     pub fn new(armys: &[Army], army1: usize, army2: usize) -> Self {
@@ -140,6 +142,29 @@ impl BattleInfo {
             ..Default::default()
         };
         battle
+    }
+
+    /// «Монетка» на инициативу (PVP §1.3 coin_flip_initiative): с вероятностью
+    /// 50% одна из армий получает +1 инициативу (speed) всем живым юнитам на
+    /// старте боя. Детерминирована по сиду (одинаковый сид у обеих сторон).
+    /// Возвращает индекс выбранной армии (0 = army1, 1 = army2).
+    pub fn coin_flip_initiative(
+        &mut self,
+        armies: &mut Vec<Army>,
+        registry: &GameInfo,
+        seed: u64,
+    ) -> usize {
+        let chosen = (seed % 2) as usize;
+        let army_index = if chosen == 0 { self.army1 } else { self.army2 };
+        for troop in &mut armies[army_index].troops {
+            let mut t = troop.get();
+            if t.unit.is_dead() {
+                continue;
+            }
+            t.unit.modify.speed.add = Some(t.unit.modify.speed.add.unwrap_or(0) + 1);
+            t.unit.recalc(registry);
+        }
+        chosen
     }
     pub fn start(&mut self, armies: &mut Vec<Army>, registry: &GameInfo) {
         // Process army1: collect all data first, then apply_rules
