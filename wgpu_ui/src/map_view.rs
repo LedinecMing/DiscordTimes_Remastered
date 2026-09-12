@@ -356,6 +356,22 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
             now,
             ctx.building_ui.last_click,
         );
+        // Дабл-клик по тайлу ЧУЖОЙ армии (< 400 мс, тот же тайл) — приказ
+        // преследования: армия игрока идёт к соседней клетке цели и
+        // перезаказывает путь при её движении (см. Follow в server.rs).
+        let clicked_army = ctx.game.executor.gamemap.hitmap[(tile[0], tile[1])].army;
+        let player_army = ctx.game.executor.players.first().map(|p| p.army);
+        let mut double_follow = false;
+        if let (Some(target), Some(my)) = (clicked_army, player_army) {
+            if target != my {
+                if let Some((t, last_tile)) = ctx.building_ui.last_click {
+                    let same_tile = last_tile == tile;
+                    if now - t < 0.4 && same_tile {
+                        double_follow = true;
+                    }
+                }
+            }
+        }
         // Дабл-клик по тайлу строения (< 400 мс, тот же тайл):
         // армия в хитбоксе — открыть окно; иначе — идти к строению и
         // открыть окно по прибытии (pending_open).
@@ -377,13 +393,25 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
             }
         }
         eprintln!(
-            "map_click: double_open={} double_go={} (окно 0.4с, time_secs={:.3})",
-            double_open, double_go, now
+            "map_click: double_follow={} double_open={} double_go={} (окно 0.4с)",
+            double_follow, double_open, double_go
         );
         // ФИКС (баг владельца «дабл-клик не открывает меню»): last_click
         // нигде не устанавливался — только сбрасывался в None, поэтому
         // double_open/double_go были мёртвыми ветками. Ставим всегда.
         ctx.building_ui.last_click = Some((now, tile));
+        if double_follow {
+            // Преследование: одинарный клик уже заказал Follow; дабл-клик
+            // переиздаёт приказ (перезапуск погони после сброса/возврата).
+            ctx.building_ui.last_click = None;
+            ctx.building_ui.pending_open = None;
+            ctx.building_ui.goto_tile = Some(tile);
+            ctx.game.executor.message_handler(
+                ClientMessage::Follow(clicked_army.unwrap()),
+                0,
+                ctx.registry,
+            );
+        }
         if double_open {
             ctx.building_ui.last_click = None;
             ctx.building_ui.pending_open = None;
@@ -399,6 +427,20 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
         if clicked_building.is_none() {
             // Клик мимо строений сбрасывает выделение.
             ctx.building_ui.lmb_building = None;
+        }
+        if let (Some(target), Some(my)) = (clicked_army, player_army) {
+            if target != my && !double_follow {
+                // Одинарный клик по ЧУЖОЙ армии — сразу приказ преследования:
+                // иначе дабл-клик недостижим (GoTo на занятую клетку не
+                // строит путь). Своя армия — прежнее поведение (GoTo).
+                ctx.building_ui.goto_tile = Some(tile);
+                ctx.game.executor.message_handler(
+                    ClientMessage::Follow(target),
+                    0,
+                    ctx.registry,
+                );
+                return None;
+            }
         }
         ctx.building_ui.goto_tile = Some(tile);
         ctx.game
