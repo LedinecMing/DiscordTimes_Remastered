@@ -80,6 +80,25 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
     ctx.gfx.draw_texture(ctx.textures.map, 0., 0., world_w, world_h, WHITE);
     ctx.gfx
         .draw_texture(ctx.textures.decos, 0., 0., world_w, world_h, WHITE);
+    // Зелёная обводка строения: выбранного ЛКМ и цели дабл-клика.
+    if let Some(building) = ctx.building_ui.lmb_building {
+        outline_building(ctx, building, [0., 1., 0., 0.9]);
+    }
+    if let Some(building) = ctx.building_ui.pending_open {
+        outline_building(ctx, building, [0., 1., 0.3, 0.9]);
+    }
+    // Подсветка тайла последнего клика GoTo: цель ходьбы видна явно.
+    if let Some(tile) = ctx.building_ui.goto_tile {
+        let pulse = 0.5 - 0.5 * (crate::time_secs() as f32 * std::f32::consts::TAU / 1.2).cos();
+        ctx.gfx.draw_rect_lines(
+            tile[0] as f32 * SIZE.0,
+            tile[1] as f32 * SIZE.1,
+            SIZE.0,
+            SIZE.1,
+            3.,
+            crate::gfx::rgba(255, 220, 40, (140. + 100. * pulse) as u8),
+        );
+    }
 
     if settings.event_render {
         for i in 0..size {
@@ -274,34 +293,63 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
             tile[1] as usize % map_size,
         ];
         let now = crate::time_secs();
-        // Дабл-клик по тайлу строения (< 400 мс, тот же тайл): если армия
-        // игрока стоит в хитбоксе строения — открыть окно, иначе обычный GoTo.
         let clicked_building = ctx.game.executor.gamemap.hitmap[(tile[0], tile[1])].building;
+        // Дабл-клик по тайлу строения (< 400 мс, тот же тайл):
+        // армия в хитбоксе — открыть окно; иначе — идти к строению и
+        // открыть окно по прибытии (pending_open).
         let mut double_open = false;
+        let mut double_go = false;
         if let Some(building) = clicked_building {
+            // «Армия в хитбоксе строения»: ЛЮБОЙ тайл армии внутри хитбокса
+            // (многотайловые армии — якорь может быть снаружи).
+            let army_in = army_inside_building(ctx, building);
             if let Some((t, last_tile)) = ctx.building_ui.last_click {
                 if now - t < 0.4 && last_tile == tile {
-                    let player_army = ctx.game.executor.players[0].army;
-                    let (ax, ay) = ctx.game.executor.gamemap.armys[player_army].pos;
-                    double_open =
-                        ctx.game.executor.gamemap.hitmap[(ax, ay)].building == Some(building);
+                    double_open = army_in;
+                    double_go = !army_in;
                 }
             }
         }
         ctx.building_ui.last_click = Some((now, tile));
+        ctx.building_ui.lmb_building = clicked_building;
         if double_open {
             ctx.building_ui.last_click = None;
+            ctx.building_ui.pending_open = None;
             return Some(Menu::Building(clicked_building.unwrap(), BuildingTab::Main));
         }
+        if double_go {
+            // Одинарный клик уже отправил GoTo к этому тайлу; фиксируем
+            // намерение открыть окно по прибытии армии к строению.
+            ctx.building_ui.pending_open = clicked_building;
+        } else {
+            ctx.building_ui.pending_open = None;
+        }
+        ctx.building_ui.goto_tile = Some(tile);
         ctx.game
             .executor
             .message_handler(ClientMessage::GoTo((tile[0], tile[1])), 0, ctx.registry);
+    }
+    // Открытие окна по прибытии: армия стоит в хитбоксе строения, к которому
+    // был дабл-клик (путь закончился).
+    if let Some(building) = ctx.building_ui.pending_open {
+        let player_army = ctx.game.executor.players[0].army;
+        let army = &ctx.game.executor.gamemap.armys[player_army];
+        let arrived = army.path.is_empty()
+            && ctx.game.executor.gamemap.hitmap[(army.pos.0, army.pos.1)].building
+                == Some(building);
+        if arrived {
+            ctx.building_ui.pending_open = None;
+            ctx.building_ui.last_click = None;
+            return Some(Menu::Building(building, BuildingTab::Main));
+        }
     }
     if !ctx.game.executor.players[0].execution_queue.is_empty() {
         if let Execute::Message(msg) = ctx.game.executor.players[0].execution_queue.remove(0) {
             return Some(Menu::Message(msg));
         }
     }
+    // ПКМ по тайлу: тоггл инфо-окна строения.
+    handle_right_click(ctx, [tile[0] as usize % map_size, tile[1] as usize % map_size], map_size);
 
     // ---- HUD поверх карты: экранные координаты, не зумится ----
     let hud_camera = default_camera(viewport);
@@ -342,11 +390,204 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
         1.,
         crate::gfx::rgba(30, 30, 30, 255),
     );
-
     // Накопление delta идёт в lib.rs::frame; здесь только тик логики (порт 2097-2101).
     if *ctx.delta > 0.2 {
         ctx.game.executor.tick(ctx.registry);
         *ctx.delta = 0.;
     }
+    // Всплывающее окно информации о строении — последним поверх HUD.
+    draw_building_info(ctx, &hud_camera, viewport);
     None
 }
+/// Зелёная обводка хитбокса строения (рисуется в мировых координатах карты).
+fn outline_building(ctx: &mut Ctx, building: usize, color: [f32; 4]) {
+    let Some(obj) = ctx
+        .registry
+        .objects
+        .inner
+        .iter()
+        .find(|obj| obj.index == ctx.game.executor.gamemap.buildings[building].id)
+    else {
+        return;
+    };
+    let (bx, by) = ctx.game.executor.gamemap.buildings[building].pos;
+    let (w, h) = (obj.size.0 as f32, obj.size.1 as f32);
+    ctx.gfx.draw_rect_lines(
+        bx as f32 * SIZE.0,
+        by as f32 * SIZE.1,
+        w * SIZE.0,
+        h * SIZE.1,
+        5.,
+        color,
+    );
+}
+
+/// ПКМ по тайлу строения — тоггл всплывающего окна информации о здании.
+/// Возвращает true, если события ПКМ обработаны.
+fn handle_right_click(ctx: &mut Ctx, tile: [usize; 2], map_size: usize) -> bool {
+    if !ctx.input.mouse_button_released(1) {
+        return false;
+    }
+    let clicked = ctx.game.executor.gamemap.hitmap[(tile[0], tile[1])].building;
+    let reopen = match (ctx.building_ui.building_info_open, clicked) {
+        (Some(prev), Some(b)) => prev != b,
+        (Some(_), None) => false,
+        (None, Some(_)) => true,
+        (None, None) => false,
+    };
+    if reopen {
+        ctx.building_ui.building_info_open = clicked;
+        ctx.building_ui.building_info_tile = [tile[0].min(map_size - 1), tile[1].min(map_size - 1)];
+        true
+    } else if ctx.building_ui.building_info_open.is_some() {
+        ctx.building_ui.building_info_open = None;
+        true
+    } else {
+        false
+    }
+}
+
+/// Принадлежность строения: группа отношений (владелец = группа с player).
+fn building_owner_label(building: &dt_lib::map::object::MapBuildingdata) -> String {
+    if let Some(owner) = building.owner {
+        return format!("Владелец: армия #{}", owner);
+    }
+    let rel = &building.relations;
+    if rel.player != 0 {
+        "Принадлежит: игрок".to_string()
+    } else if rel.ally != 0 {
+        "Принадлежит: союзник".to_string()
+    } else if rel.neighbour != 0 {
+        "Принадлежит: нейтральный сосед".to_string()
+    } else if rel.enemy != 0 {
+        "Принадлежит: враг".to_string()
+    } else {
+        "Принадлежит: ничейный".to_string()
+    }
+}
+
+/// Всплывающее окно информации о строении: рисуется в HUD-пассе.
+/// Рядом — отряд гарнизона (портреты юнитов реестра).
+fn draw_building_info(ctx: &mut Ctx, hud_camera: &crate::camera::Camera, viewport: [f32; 2]) {
+    let Some(building) = ctx.building_ui.building_info_open else {
+        return;
+    };
+    let Some(b) = ctx.game.executor.gamemap.buildings.get(building) else {
+        ctx.building_ui.building_info_open = None;
+        return;
+    };
+    ctx.gfx.begin_pass(Target::Screen, None, hud_camera);
+    let [tx, ty] = ctx.building_ui.building_info_tile;
+    // Экранная позиция тайла строения (мир → экран карты).
+    let settings = ctx
+        .map_settings
+        .borrow()
+        .clone()
+        .unwrap_or_else(crate::state::MapRenderSettings::default);
+    let world = [
+        tx as f32 * SIZE.0 + SIZE.0 / 2.,
+        ty as f32 * SIZE.1 + SIZE.1 / 2.,
+    ];
+    let screen = settings.camera.world_to_screen(world, viewport);
+    let (w, h) = (560., 360.);
+    // Не вылезать за экран: рисуем правее тайла, с клампом.
+    let x = (screen[0] + 24.).min(viewport[0] - w - 8.).max(8.);
+    let y = (screen[1] - h / 2.).max(8.).min(viewport[1] - h - 8.);
+    let font = ctx.assets.get_font(crate::assets::BENGUIAT);
+    ctx.gfx.draw_rect(x, y, w, h, [0.05, 0.07, 0.05, 0.92]);
+    ctx.gfx
+        .draw_rect_lines(x, y, w, h, 3., [0.1, 0.9, 0.2, 0.9]);
+    ctx.text.draw_text(
+        ctx.gfx,
+        &b.name,
+        x + 16.,
+        y + 44.,
+        font,
+        40,
+        1.,
+        colors::WHITE,
+    );
+    ctx.text.draw_text(
+        ctx.gfx,
+        &building_owner_label(b),
+        x + 16.,
+        y + 84.,
+        font,
+        28,
+        1.,
+        colors::DARKGRAY,
+    );
+    ctx.text.draw_multiline(
+        ctx.gfx,
+        &if b.desc.is_empty() {
+            "(описание недоступно)".to_string()
+        } else {
+            b.desc.clone()
+        },
+        (x + 16., y + 120.),
+        w - 32.,
+        false,
+        font,
+        26,
+        colors::WHITE,
+    );
+    // Гарнизон: строка портретов (рендер отряда).
+    ctx.text.draw_text(
+        ctx.gfx,
+        if b.garrison.is_empty() {
+            "Гарнизон: пуст"
+        } else {
+            "Гарнизон:"
+        },
+        x + 16.,
+        y + h - 60.,
+        font,
+        28,
+        1.,
+        colors::WHITE,
+    );
+    let mut gx = x + 16. + 130.;
+    for unit_id in b.garrison.iter().take(8) {
+        let Some(info) = ctx.registry.units.inner.get(*unit_id) else {
+            continue;
+        };
+        let tex = crate::state::get_unit_info_texture(ctx.assets, info);
+        ctx.gfx.draw_texture(tex, gx, y + h - 104., 48., 60., colors::WHITE);
+        gx += 52.;
+        if gx > x + w - 60. {
+            break;
+        }
+    }
+}
+
+/// Армия (любым своим тайлом) стоит в хитбоксе строения `building`?
+fn army_inside_building(ctx: &Ctx, building: usize) -> bool {
+    let player_army = ctx.game.executor.players[0].army;
+    let b = &ctx.game.executor.gamemap.buildings[building];
+    let (bx, by) = b.pos;
+    let Some(obj) = ctx
+        .registry
+        .objects
+        .inner
+        .iter()
+        .find(|obj| obj.index == b.id)
+    else {
+        return false;
+    };
+    let (w, h) = (obj.size.0 as usize, obj.size.1 as usize);
+    for x in 0..w {
+        for y in 0..h {
+            let (tx, ty) = (bx + x, by + y);
+            if tx >= ctx.game.executor.gamemap.hitmap.size
+                || ty >= ctx.game.executor.gamemap.hitmap.size
+            {
+                continue;
+            }
+            if ctx.game.executor.gamemap.hitmap[(tx, ty)].army == Some(player_army) {
+                return true;
+            }
+        }
+    }
+    false
+}
+

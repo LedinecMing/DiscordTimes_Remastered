@@ -158,6 +158,16 @@ pub struct BuildingUi {
     pub deal_log: Vec<String>,
     /// Последний клик ЛКМ на карте (время, тайл) — дабл-клик по строению.
     pub last_click: Option<(f64, [usize; 2])>,
+    /// Дабл-клик по строению вдали: армия идёт туда, окно открыть по прибытии.
+    pub pending_open: Option<usize>,
+    /// Тайл последнего клика GoTo — подсветка цели на карте.
+    pub goto_tile: Option<[usize; 2]>,
+    /// Строение под курсором/выбранное ЛКМ — зелёная обводка.
+    pub lmb_building: Option<usize>,
+    /// ПКМ-окно информации о строении: индекс в gamemap.buildings.
+    pub building_info_open: Option<usize>,
+    /// Тайл, где открыто ПКМ-окно (привязка позиции попапа).
+    pub building_info_tile: [usize; 2],
 }
 
 /// Порт struct Ui (quad_ui main.rs:531): текущее меню, UI-камера, стек.
