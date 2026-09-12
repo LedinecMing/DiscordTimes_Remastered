@@ -116,6 +116,25 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
             }
         }
     }
+    // Слой принадлежности тайлов строениям (F9): полупрозрачная заливка
+    // поверх террейна, до армий. Каждое строение — свой цвет из HSV-хеша
+    // индекса; пикингу кликов не мешает (слой только рисуется).
+    if settings.ownership_render {
+        let map_size = ctx.game.executor.gamemap.hitmap.size;
+        for (flat, hit) in ctx.game.executor.gamemap.hitmap.inner.iter().enumerate() {
+            if let Some(building) = hit.building {
+                let (tx, ty) = (flat % map_size, flat / map_size);
+                let [r, g, b, _] = building_ownership_color(building);
+                ctx.gfx.draw_rect(
+                    tx as f32 * SIZE.0,
+                    ty as f32 * SIZE.1,
+                    SIZE.0,
+                    SIZE.1,
+                    [r, g, b, 0.35],
+                );
+            }
+        }
+    }
     if settings.armies_render {
         let change = (crate::time_secs() * 1000. / 50.) as usize % 8;
         // Пересчёт как в оригинале: проход по hitmap, для каждой армии — кадр анимации.
@@ -192,6 +211,9 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
     }
     if ctx.input.key_pressed(KeyCode::KeyN) {
         settings.event_render = !settings.event_render;
+    }
+    if ctx.input.key_pressed(KeyCode::F9) {
+        settings.ownership_render = !settings.ownership_render;
     }
     if ctx.input.key_pressed(KeyCode::KeyR) {
         settings.seed = settings
@@ -453,6 +475,27 @@ fn handle_right_click(ctx: &mut Ctx, tile: [usize; 2], map_size: usize) -> bool 
     } else {
         false
     }
+}
+
+/// Детерминированный цвет строения для слоя принадлежности (F9):
+/// HSV-хеш индекса (золотое сечение по hue), насыщенный, не белый.
+fn building_ownership_color(building: usize) -> [f32; 4] {
+    let hue = (building as f32 * 0.618_034) % 1.;
+    // h 0..1, s=0.75, v=1.0 → rgb
+    let h6 = hue * 6.;
+    let sector = (h6.floor() as i32).rem_euclid(6);
+    let frac = h6 - h6.floor();
+    let (r, g, b) = match sector {
+        0 => (1., frac, 0.),
+        1 => (1. - frac, 1., 0.),
+        2 => (0., 1., frac),
+        3 => (0., 1. - frac, 1.),
+        4 => (frac, 0., 1.),
+        _ => (1., 0., 1. - frac),
+    };
+    let sat = 0.75;
+    let mix = |c: f32| c * sat + (1. - sat);
+    [mix(r), mix(g), mix(b), 1.]
 }
 
 /// Принадлежность строения: группа отношений (владелец = группа с player).

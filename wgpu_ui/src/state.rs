@@ -99,6 +99,9 @@ pub struct MapRenderSettings {
     pub buildings_render: bool,
     pub event_render: bool,
     pub tiles_render: bool,
+    /// Слой принадлежности тайлов строениям (F9): полупрозрачная заливка
+    /// hitmap.building, цвет — детерминированный HSV-хеш из индекса строения.
+    pub ownership_render: bool,
     pub armies_render: bool,
     pub err_render: bool,
     pub seed: u64,
@@ -117,6 +120,7 @@ impl Default for MapRenderSettings {
             tiles_render: true,
             armies_render: true,
             err_render: false,
+            ownership_render: false,
             seed: 0,
             decos_dirty: false,
             blend_mode: BlendMode::Rounded,
