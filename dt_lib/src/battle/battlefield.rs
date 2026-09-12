@@ -169,6 +169,14 @@ impl BattleInfo {
                 bonus.apply_rules(AbilityCondition::BattleStart, unit_info, pos.whole(columns), armies, &vec![unit_info], &*self, registry);
             }
         }
+        // Бонусы BattleStart могли поднять max_moves (FastAttack) — пере-инициализируем
+        // текущие манёвры от обновлённых статов, иначе бонусный ход недоступен.
+        for army_idx in [self.army1, self.army2] {
+            for troop in armies[army_idx].troops.iter() {
+                let max_moves = troop.get().unit.modified.max_moves;
+                troop.get().unit.moves = max_moves;
+            }
+        }
 
         // TEMP-ДИАГНОСТИКА: дамп магических статов на старте боя.
         for (a, army) in [&armies[self.army1], &armies[self.army2]].iter().enumerate() {

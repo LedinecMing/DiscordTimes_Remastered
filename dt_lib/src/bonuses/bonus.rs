@@ -374,6 +374,9 @@ impl Mechanic {
 		
 		// Phase 2: dedup targets
 		affected_targets.dedup();
+		if self.affects_self {
+			affected_targets.push(BattleUnit { army: army1_idx, index: my_index });
+		}
 		
 		let mut res_modify = ModifyUnitStats::default();
 		let mut attacks_to_do: Vec<BattleUnit> = vec![]; // targets to attack
