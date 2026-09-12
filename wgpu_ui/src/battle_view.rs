@@ -1,6 +1,6 @@
 // Отрисовка боя: сетка карточек, статы, порядок ходов. Порт quad_ui main.rs
 // unit_card_battle (717-979) и draw_battle (980-1145).
-use crate::gfx::{colors, Gfx, WHITE};
+use crate::gfx::{colors, Gfx, TexId, WHITE};
 use crate::Ctx;
 use crate::assets::Assets;
 use crate::state::{get_unit_texture, get_troop_texture, CARD_SIZE};
@@ -256,6 +256,21 @@ pub fn unit_card_battle(
                 .draw_quad(ctx.glow_tex, quad, uv, [glow_color[0], glow_color[1], glow_color[2], alpha]);
         }
     }
+
+    // ПВП your_army (§1.8): цветная рамка-подложка карточки — своя армия
+    // зелёная, враг красная; наблюдатель/сингл (None) — без рамки.
+    if let Some(your_army) = battle.your_army {
+        // army — индекс реальной армии (army1/army2); your_army — логическая
+        // сторона (0/1). Сравниваем через индексы битвы.
+        let my_real = if your_army == 0 { battle.army1 } else { battle.army2 };
+        let frame = if army == my_real {
+            with_alpha(colors::GREEN, 0.55)
+        } else {
+            with_alpha(colors::RED, 0.55)
+        };
+        ctx.gfx
+            .draw_rect_lines(pos.0, pos.1, draw_size.0, draw_size.1, 6., frame);
+    }
     draw_stats(
         ctx.gfx,
         ctx.text,
@@ -482,33 +497,99 @@ pub fn draw_battle(ctx: &mut Ctx, is_battle_active: bool) -> Option<usize> {
             }
         }
     }
-    // Полоса порядка ходов (порт 1127-1143).
+    // Линейка ходов юнитов (§1.9): портреты + бейдж оставшихся ходов, активный
+    // подсвечен рамкой и стрелкой; рамка цвета армии (своя — зелёная при
+    // известном your_army). Скроллится колесом при >12 юнитов.
+    draw_move_order_strip(ctx);
+    ctx.game.executor.battle.as_ref().unwrap().winner
+}
+
+/// Горизонтальная полоса порядка ходов (§1.9). Рисуется в UI-мире 1920x1080
+/// под полем (y = CARD_SIZE*6), высота карточки 64px, бейдж — число ходов
+/// юнита в текущем окне активности.
+fn draw_move_order_strip(ctx: &mut Ctx) {
     let Some(battle) = ctx.game.executor.battle.as_ref() else {
-        return None;
+        return;
     };
-    for (i, unit) in battle.move_order.iter().skip(1).take(10).enumerate() {
-        let color = if unit.army == 0 { colors::BLUE } else { colors::RED };
-        let pos = (i as f32 * 64., CARD_SIZE * 6.);
-        let army = unit.army;
-        let army_id = if army == 0 {
-            battle.army1
-        } else {
-            battle.army2
-        } as usize;
-        let Some(texture) = get_troop_texture(
-            ctx.assets,
-            &ctx.game.executor.gamemap.armys,
-            unit.index,
-            army_id,
-            &ctx.registry.units,
-        ) else {
+    const CELL: f32 = 64.;
+    const STRIP_Y: f32 = CARD_SIZE * 6.;
+    const STRIP_H: f32 = 84.;
+    const VISIBLE: usize = 24;
+    let armies = &ctx.game.executor.gamemap.armys;
+    // Снапшот данных юнитов (короткие guard'ы, без удержания через вызовы).
+    let mut entries: Vec<(usize, usize, TexId, i64, bool)> = Vec::new();
+    for unit in battle.move_order.iter().take(VISIBLE) {
+        let army_id = if unit.army == 0 { battle.army1 } else { battle.army2 };
+        let Some(troop_cell) = armies.get(army_id).and_then(|a| a.troops.get(unit.index)) else {
             continue;
         };
-        ctx.gfx.draw_texture(texture, pos.0, pos.1, 64., 64., WHITE);
-        ctx.gfx
-            .draw_rect_lines(pos.0, pos.1, 64., 64., 10., with_alpha(color, 0.2));
+        let (tex, moves) = {
+            let t = troop_cell.get();
+            (
+                get_unit_texture(ctx.assets, &t.unit, &ctx.registry.units),
+                t.unit.moves,
+            )
+        };
+        let is_active = battle.active_unit == Some(*unit);
+        entries.push((unit.army, unit.index, tex, moves, is_active));
     }
-    ctx.game.executor.battle.as_ref().unwrap().winner
+    let your_army = battle.your_army;
+    let wheel = ctx.input.wheel;
+    let mouse_in_strip = Rect::new(0., STRIP_Y, 1920., STRIP_H).contains({
+        let s = ctx.input.screen_size();
+        [ctx.input.mouse[0] * crate::ui::UI_W / s[0], ctx.input.mouse[1] * crate::ui::UI_H / s[1]]
+    });
+    // Горизонтальный скролл-оффсет в widget state.
+    let scroll_key = crate::ui::hash("move_order_strip_scroll");
+    let mut offset = match ctx.widgets.get(&scroll_key) {
+        Some(crate::ui::Val::Usize(v)) => *v as f32,
+        _ => 0.,
+    };
+    if wheel != 0. && mouse_in_strip {
+        offset = (offset - wheel * 24.).max(0.);
+    }
+    ctx.widgets.insert(scroll_key, crate::ui::Val::Usize(offset as usize));
+    let font_id = ctx.assets.get_font(crate::assets::BENGUIAT);
+    for (i, &(army, _index, tex, moves, is_active)) in entries.iter().enumerate() {
+        let x = i as f32 * CELL - offset;
+        if x + CELL < 0. || x > 1920. {
+            continue;
+        }
+        ctx.gfx.draw_texture(tex, x, STRIP_Y, CELL, CELL, WHITE);
+        // Цвет армии: своя — зелёная, враг — красная; без your_army — синяя/красная.
+        let frame = match your_army {
+            Some(y) if y == army => colors::GREEN,
+            Some(_) => colors::RED,
+            None => if army == 0 { colors::BLUE } else { colors::RED },
+        };
+        ctx.gfx
+            .draw_rect_lines(x, STRIP_Y, CELL, CELL, if is_active { 8. } else { 3. }, frame);
+        // Бейдж числа ходов.
+        let label = format!("{moves}");
+        let size = ctx.text.measure(ctx.gfx, &label, font_id, 24, 1.);
+        ctx.gfx.draw_rect(
+            x + CELL - size.width - 6.,
+            STRIP_Y + CELL - 30.,
+            size.width + 6.,
+            28.,
+            crate::gfx::rgba(0, 0, 0, 200),
+        );
+        ctx.text.draw_text(
+            ctx.gfx,
+            &label,
+            x + CELL - size.width - 3.,
+            STRIP_Y + CELL,
+            font_id,
+            24,
+            1.,
+            WHITE,
+        );
+        // Активный — стрелка сверху.
+        if is_active {
+            let cx = x + CELL / 2. - 12.;
+            ctx.gfx.draw_rect(cx, STRIP_Y - 18., 24., 12., colors::ORANGE);
+        }
+    }
 }
 
 fn with_alpha(c: [f32; 4], a: f32) -> [f32; 4] {
