@@ -80,6 +80,8 @@ struct Pass {
 }
 
 pub struct Gfx {
+    /// egui_pending: true = end_frame откладывает present до render_egui.
+    pub egui_pending: bool,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub surface: wgpu::Surface<'static>,
@@ -94,6 +96,8 @@ pub struct Gfx {
     nearest: wgpu::Sampler,
     passes: Vec<Pass>,
     current: Pass,
+    /// Отложенный кадр: end_frame не делал present — ждёт render_egui.
+    pub deferred_frame: Option<wgpu::SurfaceTexture>,
 }
 
 pub const WHITE: [f32; 4] = [1., 1., 1., 1.];
@@ -256,6 +260,7 @@ impl Gfx {
 
         let initial = Self::new_pass(&device, &cam_layout, Target::Screen, Some(BLACK), [0.; 4]);
         let mut gfx = Gfx {
+            egui_pending: false,
             device,
             queue,
             surface,
@@ -270,6 +275,7 @@ impl Gfx {
             nearest,
             passes: Vec::new(),
             current: initial,
+            deferred_frame: None,
         };
         // Белая 1x1 — для draw_rect.
         gfx.push_texture_rgba(&[255, 255, 255, 255], 1, 1, Filter::Nearest);
@@ -672,9 +678,45 @@ impl Gfx {
             let _ = is_screen;
         }
         self.queue.submit([encoder.finish()]);
-        if let Some(frame) = frame {
+        if self.egui_pending {
+            // Кадр ждёт egui-пасс (render_egui сделает present).
+            self.deferred_frame = frame;
+        } else if let Some(frame) = frame {
             self.queue.present(frame);
         }
+    }
+
+    /// Рендер egui-плат поверх кадра: take deferred_frame (поставлен
+    /// end_frame при egui_pending), pass LoadOp::Load на его view.
+    /// render_cb получает pass с 'static (forget_lifetime внутри).
+    /// После рендера кадр презентуется — end_frame этого уже НЕ делает.
+    pub fn render_egui(&mut self, render_cb: impl FnOnce(&mut wgpu::RenderPass<'static>)) {
+        let Some(frame) = self.deferred_frame.take() else {
+            return;
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("egui"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            render_cb(&mut rpass.forget_lifetime());
+        }
+        self.queue.submit([encoder.finish()]);
+        self.queue.present(frame);
     }
 
     /// Чтение пикселей RT — порт Texture2D::get_texture_data (RGBA8).
