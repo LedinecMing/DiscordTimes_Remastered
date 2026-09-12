@@ -18,6 +18,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 fontdue = "0.9"
 bytemuck = { version = "1.16", features = ["derive"] }
 pollster = "0.4"
+discord-rich-presence = "1.1"
+
+[dev-dependencies]
+# Тесты rich_presence: сериализация Activity в JSON без подключения к Discord.
+serde_json = "1"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", features = ["native-activity"] }
