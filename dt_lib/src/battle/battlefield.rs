@@ -447,8 +447,16 @@ struct AttackLine {
 	// who can attack
 	pub attacks: Vec<usize>
 }
-pub fn evaluate_position(battle: &mut BattleInfo, armies: &mut Vec<Army>, my_army: usize) {
-
+/// Фасад над ai::eval::eval_battle_position (план §2.2): сумма ценностей
+/// сторон + позиционные слагаемые. Сигнатура сохранена для обратной
+/// совместимости; реестр не нужен — архетипы по modified-статам.
+pub fn evaluate_position(battle: &mut BattleInfo, armies: &mut Vec<Army>, my_army: usize) -> f64 {
+	crate::ai::eval::eval_battle_position_no_reg(
+		battle,
+		armies,
+		my_army,
+		&crate::ai::policy::BattlePolicy::default(),
+	)
 }
 pub fn search_interactions(
     battle: &mut BattleInfo,

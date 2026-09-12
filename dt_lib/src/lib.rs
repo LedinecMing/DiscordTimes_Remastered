@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+pub mod ai;
 pub mod battle;
 pub mod bonuses;
 pub mod effects;
