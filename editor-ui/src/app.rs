@@ -6,8 +6,7 @@
 //!   число ошибок/предупреждений валидаторов, число команд в истории;
 //! - п.1 (докинг), Command Palette и настраиваемые хоткеи — Phase 2+.
 
-use std::path::PathBuf;
-
+use std::path::{Path, PathBuf};
 use eframe::egui;
 
 use editor_core::command::{
@@ -65,6 +64,8 @@ pub struct MapEditorApp {
     bake_dirty: bool,
     /// Выделенная клетка (клик) — рамка поверх текстуры.
     selected: Option<editor_core::project::Pos>,
+    /// Последняя ошибка Open/Save (показ в статус-баре, сбрасывается успешно).
+    status_error: Option<String>,
     /// Показывать сетку клеток.
     show_grid: bool,
 }
@@ -84,6 +85,7 @@ impl MapEditorApp {
             counter: 0,
             issues: Vec::new(),
             dirty: false,
+            status_error: None,
             bake: None,
             bake_texture: None,
             bake_dirty: true,
@@ -184,45 +186,47 @@ impl MapEditorApp {
         });
     }
 
+    /// Open .dtm: dt_lib parse_dtm_map → convert_dtm_map (нужен registry:
+    /// Units.ini/Objects.ini читаются из cwd — бинарь запускать из dt/).
     fn open_project(&mut self, path: PathBuf) {
-        let attempted = std::fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|json| MapProject::from_json(&json).map_err(|e| e.to_string()));
-        match attempted {
+        let project = load_dtm_project(&path);
+        match project {
             Ok(project) => {
                 self.state = EditorState::new(project);
                 self.history = CommandHistory::new();
                 self.project_path = Some(path);
                 self.issues.clear();
                 self.dirty = false;
+                self.bake_dirty = true;
+                self.bake_texture = None; // размер карты мог измениться
             }
-            Err(err) => eprintln!("open failed: {err}"),
+            Err(err) => self.status_error = Some(err),
         }
     }
 
+    /// Save .dtm: валидаторы (Error блокируют) → gamemap_to_dtm → fs::write.
+    /// None от writer = нерепрезентабельные данные — ошибка в статус-баре.
     fn save_project(&mut self) {
         let Some(path) = self.project_path.clone() else {
             return;
         };
-        // Валидаторы перед сохранением (ТЗ §5); Error блокируют сохранение.
         self.issues = run_all(self.state.project());
         if self
             .issues
             .iter()
             .any(|i| i.severity == editor_validators::Severity::Error)
         {
-            eprintln!("save blocked: errors found");
+            self.status_error = Some(
+                "Сохранение заблокировано: есть ошибки валидаторов (см. Lint)".into(),
+            );
             return;
         }
-        let saved = self
-            .state
-            .project()
-            .to_json()
-            .map_err(|e| e.to_string())
-            .and_then(|json| std::fs::write(&path, json).map_err(|e| e.to_string()));
-        match saved {
-            Ok(()) => self.dirty = false,
-            Err(err) => eprintln!("save failed: {err}"),
+        match save_dtm_project(self.state.project(), &path) {
+            Ok(()) => {
+                self.dirty = false;
+                self.status_error = None;
+            }
+            Err(err) => self.status_error = Some(err),
         }
     }
     /// Канвас: запечённая карта текстурой + объектные маркеры + сетка +
@@ -414,6 +418,11 @@ impl MapEditorApp {
             ui.separator();
             ui.label(format!("{path}{dirty_mark}"));
             ui.separator();
+            if let Some(err) = &self.status_error {
+                ui.separator();
+                ui.colored_label(egui::Color32::RED, err);
+            }
+            ui.separator();
             ui.label(format!(
                 "undo: {}  redo: {}",
                 self.history.can_undo(),
@@ -421,6 +430,49 @@ impl MapEditorApp {
             ));
         });
     }
+}
+
+/// Реестр для dtm-конверсии: Units.ini + Objects.ini + bonuses из cwd (dt/).
+/// tokio single-thread runtime, как в wgpu_ui (dt_lib::parse — async FileAccess).
+fn build_registry() -> Result<dt_lib::registry::GameInfo, String> {
+    use dt_lib::parse::{parse_bonuses, parse_objects, parse_units};
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+    rt.block_on(async {
+        let mut registry = dt_lib::registry::GameInfo::new();
+        parse_units::<dt_lib::parse::StupidReader>(Some("Units.ini"), &mut registry)
+            .await
+            .map_err(|e| format!("Units.ini: {e}"))?;
+        parse_objects::<dt_lib::parse::StupidReader>(&mut registry).await;
+        let _ = parse_bonuses::<dt_lib::parse::StupidReader>(None, &mut registry).await;
+        Ok(registry)
+    })
+}
+
+/// Чтение .dtm → MapProject (parse_dtm_map + convert_dtm_map).
+fn load_dtm_project(path: &Path) -> Result<MapProject, String> {
+    let registry = build_registry()?;
+    let data = dt_lib::map::convert::parse_dtm_map(path).map_err(|_| "parse_dtm_map: не удалось разобрать файл".to_string())?;
+    let (map, events) = dt_lib::map::convert::convert_dtm_map(data, &registry);
+    Ok(MapProject {
+        map,
+        events,
+        ..Default::default()
+    })
+}
+
+/// Запись .dtm (gamemap_to_dtm + fs::write). Err — reason для статус-бара.
+fn save_dtm_project(project: &MapProject, path: &Path) -> Result<(), String> {
+    let registry = build_registry()?;
+    let bytes = dt_lib::map::dtm_writer::gamemap_to_dtm(
+        &project.map,
+        &project.events,
+        &registry,
+    )
+    .ok_or_else(|| "gamemap_to_dtm: данные карты нерепрезентабельны в dtm".to_string())?;
+    std::fs::write(path, bytes).map_err(|e| format!("write: {e}"))
 }
 
 impl Default for MapEditorApp {
@@ -543,15 +595,15 @@ fn parse_objects_ini(ini: &str) -> Vec<dt_lib::map::object::ObjectInfo> {
 // по смыслу, пользователь не работает с канвасом, пока он открыт.
 fn pick_open_path() -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .set_title("Открыть проект карты")
-        .add_filter("Проект редактора (JSON)", &["json"])
+        .set_title("Открыть карту Discord Times")
+        .add_filter("Discord Times map", &["dtm", "DTm"])
         .pick_file()
 }
 
 fn pick_save_path() -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .set_title("Сохранить проект карты")
-        .add_filter("Проект редактора (JSON)", &["json"])
-        .set_file_name("map.json")
+        .set_title("Сохранить карту Discord Times")
+        .add_filter("Discord Times map", &["dtm", "DTm"])
+        .set_file_name("map.dtm")
         .pick_file()
 }
