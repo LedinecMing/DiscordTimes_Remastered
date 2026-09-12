@@ -13,6 +13,7 @@ use dt_lib::map::convert::{convert_dtm_map, parse_dtm_vec};
 use dt_lib::map::map::GameMap;
 use dt_lib::mutrc::SendMut;
 use dt_lib::map::event::{Event as GameEvent, Events};
+use dt_lib::network::room::{RoomConfig, RoomId, RoomManager, RoomView};
 use dt_lib::network::server::Executor;
 use dt_lib::parse::{
     parse_bonuses, parse_effects, parse_items, parse_objects, parse_settings, parse_units,
@@ -131,6 +132,12 @@ pub enum Menu {
     Battle,
     RoomCreation,
     BattleSetup,
+    /// Лобби ПВП: список комнат (браузер, §1.1). Держится в PvpState.
+    PvpLobby,
+    /// Создание ПВП-комнаты: форма настроек RoomConfig (§1.3).
+    PvpRoomSetup,
+    /// Комната ПВП после входа (ожидание старта хостом).
+    PvpRoom,
     /// Окно строения: индекс в gamemap.buildings + активная вкладка.
     Building(usize, BuildingTab),
 }
@@ -184,7 +191,40 @@ pub struct RenderTextures {
     pub decos: TexId,
 }
 
+/// Состояние ПВП-лобби (Этапы 1-2: локальный мок RoomManager; реальный
+/// websocket-транспорт комнат — следующий спринт).
 #[derive(Debug)]
+pub struct PvpState {
+    /// Локальный ник игрока (аккаунты — фаза 4).
+    pub nick: String,
+    /// Локальный реестр комнат (мок сервера).
+    pub manager: RoomManager,
+    /// Таб-фильтр лобби: 0 = все, 1 = битвы, 2 = карты.
+    pub lobby_tab: usize,
+    /// Чекбокс «только открытые» (есть места и не InGame/Finished).
+    pub open_only: bool,
+    /// Черновик конфига комнаты на экране создания.
+    pub setup_draft: RoomConfig,
+    /// Комната, в которой находимся (id), и вид.
+    pub joined: Option<(RoomId, RoomView)>,
+    /// Последняя ошибка для отображения (сбрасывается при следующем действии).
+    pub error: Option<String>,
+}
+
+impl Default for PvpState {
+    fn default() -> Self {
+        Self {
+            nick: "Игрок".into(),
+            manager: RoomManager::new(),
+            lobby_tab: 0,
+            open_only: false,
+            setup_draft: RoomConfig::default(),
+            joined: None,
+            error: None,
+        }
+    }
+}
+
 pub struct State {
     pub assets: Assets,
     pub registry: GameInfo,
@@ -193,6 +233,8 @@ pub struct State {
     pub ui: UiState,
     /// Состояние окна строения (выделения рынка, лог сделки, дабл-клик).
     pub building_ui: BuildingUi,
+    /// ПВП-лобби: локальный ник, фильтры, мок RoomManager до сетевого слоя.
+    pub pvp: PvpState,
     pub delta: f32,
     pub rt: Runtime,
     /// Пиксельные снапшоты тайлов (TILES), для генерации наплывов.
@@ -436,6 +478,7 @@ pub async fn game_init(gfx: &mut Gfx, text: &mut TextRenderer) -> State {
         game,
         tile_pixels,
         building_ui: BuildingUi::default(),
+        pvp: PvpState::default(),
     }
 }
 

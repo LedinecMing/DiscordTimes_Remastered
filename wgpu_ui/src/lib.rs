@@ -100,6 +100,8 @@ pub struct Ctx<'a> {
     pub map_settings: std::cell::RefCell<Option<state::MapRenderSettings>>,
     /// Состояние окна строения: выделения рынка, дабл-клик, лог сделки.
     pub building_ui: &'a mut state::BuildingUi,
+    /// ПВП-лобби: ник, мок RoomManager, фильтры (Этапы 1-2).
+    pub pvp: &'a mut state::PvpState,
     /// Радиальная градиент-текстура свечения (белая, альфа-фейд к краю).
     pub glow_tex: TexId,
 }
@@ -154,6 +156,7 @@ impl App {
             tile_pixels,
             textures,
             building_ui,
+            pvp,
             ..
         } = state;
         if frame_dt > 0.1 {
@@ -175,6 +178,7 @@ impl App {
             rts: self.rts.as_ref().unwrap(),
             window: self.window.as_ref().unwrap(),
             building_ui,
+            pvp,
             delta,
             rt: &state.rt,
             map_settings: std::cell::RefCell::new(None),
@@ -208,6 +212,9 @@ fn dispatch(ctx: &mut Ctx) {
     match &mut ctx.ui.main {
         Menu::Main => screens::main_menu(ctx),
         Menu::Atlas => screens::atlas(ctx),
+        Menu::PvpLobby => screens::pvp_lobby(ctx),
+        Menu::PvpRoomSetup => screens::pvp_room_setup(ctx),
+        Menu::PvpRoom => screens::pvp_room(ctx),
         Menu::Info => screens::info(ctx),
         Menu::Message(_) => screens::message(ctx),
         Menu::RoomCreation => screens::room_creation(ctx),

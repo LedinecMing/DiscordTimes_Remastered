@@ -14,6 +14,9 @@ use crate::state::{
 };
 use crate::ui::{hash, UiCtx, Val};
 use dt_lib::battle::battlefield::BattleInfo;
+use dt_lib::network::room::{
+    PvpRoomSummary, RoomConfig, RoomId, RoomMode, RoomStatus, SpectatorPolicy,
+};
 use dt_lib::items::item::Item;
 use dt_lib::map::event::{Execute, Message};
 use dt_lib::units::unit::{display_unit, Unit};
@@ -463,6 +466,399 @@ pub fn room_creation(ctx: &mut Ctx) {
             process_event(ctx.game, mes);
         }
     }
+}
+
+// ===================== ПВП-ЛОББИ (Этап 1, §1.1) =====================
+// Экраны Menu::PvpLobby / PvpRoomSetup / PvpRoom. Данные — локальный мок
+// RoomManager (ctx.pvp.manager); реальный websocket-транспорт — след. спринт.
+
+/// Строка таблицы комнат: (текст, доступна ли кнопка входа).
+fn room_row_label(room: &PvpRoomSummary) -> String {
+    let mode = match room.mode {
+        RoomMode::Battle => "Битва",
+        RoomMode::MapGame => "Карта",
+    };
+    let status = match room.status {
+        RoomStatus::Lobby => "лобби",
+        RoomStatus::InGame => "идёт",
+        RoomStatus::Finished => "финиш",
+    };
+    format!(
+        "{} | {} | {} | {} | {}/{} | зрит. {} | {}",
+        room.title, mode, room.host.display_name, status, room.players, room.players_max,
+        room.spectators, if room.spectators_allowed { "да" } else { "нет" }
+    )
+}
+
+pub fn pvp_lobby(ctx: &mut Ctx) {
+    let viewport = [crate::ui::UI_W, crate::ui::UI_H];
+    ctx.gfx
+        .begin_pass(Target::Screen, Some(colors::WHITE), &ctx.ui.camera);
+    let input = ctx.input;
+    let menu = &mut ctx.ui.main;
+    // Снимок комнат до UiCtx (borrow-правила: UiCtx держит &mut gfx/text).
+    let (tab, open_only) = (ctx.pvp.lobby_tab, ctx.pvp.open_only);
+    let rooms: Vec<PvpRoomSummary> = ctx
+        .pvp
+        .manager
+        .list()
+        .into_iter()
+        .filter(|r| match tab {
+            1 => r.mode == RoomMode::Battle,
+            2 => r.mode == RoomMode::MapGame,
+            _ => true,
+        })
+        .filter(|r| {
+            !open_only
+                || (r.status == RoomStatus::Lobby && r.players < r.players_max)
+        })
+        .collect();
+    let mut action: Option<PvpLobbyAction> = None;
+    {
+        let mut ui = UiCtx::new(ctx.gfx, ctx.text, input, &ctx.skins.main, ctx.widgets);
+        let pvp = &mut *ctx.pvp;
+        ui.window(0., 0., viewport[0], viewport[1], |ui| {
+            ui.label(Some([50., 20.]), "ПВП: список комнат");
+            // Ник игрока.
+            ui.label(Some([50., 70.]), "Ник:");
+            ui.input_text("pvp_nick", "", &mut pvp.nick);
+            // Табы-фильтр.
+            for (i, name) in ["Все", "Битвы", "Карты"].iter().enumerate() {
+                if ui.button(Some([400. + i as f32 * 140., 70.]), name) {
+                    pvp.lobby_tab = i;
+                }
+            }
+            if ui.button(Some([880., 70.]), if open_only { "[x] только открытые" } else { "[ ] только открытые" }) {
+                pvp.open_only = !pvp.open_only;
+            }
+            // Таблица комнат: заголовки.
+            ui.label(Some([50., 140.]), "Название | Режим | Хост | Статус | Игроки | Зрители");
+            // Список комнат со скроллом.
+            let mut join: Option<(RoomId, bool)> = None;
+            ui.scroll_group("pvp_rooms", 50., 160., 1500., 780., |ui, pos| {
+                for (i, room) in rooms.iter().enumerate() {
+                    let y = pos[1] + i as f32 * 64.;
+                    ui.label(Some([pos[0], y]), &room_row_label(room));
+                    let can_play =
+                        room.status == RoomStatus::Lobby && room.players < room.players_max;
+                    let can_spec =
+                        room.status != RoomStatus::Finished && room.spectators_allowed;
+                    if ui.button(Some([1300., y]), if can_play { "Войти" } else { "—" }) && can_play {
+                        join = Some((room.id, false));
+                    }
+                    if ui.button(Some([1420., y]), if can_spec { "Наблюдать" } else { "—" }) && can_spec {
+                        join = Some((room.id, true));
+                    }
+                }
+            });
+            if let Some((id, as_spec)) = join {
+                action = Some(PvpLobbyAction::Join(id, as_spec));
+            }
+            // Ошибка последнего действия.
+            if let Some(err) = &pvp.error {
+                ui.label_colored([50., 960.], err, colors::RED);
+            }
+            // Кнопки внизу.
+            if ui.button(Some([50., 1000.]), "Создать комнату") {
+                action = Some(PvpLobbyAction::OpenSetup);
+            }
+            if ui.button(Some([280., 1000.]), "Обновить") {
+                action = Some(PvpLobbyAction::Refresh);
+            }
+            if input.key_released(KeyCode::Escape)
+                || ui.button(Some([viewport[0] - 150., 1000.]), "Выход")
+            {
+                *menu = Menu::Main;
+            }
+        });
+    }
+    // Действия после UiCtx (мутации pvp/manager вне borrow).
+    match action {
+        Some(PvpLobbyAction::OpenSetup) => {
+            ctx.ui.main = Menu::PvpRoomSetup;
+        }
+        Some(PvpLobbyAction::Refresh) => {
+            ctx.pvp.error = None;
+        }
+        Some(PvpLobbyAction::Join(id, as_spec)) => {
+            let nick = ctx.pvp.nick.trim().to_owned();
+            match ctx.pvp.manager.join(id, &nick, as_spec) {
+                Ok(view) => {
+                    ctx.pvp.error = None;
+                    ctx.pvp.joined = Some((id, view));
+                    ctx.ui.main = Menu::PvpRoom;
+                }
+                Err(e) => ctx.pvp.error = Some(e.to_string()),
+            }
+        }
+        None => {}
+    }
+}
+
+enum PvpLobbyAction {
+    OpenSetup,
+    Refresh,
+    Join(RoomId, bool),
+}
+
+/// Экран создания комнаты (§1.3): форма RoomConfig + валидация on-change.
+pub fn pvp_room_setup(ctx: &mut Ctx) {
+    let viewport = [crate::ui::UI_W, crate::ui::UI_H];
+    ctx.gfx
+        .begin_pass(Target::Screen, Some(colors::WHITE), &ctx.ui.camera);
+    let input = ctx.input;
+    let menu = &mut ctx.ui.main;
+    let mut action: Option<Result<RoomConfig, String>> = None;
+    {
+        let mut ui = UiCtx::new(ctx.gfx, ctx.text, input, &ctx.skins.main, ctx.widgets);
+        let pvp = &mut *ctx.pvp;
+        ui.window(0., 0., viewport[0], viewport[1], |ui| {
+            ui.label(Some([50., 30.]), "Создание ПВП-комнаты");
+            let cfg = &mut pvp.setup_draft;
+            // Название.
+            ui.input_text("pvp_room_title", "Название:", &mut cfg.title);
+            // Режим: битва / карта.
+            ui.label(Some([50., 160.]), "Режим:");
+            if ui.button(
+                Some([200., 160.]),
+                if cfg.mode == RoomMode::Battle { "[x] Битва" } else { "[ ] Битва" },
+            ) {
+                cfg.mode = RoomMode::Battle;
+            }
+            if ui.button(
+                Some([360., 160.]),
+                if cfg.mode == RoomMode::MapGame { "[x] Карта" } else { "[ ] Карта" },
+            ) {
+                cfg.mode = RoomMode::MapGame;
+            }
+            // Рейтинг/наблюдатели/золото — компактный блок.
+            if ui.button(
+                Some([50., 220.]),
+                if cfg.rated { "[x] Рейтинговая" } else { "[ ] Рейтинговая" },
+            ) {
+                cfg.rated = !cfg.rated;
+            }
+            if ui.button(
+                Some([280., 220.]),
+                if cfg.spectators == SpectatorPolicy::Allowed {
+                    "[x] Наблюдатели"
+                } else {
+                    "[ ] Наблюдатели"
+                },
+            ) {
+                cfg.spectators = if cfg.spectators == SpectatorPolicy::Allowed {
+                    SpectatorPolicy::Forbidden
+                } else {
+                    SpectatorPolicy::Allowed
+                };
+            }
+            ui.label(Some([560., 220.]), "Золото на сторону:");
+            let mut gold = cfg.gold_per_side.to_string();
+            ui.input_text("pvp_gold", "", &mut gold);
+            if let Ok(v) = gold.trim().parse::<u64>() {
+                cfg.gold_per_side = v;
+            }
+            // Ключевые правила битвы.
+            if ui.button(
+                Some([50., 280.]),
+                if cfg.allow_items { "[x] Артефакты" } else { "[ ] Артефакты" },
+            ) {
+                cfg.allow_items = !cfg.allow_items;
+            }
+            if ui.button(
+                Some([280., 280.]),
+                if cfg.allow_spells.purchase { "[x] Заклинания" } else { "[ ] Заклинания" },
+            ) {
+                cfg.allow_spells.purchase = !cfg.allow_spells.purchase;
+                cfg.allow_spells.use_in_battle = cfg.allow_spells.purchase;
+            }
+            if ui.button(
+                Some([560., 280.]),
+                if cfg.coin_flip_initiative {
+                    "[x] Монетка +1 иниц."
+                } else {
+                    "[ ] Монетка +1 иниц."
+                },
+            ) {
+                cfg.coin_flip_initiative = !cfg.coin_flip_initiative;
+            }
+            // Лимиты (числовые поля-строки: пусто = без лимита).
+            ui.label(Some([50., 340.]), "Макс. юнитов (пусто = без лимита):");
+            let mut max_units = cfg
+                .max_units
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            ui.input_text("pvp_max_units", "", &mut max_units);
+            cfg.max_units = if max_units.trim().is_empty() {
+                None
+            } else {
+                max_units.trim().parse::<u8>().ok().or(cfg.max_units)
+            };
+            ui.label(Some([560., 340.]), "Макс. магов (пусто = без лимита):");
+            let mut max_mages = cfg
+                .max_mages
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            ui.input_text("pvp_max_mages", "", &mut max_mages);
+            cfg.max_mages = if max_mages.trim().is_empty() {
+                None
+            } else {
+                max_mages.trim().parse::<u8>().ok().or(cfg.max_mages)
+            };
+            // Валидация on-change: ошибки сразу под формой.
+            let verdict = cfg.validate().err();
+            if let Some(msg) = &verdict {
+                ui.label_colored([50., 420.], &format!("Ошибка: {msg}"), colors::RED);
+            } else {
+                ui.label_colored([50., 420.], "Конфиг корректен", colors::GREEN);
+            }
+            // Кнопки.
+            if ui.button(Some([50., 480.]), "Создать") && verdict.is_none() {
+                action = Some(Ok(cfg.clone()));
+            }
+            if ui.button(Some([250., 480.]), "Сбросить") {
+                *cfg = RoomConfig::default();
+            }
+            if input.key_released(KeyCode::Escape)
+                || ui.button(Some([viewport[0] - 150., 30.]), "Назад")
+            {
+                action = Some(Err("back".into()));
+            }
+        });
+    }
+    match action {
+        Some(Ok(config)) => {
+            let nick = ctx.pvp.nick.trim().to_owned();
+            match ctx.pvp.manager.create(config.clone(), &nick) {
+                Ok(id) => {
+                    ctx.pvp.error = None;
+                    if let Ok(view) = ctx.pvp.manager.view(id) {
+                        ctx.pvp.joined = Some((id, view));
+                    }
+                    ctx.ui.main = Menu::PvpRoom;
+                }
+                Err(e) => ctx.pvp.error = Some(e.to_string()),
+            }
+        }
+        Some(Err(_)) => *menu = Menu::PvpLobby,
+        _ => {}
+    }
+}
+
+/// Комната после входа: состав, зрители, старт хостом, выход.
+pub fn pvp_room(ctx: &mut Ctx) {
+    let viewport = [crate::ui::UI_W, crate::ui::UI_H];
+    ctx.gfx
+        .begin_pass(Target::Screen, Some(colors::WHITE), &ctx.ui.camera);
+    let input = ctx.input;
+    let menu = &mut ctx.ui.main;
+    // Живой снимок комнаты (ник мог измениться, состав — из manager).
+    let snapshot = ctx
+        .pvp
+        .joined
+        .as_ref()
+        .and_then(|(id, _)| ctx.pvp.manager.view(*id).ok().map(|v| (*id, v)));
+    let mut action: Option<PvpRoomAction> = None;
+    {
+        let mut ui = UiCtx::new(ctx.gfx, ctx.text, input, &ctx.skins.main, ctx.widgets);
+        let pvp = &mut *ctx.pvp;
+        ui.window(0., 0., viewport[0], viewport[1], |ui| {
+            let Some((id, view)) = &snapshot else {
+                ui.label(Some([50., 50.]), "Комната закрылась");
+                if ui.button(None, "В лобби") {
+                    action = Some(PvpRoomAction::Leave);
+                }
+                return;
+            };
+            let am_host = view.summary.host.display_name == pvp.nick.trim();
+            ui.label(Some([50., 30.]), &format!("Комната: {}", view.summary.title));
+            ui.label(Some([50., 80.]), &format!("Игроки ({}/{}):", view.summary.players, view.summary.players_max));
+            for (i, p) in view.players.iter().enumerate() {
+                let mark = if *p == view.summary.host.display_name {
+                    " (хост)"
+                } else {
+                    ""
+                };
+                ui.label(Some([70., 130. + i as f32 * 36.]), &format!("{}{}", p, mark));
+            }
+            if !view.spectators.is_empty() {
+                ui.label(Some([400., 80.]), "Зрители:");
+                for (i, s) in view.spectators.iter().enumerate() {
+                    ui.label(Some([420., 130. + i as f32 * 36.]), s);
+                }
+            }
+            // Монетка: у кого +1 инициатива.
+            if view.config.coin_flip_initiative {
+                ui.label(Some([50., 400.]), "Монетка +1 инициатива: включена (решится на старте боя)");
+            }
+            if let Some(err) = &pvp.error {
+                ui.label_colored([50., 440.], err, colors::RED);
+            }
+            // Старт — только хост и при полном составе.
+            let can_start =
+                am_host && view.summary.status == RoomStatus::Lobby && view.summary.players >= view.summary.players_max;
+            if ui.button(Some([50., 500.]), if can_start { "Старт боя" } else { "Ожидание..." })
+                && can_start
+            {
+                action = Some(PvpRoomAction::Start(*id));
+            }
+            if ui.button(Some([300., 500.]), "Выйти из комнаты") {
+                action = Some(PvpRoomAction::Leave);
+            }
+            let _ = menu;
+        });
+    }
+    match action {
+        Some(PvpRoomAction::Start(id)) => {
+            let nick = ctx.pvp.nick.trim().to_owned();
+            match ctx.pvp.manager.start(id, &nick) {
+                Ok(()) => {
+                    ctx.pvp.error = None;
+                    // Локальный мок: сразу создаём битву с your_army.
+                    start_local_pvp_battle(ctx);
+                }
+                Err(e) => ctx.pvp.error = Some(e.to_string()),
+            }
+        }
+        Some(PvpRoomAction::Leave) => {
+            if let Some((id, _)) = ctx.pvp.joined.take() {
+                let nick = ctx.pvp.nick.trim().to_owned();
+                let _ = ctx.pvp.manager.leave(id, &nick);
+            }
+            ctx.pvp.error = None;
+            ctx.ui.main = Menu::PvpLobby;
+        }
+        None => {}
+    }
+}
+
+enum PvpRoomAction {
+    Start(RoomId),
+    Leave,
+}
+
+/// Локальный мок старта ПВП-боя (без сети): your_army = 0 (мы хост),
+/// монетка — по времени как сид. Реальный сервер раздаст your_army/seed
+/// через ServerMessage::YourArmy.
+fn start_local_pvp_battle(ctx: &mut Ctx) {
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // borrow-снапшот: armies нужен после ошибки.
+    if ctx.game.executor.gamemap.armys.len() < 2 {
+        ctx.pvp.error = Some("Недостаточно армий для боя".into());
+        return;
+    }
+    let armies = &mut ctx.game.executor.gamemap.armys;
+    let mut battle = BattleInfo::new(armies, 0, 1);
+    battle.your_army = Some(0);
+    // Монетка по общему сиду (у обоих клиентов одинакова); в сетевом спринте
+    // сид придёт с ServerMessage::YourArmy.
+    let _flip = battle.coin_flip_initiative(armies, ctx.registry, seed);
+    ctx.game.executor.battle = Some(battle);
+    ctx.ui.main = Menu::BattleSetup;
+    ctx.widgets.insert(hash("ready"), Val::Bool(false));
 }
 
 // Код комнаты живёт между кадрами (в оригинале — локал главного цикла).
