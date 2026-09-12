@@ -82,29 +82,29 @@ impl MapEditorApp {
                 self.project_path = None;
                 self.issues.clear();
                 self.dirty = false;
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("Resize 100x100").clicked() {
                 self.history.execute(Box::new(ResizeMap::new(100, 0)), &mut self.state);
                 self.dirty = true;
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("Open…").clicked() {
                 if let Some(path) = pick_open_path() {
                     self.open_project(path);
                 }
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("Save").clicked() {
                 self.save_project();
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("Save As…").clicked() {
                 if let Some(path) = pick_save_path() {
                     self.project_path = Some(path);
                     self.save_project();
                 }
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("Quit").clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -117,7 +117,7 @@ impl MapEditorApp {
             {
                 self.history.undo(&mut self.state);
                 self.dirty = true;
-                ui.close_menu();
+                ui.close();
             }
             if ui
                 .add_enabled(self.history.can_redo(), egui::Button::new("Redo\tCtrl+Y"))
@@ -125,13 +125,13 @@ impl MapEditorApp {
             {
                 self.history.redo(&mut self.state);
                 self.dirty = true;
-                ui.close_menu();
+                ui.close();
             }
         });
         ui.menu_button("Validate", |ui| {
             if ui.button("Lint").clicked() {
                 self.issues = run_all(self.state.project());
-                ui.close_menu();
+                ui.close();
             }
         });
     }
@@ -346,7 +346,7 @@ impl eframe::App for MapEditorApp {
         }
 
         egui::TopBottomPanel::top("top_menu").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| self.top_menu(ui));
+            egui::MenuBar::new().ui(ui, |ui| self.top_menu(ui));
         });
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| self.status_bar(ui));
         egui::SidePanel::right("tool_panel").show(ctx, |ui| self.side_panel(ui));
