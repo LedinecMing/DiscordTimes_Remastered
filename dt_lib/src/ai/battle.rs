@@ -308,3 +308,33 @@ fn better_target<'a>(
         }
     }
 }
+
+impl BattleAi {
+    /// Исполнить решение активного юнита через существующий handle_action:
+    /// ИИ не мутирует состояние сам (правило зависимостей §1 плана).
+    /// MoveAndAttack исполняется манёвром сейчас — юнит с остатком moves
+    /// остаётся активным (search_next_active держит его первым), следующим
+    /// решением ИИ доиграет атаку.
+    pub fn execute(
+        decision: AiDecision,
+        battle: &mut BattleInfo,
+        armies: &mut Vec<Army>,
+        registry: &GameInfo,
+    ) -> Option<ActionResult> {
+        let active = battle.active_unit?;
+        let my_pos = {
+            let columns = armies[active.army].max_troops / 2;
+            armies[active.army].troops[active.index].get().pos.whole(columns)
+        };
+        let action = match decision {
+            AiDecision::Attack { target } => (target.pos, target.army),
+            AiDecision::MoveAndAttack { to, .. } => (to, active.army),
+            AiDecision::Move { to } => (to, active.army),
+            // Skip = «клик по себе»: спуск хода (селф-каст, если позволяет
+            // magic_direction) — Space-семантика из плана §2.1.
+            AiDecision::Skip | AiDecision::Cast { .. } => (my_pos, active.army),
+        };
+        crate::battle::battlefield::handle_action(action, battle, armies, registry)
+            .map(|(res, _)| res)
+    }
+}

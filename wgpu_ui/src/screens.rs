@@ -18,6 +18,7 @@ use dt_lib::items::item::Item;
 use dt_lib::map::event::{Execute, Message};
 use dt_lib::units::unit::{display_unit, Unit};
 use dt_lib::units::unitstats::ModifyUnitStats;
+use dt_lib::ai::{AiDecision, BattleAi};
 use winit::keyboard::KeyCode;
 
 const FONT: &str = crate::assets::BENGUIAT;
@@ -478,6 +479,37 @@ pub fn battle(ctx: &mut Ctx) {
     ctx.gfx
         .begin_pass(Target::Screen, Some(colors::WHITE), &ctx.ui.camera);
     let winner = draw_battle(ctx, true);
+    // Ход ИИ: в сингле любая армия, кроме армии игрока, ходит сама — пауза
+    // (этап 6 — AiOpponent на сервере).
+    let player_army = ctx.game.executor.players.first().map(|p| p.army);
+    let mut ai_pending = false;
+    if let Some(player_army) = player_army {
+        if !matches!(ctx.game.variant, GameVariant::Online(_)) {
+            if let Some(battle) = ctx.game.executor.battle.as_ref() {
+                if battle.winner.is_none() {
+                    if let Some(active) = battle.active_unit {
+                        // Армия игрока в сингле под Human-контролем только по
+                        // player_army; прочие армии карты — Control::PC.
+                        ai_pending = active.army != player_army;
+                    }
+                }
+            }
+        }
+    }
+    let mut ai_acted = false;
+    if ai_pending && *ctx.delta >= 0.4 {
+        let registry = &*ctx.registry;
+        let battle = ctx.game.executor.battle.as_mut().unwrap();
+        let armies = &mut ctx.game.executor.gamemap.armys;
+        let my = battle.active_unit.unwrap().army;
+        let policy = dt_lib::ai::policy::BattlePolicy::default();
+        let decision = BattleAi::decide(battle, armies, my, &policy, registry);
+        BattleAi::execute(decision, battle, armies, registry);
+        ai_acted = true;
+    }
+    if ai_acted {
+        *ctx.delta = 0.;
+    }
     let mut my_army: Option<usize> = None;
     let mut go_back = false;
     let winner_text: Option<String> = match &mut ctx.game.variant {
