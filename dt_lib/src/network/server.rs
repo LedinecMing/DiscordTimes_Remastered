@@ -186,6 +186,10 @@ impl Executor {
             if player.execution_queue.is_empty() {
                 let player_army = &mut self.gamemap.armys[player.army];
                 if let Some(pos) = player_army.path.get(0) {
+					// На клетке чужая армия — не двигаемся (ждём освобождения).
+					if self.gamemap.hitmap[*pos].army.is_some() {
+						continue;
+					}
 					if player_army.transport && !TILES[self.gamemap.tilemap[*pos]].need_transport() {
 						player_army.transport = false;
 					}

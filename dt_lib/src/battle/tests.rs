@@ -14,6 +14,7 @@ use crate::{
         unitstats::{ModifyUnitStats, Modify, ModifyPower},
     },
     items::item::{Item, ItemInfo, ArtifactType, WeaponType, MagicVariants},
+    map::map::GameMap,
     map::object::{Market, RecruitUnit, Recruitment},
     bonuses::BonusInfo,
     effects::{EffectInfo, EffectLifetime},
@@ -22,7 +23,7 @@ use rand::prelude::IteratorRandom;
 use rand::thread_rng;
 use math_thingies::Percent;
 
-fn make_test_registry() -> GameInfo {
+pub fn make_test_registry() -> GameInfo {
     let mut registry = GameInfo::new();
 
     // Register generic units 0..19 (unit 1 is Undead)
@@ -253,7 +254,7 @@ fn make_test_registry() -> GameInfo {
 }
 
 /// Create an army from registry unit IDs placed at given hitmap positions.
-fn make_army_from_ids(registry: &GameInfo, unit_placements: &[(u32, usize)]) -> Army {
+pub fn make_army_from_ids(registry: &GameInfo, unit_placements: &[(u32, usize)]) -> Army {
     let mut army = Army::new(
         vec![], ArmyStats::default(), vec![],
         (0, 0), true, Control::PC, registry,
@@ -1658,3 +1659,91 @@ fn spell_learn_records_book_without_applying_effect() {
     assert_eq!(army.learn_spell(3), Ok(false));
     assert_eq!(army.spells.iter().filter(|s| **s == 3).count(), 1);
 }
+// ---------------- Две армии не могут стоять на одной клетке ----------------
+
+/// Плоская карта 4×4 из проходимой дороги (walkspeed=4) + две армии.
+/// army0 игрока в (1,1), армия-блокер в (3,3) — НЕ в пути, но целевая клетка.
+fn make_map_with_two_armies() -> (GameMap, crate::registry::GameInfo) {
+    let registry = make_test_registry();
+    let size = 4usize;
+    let mut gamemap = GameMap::default();
+    gamemap.tilemap = crate::map::map::TileMap::new(vec![4usize; size * size].into_iter());
+    gamemap.hitmap = crate::map::map::TileMap::new(
+        vec![crate::map::map::HitboxTile::default(); size * size].into_iter(),
+    );
+    gamemap.eventmap = crate::map::map::TileMap::new(
+        vec![Vec::new(); size * size].into_iter(),
+    );
+    let mut player = make_army_from_ids(&registry, &[(20, 0)]);
+    player.pos = (1, 1);
+    player.active = true;
+    let mut blocker = make_army_from_ids(&registry, &[(21, 0)]);
+    blocker.pos = (3, 3);
+    blocker.active = true;
+    gamemap.armys = vec![player, blocker];
+    gamemap.calc_hitboxes(&registry.objects.inner);
+    (gamemap, registry)
+}
+
+#[test]
+fn goto_onto_occupied_tile_builds_no_path() {
+    let (mut gamemap, registry) = make_map_with_two_armies();
+    let mut executor = crate::network::server::Executor {
+        gamemap,
+        events: vec![],
+        battle: None,
+        execution_queue: vec![],
+        players: vec![crate::battle::control::Player {
+            army: 0,
+            questbook: None,
+            execution_queue: vec![],
+            wait_until: None,
+        }],
+    };
+    // Клик на клетку (3,3), где стоит армия-блокер: путь не строится.
+    executor.message_handler(crate::network::server::ClientMessage::GoTo((3, 3)), 0, &registry);
+    assert!(
+        executor.gamemap.armys[0].path.is_empty(),
+        "на занятую армией клетку путь не строится"
+    );
+    // Клик на свободную клетку (2,2) путь строит.
+    executor.message_handler(crate::network::server::ClientMessage::GoTo((2, 2)), 0, &registry);
+    assert!(
+        !executor.gamemap.armys[0].path.is_empty(),
+        "на свободную клетку путь строится"
+    );
+}
+
+#[test]
+fn tick_does_not_step_onto_occupied_tile() {
+    let (mut gamemap, registry) = make_map_with_two_armies();
+    // Путь вручную через занятую клетку: tick-гард не пускает на неё,
+    // даже если путь был построен до того, как блокер встал на клетку.
+    gamemap.armys[0].path = vec![(2, 2), (3, 3), (2, 3)];
+    let mut executor = crate::network::server::Executor {
+        gamemap,
+        events: vec![],
+        battle: None,
+        execution_queue: vec![],
+        players: vec![crate::battle::control::Player {
+            army: 0,
+            questbook: None,
+            execution_queue: vec![],
+            wait_until: None,
+        }],
+    };
+    for _ in 0..4 {
+        executor.tick(&registry);
+        assert_ne!(
+            executor.gamemap.armys[0].pos,
+            (3, 3),
+            "армия не может встать на клетку с другой армией"
+        );
+        assert_ne!(
+            executor.gamemap.armys[1].pos,
+            (1, 1),
+            "блокер не может вытеснить игрока"
+        );
+    }
+}
+
