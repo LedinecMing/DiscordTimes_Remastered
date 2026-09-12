@@ -2721,6 +2721,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6db9c683daf087dc577b7506e9695b3d556a9f3849903fa28186283afd6809e9"
 
 [[package]]
+name = "lit2png"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "image 0.25.10",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "litrs"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
