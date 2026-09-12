@@ -26,8 +26,11 @@ pub enum AbilityCondition {
 	Attacking = 5,
 	Moves = 6,
 	Skips = 7,
+	/// Смена игровых суток (вне боя): Лекарь (Bonus4) и прочие
+	/// ежедневные способности. Диспатчит Executor::advance_day.
+	Day = 8,
 }
-pub const MAX_ABILITY: usize = AbilityCondition::Skips as u8 as usize + 1;
+pub const MAX_ABILITY: usize = AbilityCondition::Day as u8 as usize + 1;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, JsonSchema)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
@@ -156,9 +159,13 @@ impl AbilityTowardsTroop {
 		let stats = unit.modified;
 		match self {
 			Kill => unit.kill(registry),
-			Heal(heal) => {
-				unit.heal(heal.apply(stats.max_hp) * power as i64);
-			},
+		Heal(heal) => {
+			// percent_add в Heal — доля от max_hp (15 = 15% максимума),
+			// а не процент поверх него:Modify.apply(max_hp) дал бы max+15%.
+			let amount = heal.add.unwrap_or(0) * power as i64
+				+ heal.percent_add.unwrap_or(Percent::new(0)).calc(stats.max_hp) * power as i64;
+			unit.heal(amount);
+		},
 			Damage(damage) => {
 				unit.hp -= damage.apply(stats.max_hp) * power as i64;
 				unit.recalc(registry);

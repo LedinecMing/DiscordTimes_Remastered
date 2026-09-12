@@ -62,6 +62,9 @@ pub struct Executor {
     pub battle: Option<BattleInfo>,
     pub execution_queue: Vec<DelayedEvent>,
     pub players: Players,
+    /// Последний обработанный день (get_days): Day-условия бонусов
+    /// (Лекарь и пр.) диспатчатся один раз при смене суток.
+    pub last_day: u64,
 }
 impl Executor {
     pub fn message_handler(&mut self, message: ClientMessage, player: usize, registry: &GameInfo) {
@@ -94,6 +97,56 @@ impl Executor {
             _ => {}
         }
     }
+
+    /// Ежедневный тик бонусов (Bonus4 Лекарь и др.): диспатчит
+    /// AbilityCondition::Day каждому живому юниту с бонусом. Вызывается из
+    /// tick() при смене gamemap.time.get_days(); тесты — напрямую.
+    pub fn advance_day(&mut self, registry: &GameInfo) {
+        use crate::bonuses::{AbilityCondition, AbilityTowardsTroop};
+        // Собираем (армия, индекс, клон бонуса) до мутаций.
+        let mut bonus_units = vec![];
+        for (army_index, army) in self.gamemap.armys.iter().enumerate() {
+            for (index, troop) in army.troops.iter().enumerate() {
+                let t = troop.get();
+                if t.unit.is_dead() {
+                    continue;
+                }
+                if let Some(bonus) = t.unit.get_bonus(registry).cloned() {
+                    bonus_units.push((army_index, index, bonus));
+                }
+            }
+        }
+        for (army_index, index, bonus) in bonus_units {
+            let Some((_, mechanics)) = bonus.rules.get(&AbilityCondition::Day) else {
+                continue;
+            };
+            for mechanic in mechanics {
+                // Вне боя RelativeUnit-таргеты не определены — применяем
+                // способности к владельцу и (по смыслу Лекаря) всей его армии.
+                let targets: Vec<usize> = if mechanic.affects.is_empty() {
+                    vec![]
+                } else {
+                    (0..self.gamemap.armys[army_index].troops.len()).collect()
+                };
+                let mut target_list: Vec<usize> = targets;
+                if mechanic.affects_self && !target_list.contains(&index) {
+                    target_list.push(index);
+                }
+                for target_index in target_list {
+                    let mut t = self.gamemap.armys[army_index].troops[target_index].get();
+                    if t.unit.is_dead() {
+                        continue;
+                    }
+                    for ability in &mechanic.ability {
+                        if matches!(ability, AbilityTowardsTroop::Attack { .. }) {
+                            continue; // атаки вне боя не диспатчатся
+                        }
+                        ability.apply(&mut t.unit, 1, registry);
+                    }
+                }
+            }
+        }
+    }
 	pub fn is_paused(&self) -> bool {
 		self.gamemap.pause
             || self.players.iter().any(|player| self
@@ -106,6 +159,12 @@ impl Executor {
     pub fn tick(&mut self, registry: &GameInfo) {
         if self.is_paused() {
             return;
+        }
+        // Смена суток: Day-бонусы (Лекарь) — один раз на новый день.
+        let day = self.gamemap.time.get_days();
+        if day != self.last_day {
+            self.last_day = day;
+            self.advance_day(registry);
         }
 
         fn handle_event_res(executor: &mut Executor, res: Executions, registry: &GameInfo) {

@@ -250,6 +250,36 @@ pub fn make_test_registry() -> GameInfo {
         },
         "counterblow",
     );
+    // 5: medic — Лекарское Умение: 15% HP/день всей своей армии (Day-правило;
+    // зеркало dt/bonuses.json5).
+    registry.bonuses.register(
+        BonusInfo {
+            id: "medic".into(),
+            name: "Medic".into(),
+            desc: "".into(),
+            rules: {
+                let mut rules = indexmap::IndexMap::new();
+                rules.insert(
+                    crate::bonuses::AbilityCondition::Day,
+                    (
+                        crate::bonuses::ListenTo::Myself,
+                        vec![crate::bonuses::Mechanic {
+                            affects: vec![crate::bonuses::RelativeUnit::ByArmy { my_army: true }],
+                            affects_self: true,
+                            conditions: crate::bonuses::MechanicCondition::True,
+                            ability: vec![crate::bonuses::AbilityTowardsTroop::Heal(
+                                Modify { percent_add: Some(Percent::new(15)), ..Default::default() },
+                            )],
+                            works_after_death: false,
+                        }],
+                    ),
+                );
+                rules
+            },
+            ..Default::default()
+        },
+        "medic",
+    );
     registry
 }
 
@@ -1664,7 +1694,7 @@ fn spell_learn_records_book_without_applying_effect() {
 
 /// Плоская карта 4×4 из проходимой дороги (walkspeed=4) + две армии.
 /// army0 игрока в (1,1), армия-блокер в (3,3) — НЕ в пути, но целевая клетка.
-fn make_map_with_two_armies() -> (GameMap, crate::registry::GameInfo) {
+pub fn make_map_with_two_armies() -> (GameMap, crate::registry::GameInfo) {
     let registry = make_test_registry();
     let size = 4usize;
     let mut gamemap = GameMap::default();
@@ -1700,6 +1730,7 @@ fn goto_onto_occupied_tile_builds_no_path() {
             execution_queue: vec![],
             wait_until: None,
         }],
+        last_day: 0,
     };
     // Клик на клетку (3,3), где стоит армия-блокер: путь не строится.
     executor.message_handler(crate::network::server::ClientMessage::GoTo((3, 3)), 0, &registry);
@@ -1732,6 +1763,7 @@ fn tick_does_not_step_onto_occupied_tile() {
             execution_queue: vec![],
             wait_until: None,
         }],
+        last_day: 0,
     };
     for _ in 0..4 {
         executor.tick(&registry);

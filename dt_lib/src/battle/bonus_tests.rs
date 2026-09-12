@@ -425,3 +425,54 @@ fn true_damage_reverts_after_battle_end() {
     );
 }
 
+// =====================
+// BONUS 4 (Лекарское Умение): отряд с медиком восстанавливает 15% жизни
+// всем раненым воинам каждый день (AbilityCondition::Day, Executor::advance_day).
+// =====================
+
+#[test]
+fn medic_heals_15_percent_per_day() {
+    let (mut gamemap, registry) = super::tests::make_map_with_two_armies();
+    // Раненый юнит армии-игрока.
+    gamemap.armys[0].troops[0].get().unit.hp = 40;
+    // Медик — третья армия карты: ранен (20/100), Day-правило лечит свою армию.
+    gamemap.armys.push({
+        let mut medic_army = make_army_from_ids(&registry, &[(0, 0)]);
+        medic_army.pos = (2, 1);
+        medic_army.active = true;
+        medic_army.troops[0].get().unit.hp = 20;
+        {
+            let id = registry.bonuses.str_to_id(&"medic".to_string()).unwrap();
+            let mut troop = medic_army.troops[0].get();
+            troop.unit.bonus = Some(id);
+        }
+        medic_army
+    });
+    let mut executor = crate::network::server::Executor {
+        gamemap,
+        events: vec![],
+        battle: None,
+        execution_queue: vec![],
+        players: vec![crate::battle::control::Player {
+            army: 0,
+            questbook: None,
+            execution_queue: vec![],
+            wait_until: None,
+        }],
+        last_day: 0,
+    };
+
+    executor.advance_day(&registry);
+
+    assert_eq!(
+        executor.gamemap.armys[0].troops[0].get().unit.hp,
+        40,
+        "медик чужой армии не лечит игрока"
+    );
+    assert_eq!(
+        executor.gamemap.armys[2].troops[0].get().unit.hp,
+        35,
+        "медик лечит свою армию (себя): 20 + 15% от 100 = 35"
+    );
+}
+

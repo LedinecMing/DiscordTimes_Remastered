@@ -450,6 +450,7 @@ pub async fn game_init(gfx: &mut Gfx, text: &mut TextRenderer) -> State {
             execution_queue: vec![],
             wait_until: None,
         }],
+        last_day: gamemap.time.get_days(),
     };
     executor.tick(&registry);
     gamemap.calc_hitboxes(&registry.objects.inner);
