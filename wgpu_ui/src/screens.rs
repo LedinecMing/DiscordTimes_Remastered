@@ -876,13 +876,18 @@ pub fn battle(ctx: &mut Ctx) {
     let winner = draw_battle(ctx, true);
     let mut my_army: Option<usize> = None;
     let mut go_back = false;
+    // Стрик побед для Discord Rich Presence.
+    let mut won = false;
+    let mut lost = false;
     let winner_text: Option<String> = match &mut ctx.game.variant {
         GameVariant::Online(online) => {
             my_army = Some(online.army);
             if let Some(winner) = winner {
                 let t = if winner == online.army {
+                    won = true;
                     ctx.registry.locale.get("ui_winner")
                 } else {
+                    lost = true;
                     ctx.registry.locale.get("ui_loser")
                 };
                 online
@@ -895,7 +900,13 @@ pub fn battle(ctx: &mut Ctx) {
             }
         }
         _ => {
-            if winner.is_some() {
+            if let Some(winner) = winner {
+                // Локальная игра: игрок — армия 0.
+                if winner == 0 {
+                    won = true;
+                } else {
+                    lost = true;
+                }
                 go_back = true;
                 Some(ctx.registry.locale.get("ui_winner"))
             } else {
@@ -903,6 +914,11 @@ pub fn battle(ctx: &mut Ctx) {
             }
         }
     };
+    if won {
+        ctx.game.recent_wins = ctx.game.recent_wins.saturating_add(1);
+    } else if lost {
+        ctx.game.recent_wins = 0;
+    }
     let font_id = ctx.assets.get_font(FONT);
     let input = ctx.input;
     if let Some(text) = winner_text {

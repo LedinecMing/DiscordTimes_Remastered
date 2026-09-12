@@ -57,6 +57,9 @@ pub struct Game {
     pub executor: Executor,
     pub variant: GameVariant,
     pub focus: dt_lib::battle::battlefield::BattleUnitPos,
+    /// Победы подряд (для Discord Rich Presence): +1 за победу над чужой
+    /// армией, сброс при поражении.
+    pub recent_wins: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -236,6 +239,8 @@ pub struct State {
     /// ПВП-лобби: локальный ник, фильтры, мок RoomManager до сетевого слоя.
     pub pvp: PvpState,
     pub delta: f32,
+    /// Discord Rich Presence (клиент None, если Discord не запущен).
+    pub rpc: crate::rich_presence::RichPresence,
     pub rt: Runtime,
     /// Пиксельные снапшоты тайлов (TILES), для генерации наплывов.
     pub tile_pixels: Vec<image::RgbaImage>,
@@ -460,6 +465,7 @@ pub async fn game_init(gfx: &mut Gfx, text: &mut TextRenderer) -> State {
         executor,
         focus: dt_lib::battle::battlefield::BattleUnitPos { army: 0, pos: 0 },
         variant: GameVariant::Single(Scenario { events }),
+        recent_wins: 0,
     };
     let _ = BENGUIAT;
     State {
@@ -479,7 +485,9 @@ pub async fn game_init(gfx: &mut Gfx, text: &mut TextRenderer) -> State {
         game,
         tile_pixels,
         building_ui: BuildingUi::default(),
+        building_ui: BuildingUi::default(),
         pvp: PvpState::default(),
+        rpc: crate::rich_presence::RichPresence::new(),
     }
 }
 
