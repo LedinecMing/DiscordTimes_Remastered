@@ -237,8 +237,8 @@ impl GameMap {
                 for y in 0..size.1 {
                     // Хитбокс уходит ВЛЕВО-ВВЕРХ от якоря (якорь = правый-нижний
                     // угол спрайта, как в рендере bake: draw от pos с минусом размера).
-                    let tx = building.pos.0 as isize - x as isize;
-                    let ty = building.pos.1 as isize - y as isize;
+                    let tx = building.pos.0 as isize - x as isize + 1;
+                    let ty = building.pos.1 as isize - y as isize + 1;
                     if tx < 0 || ty < 0 || tx as usize >= self.tilemap.size
                         || ty as usize >= self.tilemap.size
                     {

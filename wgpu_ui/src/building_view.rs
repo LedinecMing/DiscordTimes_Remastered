@@ -129,14 +129,14 @@ pub fn building_screen(ctx: &mut Ctx) -> bool {
         .map(|m| {
             m.items
                 .iter()
-                .map(|item| {
-                    let info = item.get_info(&ctx.registry.items);
-                    MarketCard {
+                .filter_map(|item| {
+                    let info = ctx.registry.items.get(item.index)?;
+                    Some(MarketCard {
                         icon: ctx.assets.get(&info.icon),
                         name: info.name.clone(),
                         cost: info.cost,
                         desc: info.description.clone(),
-                    }
+                    })
                 })
                 .collect()
         })
@@ -146,12 +146,15 @@ pub fn building_screen(ctx: &mut Ctx) -> bool {
         .iter()
         .map(|slot| match slot {
             Some(item) => {
-                let info = item.get_info(&ctx.registry.items);
-                InvCard {
-                    icon: Some(ctx.assets.get(&info.icon)),
-                    name: info.name.clone(),
-                    cost: info.cost,
-                    desc: info.description.clone(),
+                let info = ctx.registry.items.get(item.index);
+                match info {
+                    Some(info) => InvCard {
+                        icon: Some(ctx.assets.get(&info.icon)),
+                        name: info.name.clone(),
+                        cost: info.cost,
+                        desc: info.description.clone(),
+                    },
+                    None => InvCard { icon: None, name: String::new(), cost: 0, desc: String::new() },
                 }
             }
             None => InvCard { icon: None, name: String::new(), cost: 0, desc: String::new() },

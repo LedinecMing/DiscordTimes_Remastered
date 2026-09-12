@@ -304,14 +304,17 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
             // (многотайловые армии — якорь может быть снаружи).
             let army_in = army_inside_building(ctx, building);
             if let Some((t, last_tile)) = ctx.building_ui.last_click {
-                if now - t < 0.4 && last_tile == tile {
+                // Тот же хитбокс строения (любая его клетка), не только тот же тайл.
+                let same_building = ctx.game.executor.gamemap.hitmap
+                    [(last_tile[0], last_tile[1])]
+                    .building == clicked_building;
+                if now - t < 0.4 && same_building && clicked_building.is_some() {
                     double_open = army_in;
                     double_go = !army_in;
                 }
             }
         }
         ctx.building_ui.last_click = Some((now, tile));
-        ctx.building_ui.lmb_building = clicked_building;
         if double_open {
             ctx.building_ui.last_click = None;
             ctx.building_ui.pending_open = None;
@@ -413,8 +416,8 @@ fn outline_building(ctx: &mut Ctx, building: usize, color: [f32; 4]) {
     let (bx, by) = ctx.game.executor.gamemap.buildings[building].pos;
     let (w, h) = (obj.size.0 as f32, obj.size.1 as f32);
     ctx.gfx.draw_rect_lines(
-        (bx as f32 - w) * SIZE.0,
-        (by as f32 - h) * SIZE.1,
+        (bx as f32 - w + 1.) * SIZE.0,
+        (by as f32 - h + 1.) * SIZE.1,
         w * SIZE.0,
         h * SIZE.1,
         5.,
@@ -578,7 +581,7 @@ fn army_inside_building(ctx: &Ctx, building: usize) -> bool {
     for x in 0..w {
         for y in 0..h {
             // Хитбокс уходит влево-вверх от якоря (calc_hitboxes).
-            let (tx, ty) = (bx as isize - x as isize, by as isize - y as isize);
+            let (tx, ty) = (bx as isize - x as isize + 1, by as isize - y as isize + 1);
             if tx < 0
                 || ty < 0
                 || tx as usize >= ctx.game.executor.gamemap.hitmap.size

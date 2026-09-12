@@ -29,6 +29,9 @@ impl<T: PartialEq> Registry<T> {
 	pub fn str_to_id(&self, str_id: &String) -> Option<usize> {
 		self.map_str_to_ids.get(str_id).copied()
 	}
+	pub fn get(&self, id: usize) -> Option<&T> {
+		self.inner.get(id)
+	}
 	pub fn register(&mut self, item: T, name: impl Into<String>) -> Option<usize> {
 		let name = name.into();
 		if self.inner.contains(&item) {
