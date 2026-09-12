@@ -244,10 +244,13 @@ impl GameMap {
             };
             for x in 0..size.0 {
                 for y in 0..size.1 {
-                    // Хитбокс уходит ВЛЕВО-ВВЕРХ от якоря (якорь = правый-нижний
-                    // угол спрайта, как в рендере bake: draw от pos с минусом размера).
-                    let tx = building.pos.0 as isize - x as isize + 1;
-                    let ty = building.pos.1 as isize - y as isize + 1;
+                    // Хитбокс уходит ВЛЕВО-ВВЕРХ от якоря и покрывает ровно
+                    // спан рендера bake: [pos-w+1..pos] × [pos-h+1..pos]
+                    // (спрайт draw от (pos-w+1, pos-h+1), правый-нижний угол
+                    // = якорь). Прежние +1/+1 сдвигали хитбокс на клетку
+                    // вправо-вниз от нарисованного спрайта.
+                    let tx = building.pos.0 as isize - x as isize;
+                    let ty = building.pos.1 as isize - y as isize;
                     if tx < 0 || ty < 0 || tx as usize >= self.tilemap.size
                         || ty as usize >= self.tilemap.size
                     {
@@ -273,6 +276,136 @@ impl GameMap {
                 continue;
             }*/
             self.hitmap[army.pos].army = Some(i);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Объекты реестра: 0 — «заглушка» 1×1 (как Tree0 в Objects.ini),
+    /// 500 — строение 2×2, 515 — строение 3×2. Позиции в векторе НЕ
+    /// совпадают с index — реестр отражает Objects.ini (index задан явно).
+    fn test_objects() -> Vec<ObjectInfo> {
+        vec![
+            ObjectInfo {
+                name: "Tree0".into(),
+                path: "Tree000.png".into(),
+                category: String::new(),
+                obj_type: crate::map::object::ObjectType::MapDeco { id: 0 },
+                index: 0,
+                size: (1, 1),
+            },
+            ObjectInfo {
+                name: "Town0".into(),
+                path: "Town000.png".into(),
+                category: String::new(),
+                obj_type: crate::map::object::ObjectType::Building { group: 6, variant: 0 },
+                index: 500,
+                size: (2, 2),
+            },
+            ObjectInfo {
+                name: "Village4".into(),
+                path: "Village004.png".into(),
+                category: String::new(),
+                obj_type: crate::map::object::ObjectType::Building { group: 6, variant: 4 },
+                index: 515,
+                size: (3, 2),
+            },
+        ]
+    }
+
+    fn test_map() -> GameMap {
+        let size = 8usize;
+        let mut m = GameMap::default();
+        m.tilemap = TileMap::new(vec![4usize; size * size].into_iter());
+        m.hitmap = TileMap::new(vec![HitboxTile::default(); size * size].into_iter());
+        m.eventmap = TileMap::new(vec![Vec::new(); size * size].into_iter());
+        m
+    }
+
+    /// Формула рендера (bake.rs): спрайт строения с якорем pos рисуется
+    /// от (pos-w+1, pos-h+1) до pos включительно. Хитбокс обязан совпадать.
+    fn render_span(pos: (usize, usize), size: (u8, u8)) -> Vec<(usize, usize)> {
+        let (w, h) = (size.0 as isize, size.1 as isize);
+        let mut tiles = vec![];
+        for tx in (pos.0 as isize - w + 1)..=(pos.0 as isize) {
+            for ty in (pos.1 as isize - h + 1)..=(pos.1 as isize) {
+                tiles.push((tx as usize, ty as usize));
+            }
+        }
+        tiles
+    }
+
+    fn building(id: usize, pos: (usize, usize)) -> crate::map::object::MapBuildingdata {
+        crate::map::object::MapBuildingdata {
+            name: String::new(),
+            desc: String::new(),
+            owner_name: String::new(),
+            id,
+            events: vec![],
+            variant: crate::map::object::BuildingVariant::Town,
+            market: None,
+            recruitment: None,
+            pos,
+            owner: None,
+            garrison: vec![],
+            additional_defense: 0,
+            gold_income: 0,
+            mana_income: 0,
+            spells_to_learn: vec![],
+            relations: Default::default(),
+            group: 0,
+        }
+    }
+
+    #[test]
+    fn hitbox_matches_render_span_and_object_index() {
+        let objects = test_objects();
+        let mut m = test_map();
+        // building.id — ДЕКЛАРАТИВНЫЙ ObjectInfo.index (сопоставление
+        // (group,variant) в convert.rs), а не позиция в векторе реестра.
+        m.buildings = vec![building(500, (4, 4)), building(515, (7, 7))];
+        m.calc_hitboxes(&objects);
+
+        for (bi, b) in m.buildings.iter().enumerate() {
+            let size = objects
+                .iter()
+                .find(|o| o.index == b.id)
+                .map(|o| o.size)
+                .expect("building id должен попадать на ObjectInfo.index");
+            for tile in render_span(b.pos, size) {
+                assert_eq!(
+                    m.hitmap[tile].building,
+                    Some(bi),
+                    "тайл {:?} строения {} (id={}, size={:?}) не в хитбоксе",
+                    tile,
+                    bi,
+                    b.id,
+                    size
+                );
+            }
+        }
+        // Вне спанов строений hitmap.building пуст.
+        assert_eq!(m.hitmap[(0, 0)].building, None);
+        assert_eq!(m.hitmap[(7, 0)].building, None);
+    }
+
+    #[test]
+    fn hitbox_of_missing_id_falls_back_to_nothing() {
+        // Битый id (нет в реестре) — не паникует (правило AGENTS.md п.10
+        // про грязные id из карт) и не рисует хитбокс 1×1 от заглушки:
+        // у строения просто нет тайлов.
+        let objects = test_objects();
+        let mut m = test_map();
+        m.buildings = vec![building(9999, (4, 4))];
+        m.calc_hitboxes(&objects);
+        for (tx, ty) in render_span((4, 4), (1, 1)) {
+            assert_eq!(
+                m.hitmap[(tx, ty)].building, None,
+                "битый id не должен помечать тайлы"
+            );
         }
     }
 }

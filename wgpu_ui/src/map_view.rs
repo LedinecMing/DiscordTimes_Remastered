@@ -294,6 +294,8 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
         ];
         let now = crate::time_secs();
         let clicked_building = ctx.game.executor.gamemap.hitmap[(tile[0], tile[1])].building;
+        // Обводка строения: любая клетка его хитбокса выделяет весь спрайт.
+        ctx.building_ui.lmb_building = clicked_building;
         // Дабл-клик по тайлу строения (< 400 мс, тот же тайл):
         // армия в хитбоксе — открыть окно; иначе — идти к строению и
         // открыть окно по прибытии (pending_open).
@@ -314,7 +316,6 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
                 }
             }
         }
-        ctx.building_ui.last_click = Some((now, tile));
         if double_open {
             ctx.building_ui.last_click = None;
             ctx.building_ui.pending_open = None;
@@ -326,6 +327,10 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
             ctx.building_ui.pending_open = clicked_building;
         } else {
             ctx.building_ui.pending_open = None;
+        }
+        if clicked_building.is_none() {
+            // Клик мимо строений сбрасывает выделение.
+            ctx.building_ui.lmb_building = None;
         }
         ctx.building_ui.goto_tile = Some(tile);
         ctx.game
@@ -580,8 +585,9 @@ fn army_inside_building(ctx: &Ctx, building: usize) -> bool {
     let (w, h) = (obj.size.0 as usize, obj.size.1 as usize);
     for x in 0..w {
         for y in 0..h {
-            // Хитбокс уходит влево-вверх от якоря (calc_hitboxes).
-            let (tx, ty) = (bx as isize - x as isize + 1, by as isize - y as isize + 1);
+            // Хитбокс уходит влево-вверх от якоря и покрывает ровно спан
+            // рендера [bx-w+1..bx] × [by-h+1..by] (calc_hitboxes, bake).
+            let (tx, ty) = (bx as isize - x as isize, by as isize - y as isize);
             if tx < 0
                 || ty < 0
                 || tx as usize >= ctx.game.executor.gamemap.hitmap.size
