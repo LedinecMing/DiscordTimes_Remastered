@@ -8,6 +8,7 @@ pub mod camera;
 pub mod files;
 pub mod gfx;
 pub mod map_view;
+pub mod rich_presence;
 pub mod screens;
 pub mod state;
 pub mod text;
@@ -186,6 +187,9 @@ impl App {
         drop(ctx);
         self.input.end_frame();
         self.gfx.as_mut().unwrap().end_frame();
+        // Discord Rich Presence: статус по активному экрану (не в Ctx, чтобы
+        // экраны не трогали IPC; идемпотентно — внутри дедуп по стейту).
+        self.update_presence();
         let t2 = std::time::Instant::now();
         if t2.elapsed().as_secs_f32() > 0.1 {
             println!(
@@ -201,6 +205,79 @@ impl App {
         if let Some(w) = &self.window {
             w.request_redraw();
         }
+    }
+
+    /// Discord Rich Presence: собрать PresenceState по текущему экрану.
+    /// Бой на карте: Menu::Battle → «сражается» + имя армии врага;
+    /// PvE-бой из главного меню и сетапы → тоже карта, но без врага;
+    /// Main/Atlas/Info → главное меню.
+    fn update_presence(&mut self) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let scenario = state.game.executor.gamemap.start.name.clone();
+        // Золото игрока: сингл — армия executor-игрока (players[0]),
+        // онлайн — назначенная сервером.
+        let gold_army = match &state.game.variant {
+            state::GameVariant::Online(online) => online.army,
+            state::GameVariant::Single(_) => state
+                .game
+                .executor
+                .players
+                .first()
+                .map(|player| player.army)
+                .unwrap_or(0),
+        };
+        let gold = state
+            .game
+            .executor
+            .gamemap
+            .armys
+            .get(gold_army)
+            .map(|army| army.stats.gold)
+            .unwrap_or(0);
+        // Имя врага: другая армия активного боя. «Наша» армия в бою — как в
+        // screens::battle(): сингл — армия 0, онлайн — online.army.
+        let my_battle_army = match &state.game.variant {
+            state::GameVariant::Online(online) => online.army,
+            state::GameVariant::Single(_) => 0,
+        };
+        let enemy = state.game.executor.battle.as_ref().and_then(|battle| {
+            let other = if battle.army1 == my_battle_army {
+                battle.army2
+            } else if battle.army2 == my_battle_army {
+                battle.army1
+            } else {
+                return None;
+            };
+            state
+                .game
+                .executor
+                .gamemap
+                .armys
+                .get(other)
+                .map(|army| army.stats.army_name.clone())
+        });
+        let recent_wins = state.game.recent_wins;
+        let presence = match &state.ui.main {
+            Menu::Battle => rich_presence::PresenceState::Map {
+                scenario,
+                gold,
+                in_battle: true,
+                enemy,
+                recent_wins,
+            },
+            Menu::Map(_) | Menu::Building(..) | Menu::Message(_) | Menu::RoomCreation
+            | Menu::BattleSetup => rich_presence::PresenceState::Map {
+                scenario,
+                gold,
+                in_battle: false,
+                enemy,
+                recent_wins,
+            },
+            Menu::Main | Menu::Atlas | Menu::Info => rich_presence::PresenceState::Menu,
+        };
+        state.rpc.update(&presence);
     }
 }
 
