@@ -338,6 +338,37 @@ pub fn bake_map_textures(
     );
 }
 
+/// Тайловый слой карты РЕДАКТОРА: те же tile_pixels/BlendMode-наплывы, что в
+/// игре, но запекание выполняет вызывающий (editor_view) в свой RT.
+pub fn draw_editor_tiles(gfx: &mut Gfx, tilemap: &TileMap<usize>, tile_pixels: &[image::RgbaImage]) {
+    let n = draw_blend_overlays(gfx, tilemap, tile_pixels, BlendMode::Rounded);
+    let _ = n;
+}
+
+/// Запечка карты РЕДАКТОРА: тот же путь, что и игра (tile_pixels + GameMap),
+/// но без реестра декора (проект Phase 1: кисть тайлов). RT — прозрачный,
+/// размеры — SIZE×size. Вызывается из editor_view при bake_dirty.
+pub fn bake_editor_map(
+    gfx: &mut Gfx,
+    rt: &Rt,
+    gamemap: &GameMap,
+    tile_pixels: &[image::RgbaImage],
+) {
+    let size = gamemap.tilemap.size as f32;
+    let camera = Camera::from_display_rect(0., SIZE.1 * size, SIZE.0 * size, -SIZE.1 * size);
+    gfx.begin_pass(Target::Rt(rt.index), Some([0., 0., 0., 0.]), &camera);
+    let t_bake = std::time::Instant::now();
+    let n_overlays = draw_blend_overlays(gfx, &gamemap.tilemap, tile_pixels, BlendMode::Rounded);
+    gfx.end_pass();
+    println!(
+        "editor bake {}x{}: overlays {}, {:.1}ms",
+        size,
+        size,
+        n_overlays,
+        t_bake.elapsed().as_secs_f64() * 1000.
+    );
+}
+
 // Слой декораций поверх карты (порт render_decos_layer): холмы всегда первыми,
 // остальное сортируется по Y-базе.
 #[allow(clippy::too_many_arguments)]

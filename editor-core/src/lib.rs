@@ -8,6 +8,8 @@ pub mod command;
 pub mod project;
 pub mod render;
 pub mod state;
+pub mod tool;
 pub use command::{Command, CommandHistory, CommandResult};
 pub use project::MapProject;
 pub use state::EditorState;
+pub use tool::Tool;

@@ -74,6 +74,9 @@ pub fn main_menu(ctx: &mut Ctx) {
         if ui.button(Some([50., 250.]), "Info") {
             *menu = Menu::Info;
         }
+        if ui.button(Some([50., 300.]), "Редактор карт") {
+            *menu = Menu::Editor;
+        }
         ui.gfx
             .draw_texture(portrait, 500., 500., 10. * SIZE.0, 10. * SIZE.1 * 2., WHITE);
     });
