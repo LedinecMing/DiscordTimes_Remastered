@@ -94,7 +94,7 @@ fn rebake_if_dirty(ectx: &mut EditorCtx) {
             -SIZE.1 * size as f32,
         );
         ectx.gfx.begin_pass(crate::gfx::Target::Rt(rt_index), Some([0., 0., 0., 0.]), &cam);
-        crate::bake::draw_editor_tiles(ectx.gfx, &ectx.editor.project.map.tilemap, &ectx.tile_pixels);
+        crate::bake::draw_editor_tiles(ectx.gfx, ectx.assets, &ectx.editor.project.map.tilemap, &ectx.tile_pixels);
         ectx.gfx.end_pass();
     }
     // RT как текстура (Nearest — пиксель-арт, как игровой map-слой).
@@ -128,6 +128,7 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         egui,
         input,
         gfx,
+        assets,
         tile_pixels,
         registry,
         editor,
@@ -137,6 +138,7 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
     let mut rest = EditorCtx {
         gfx,
         input,
+        assets,
         tile_pixels,
         registry,
         editor,
@@ -177,6 +179,7 @@ struct ScreenState {
 struct EditorCtx<'a> {
     gfx: &'a mut crate::gfx::Gfx,
     input: &'a crate::ui::InputState,
+    assets: &'a crate::assets::Assets,
     tile_pixels: &'a [image::RgbaImage],
     registry: &'a mut dt_lib::registry::GameInfo,
     editor: &'a mut EditorUi,
@@ -188,6 +191,7 @@ impl<'a> EditorCtx<'a> {
         EditorCtx {
             gfx: ctx.gfx,
             input: ctx.input,
+            assets: ctx.assets,
             tile_pixels: ctx.tile_pixels,
             registry: ctx.registry,
             editor: ctx.editor,

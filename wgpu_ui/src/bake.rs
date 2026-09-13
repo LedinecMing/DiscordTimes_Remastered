@@ -340,7 +340,15 @@ pub fn bake_map_textures(
 
 /// Тайловый слой карты РЕДАКТОРА: те же tile_pixels/BlendMode-наплывы, что в
 /// игре, но запекание выполняет вызывающий (editor_view) в свой RT.
-pub fn draw_editor_tiles(gfx: &mut Gfx, tilemap: &TileMap<usize>, tile_pixels: &[image::RgbaImage]) {
+pub fn draw_editor_tiles(
+    gfx: &mut Gfx,
+    assets: &crate::assets::Assets,
+    tilemap: &TileMap<usize>,
+    tile_pixels: &[image::RgbaImage],
+) {
+    // Базовые спрайты — обязательный слой (без него пустая карта = пустой RT),
+    // затем наплывы Rounded — как в игре (bake_map_textures).
+    draw_tiles(gfx, assets, tilemap);
     let n = draw_blend_overlays(gfx, tilemap, tile_pixels, BlendMode::Rounded);
     let _ = n;
 }
