@@ -177,7 +177,7 @@ impl EguiLayer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
     ) {
-        let Some(full_output) = self.pending_output.take() else {
+        let Some(mut full_output) = self.pending_output.take() else {
             return;
         };
         let screen = self
@@ -194,6 +194,9 @@ impl EguiLayer {
                 self.renderer.update_texture(device, queue, *id, image_delta);
             }
         }
+        // epaint 0.36: применённые дельты требуют clear() — иначе Drop
+        // паникует («Dropped TexturesDelta with N unapplied deltas»).
+        full_output.textures_delta.clear();
         let primitives = self
             .ctx
             .tessellate(full_output.shapes, screen_descriptor.pixels_per_point);
@@ -209,6 +212,30 @@ impl EguiLayer {
     pub fn render(&mut self, render_pass: &mut wgpu::RenderPass<'static>) {
         self.renderer
             .render(render_pass, &self.primitives, &self.screen_descriptor);
+    }
+
+    /// Зарегистрировать RT-текстуру игры как нативную текстуру egui
+    /// (zero-copy: egui сэмплит тот же GPU-объект; Bgra8Unorm-вью —
+    /// совместимо с Float{filterable:true} bind group layout).
+    pub fn register_native_texture(
+        &mut self,
+        device: &wgpu::Device,
+        view: &wgpu::TextureView,
+        filter: wgpu::FilterMode,
+    ) -> egui::TextureId {
+        self.renderer.register_native_texture(device, view, filter)
+    }
+
+    /// Перепривязать ранее выданный id к новому TextureView (RT пересоздан).
+    pub fn update_native_texture(
+        &mut self,
+        device: &wgpu::Device,
+        view: &wgpu::TextureView,
+        filter: wgpu::FilterMode,
+        id: egui::TextureId,
+    ) {
+        self.renderer
+            .update_egui_texture_from_wgpu_texture(device, view, filter, id);
     }
 
     /// Освободить текстуры egui после render (вызывать в конце кадра).

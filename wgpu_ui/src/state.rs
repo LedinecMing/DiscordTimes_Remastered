@@ -158,8 +158,10 @@ pub struct EditorUi {
     pub history: editor_core::CommandHistory,
     pub state: editor_core::EditorState,
     pub tool: editor_core::Tool,
-    /// Запечённая карта (единый bake-путь игры): TexId RT-текстуры.
-    pub baked: Option<TexId>,
+    /// Запечка завершена (RT залит, egui-текстура привязана).
+    pub baked: bool,
+    /// Нативная egui-текстура запечённой RT (zero-copy сэмпл GPU-объекта).
+    pub egui_tex: Option<egui::TextureId>,
     /// RT, в который запекается карта редактора.
     pub rt: Option<crate::gfx::Rt>,
     /// Камера канваса (пан/зум — как у игровой карты).
@@ -198,7 +200,8 @@ impl Default for EditorUi {
             history: editor_core::CommandHistory::new(),
             state: editor_core::EditorState::new(editor_core::MapProject::new(50, 0)),
             tool: editor_core::Tool::default(),
-            baked: None,
+            baked: false,
+            egui_tex: None,
             rt: None,
             cam: crate::camera::Camera::from_display_rect(
                 0.,

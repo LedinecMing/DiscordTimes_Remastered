@@ -455,6 +455,12 @@ impl Gfx {
         TexId(id)
     }
 
+    /// View RT-текстуры (для нативной регистрации в egui: сэмплирование
+    /// того же GPU-объекта — zero-copy, без readback'а).
+    pub fn rt_view(&self, rt: &Rt) -> wgpu::TextureView {
+        self.rts[rt.index].view.clone()
+    }
+
     pub fn begin_frame(&mut self) {
         self.passes.clear();
         self.current.verts.clear();
@@ -580,6 +586,115 @@ impl Gfx {
         // Пасс просто закрывается; следующий begin_pass откроет новый.
     }
 
+    /// Сабмит ТОЛЬКО RT-пассов (offscreen-запечка) без экрана/present:
+    /// для редактора — запечка карты должна записаться до egui-кадра,
+    /// а экранный кадр в этом же кадре ещё рисуется (end_frame далее).
+    pub fn submit_rt_passes(&mut self) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        // current (незакрытый) пасс мог быть открыт RT-запеком — закрываем.
+        if let Target::Rt(_) = self.current.target {
+            let finished = std::mem::replace(
+                &mut self.current,
+                Self::new_pass(&self.device, &self.cam_layout, Target::Screen, Some(BLACK), [0.; 4]),
+            );
+            self.passes.push(finished);
+        }
+        let mut i = 0;
+        while i < self.passes.len() {
+            let is_rt = matches!(self.passes[i].target, Target::Rt(_));
+            // Пустой пасс без clear — no-op. С clear — RT всё равно чистится
+            // (симметрично end_frame).
+            if !is_rt || (self.passes[i].verts.is_empty() && self.passes[i].clear.is_none()) {
+                i += 1;
+                continue;
+            }
+            let pass = self.passes.remove(i);
+            let Target::Rt(idx) = pass.target else { unreachable!() };
+            let view = self.rts[idx].view.clone();
+            let has_geometry = !pass.verts.is_empty();
+            let (vbuf, ibuf) = if has_geometry {
+                (
+                    Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: None,
+                        contents: bytemuck::cast_slice(&pass.verts),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    })),
+                    Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: None,
+                        contents: bytemuck::cast_slice(&pass.idx),
+                        usage: wgpu::BufferUsages::INDEX,
+                    })),
+                )
+            } else {
+                (None, None)
+            };
+            let cam_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&pass.camera),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let cam_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.cam_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: cam_buf.as_entire_binding(),
+                }],
+            });
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("rt-submit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: match pass.clear {
+                            Some(c) => wgpu::LoadOp::Clear(wgpu::Color {
+                                r: c[0] as f64, g: c[1] as f64, b: c[2] as f64, a: c[3] as f64,
+                            }),
+                            None => wgpu::LoadOp::Load,
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            rpass.set_pipeline(&self.pipeline);
+            rpass.set_bind_group(0, &cam_bind, &[]);
+            if has_geometry {
+                rpass.set_vertex_buffer(0, vbuf.expect("geometry").slice(..));
+                rpass.set_index_buffer(ibuf.expect("geometry").slice(..), wgpu::IndexFormat::Uint32);
+            }
+            for run in &pass.runs {
+                if run.count == 0 {
+                    continue;
+                }
+                rpass.set_bind_group(1, &self.textures[run.tex.0 as usize].bind, &[]);
+                rpass.draw_indexed(run.first..run.first + run.count, 0, 0..1);
+            }
+            drop(rpass);
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+
+    /// Запросить surface-текстуру кадра: Success/Suboptimal — кадр;
+    /// Outdated — реконфигурация поверхности; Timeout/Occluded/Lost/
+    /// Validation — кадр пропускается (None).
+    fn acquire_surface_texture(&mut self) -> Option<wgpu::SurfaceTexture> {
+        match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t) => Some(t),
+            wgpu::CurrentSurfaceTexture::Suboptimal(t) => Some(t),
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&self.device, &self.config);
+                None
+            }
+            _ => None,
+        }
+    }
+
     pub fn end_frame(&mut self) {
         let finished = std::mem::replace(
             &mut self.current,
@@ -589,38 +704,47 @@ impl Gfx {
 
         let mut frame: Option<wgpu::SurfaceTexture> = None;
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        for pass in self.passes.drain(..) {
-            if pass.verts.is_empty() {
+        // Собираем пассы в локальный вектор: acquire_surface_texture берёт
+        // &mut self и не может жить под drain-заимствованием.
+        let passes: Vec<Pass> = self.passes.drain(..).collect();
+        for pass in passes {
+            // Пустой пасс без clear — no-op (пропуск). Пустой С clear — цель
+            // всё равно чистится: у редактора единственный нативный пасс —
+            // фон (clear WHITE) без квадратов, весь UI рисует egui. Без его
+            // выполнения surface-текстура не запрашивается → deferred_frame =
+            // None → render_egui молча выходит: окно прозрачное (пустой present).
+            if pass.verts.is_empty() && pass.clear.is_none() {
                 continue;
             }
             let (view, is_screen) = match pass.target {
                 Target::Rt(i) => (self.rts[i].view.clone(), false),
                 Target::Screen => {
                     if frame.is_none() {
-                        frame = Some(match self.surface.get_current_texture() {
-                            wgpu::CurrentSurfaceTexture::Success(t) => t,
-                            wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-                            wgpu::CurrentSurfaceTexture::Outdated => {
-                                self.surface.configure(&self.device, &self.config);
-                                return;
-                            }
-                            // Timeout/Occluded/Lost/Validation: кадр пропускается.
-                            _ => return,
-                        });
+                        let Some(tex) = self.acquire_surface_texture() else {
+                            return;
+                        };
+                        frame = Some(tex);
                     }
                     (frame.as_ref().unwrap().texture.create_view(&Default::default()), true)
                 }
             };
-            let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&pass.verts),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            let ibuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&pass.idx),
-                usage: wgpu::BufferUsages::INDEX,
-            });
+            let has_geometry = !pass.verts.is_empty();
+            let (vbuf, ibuf) = if has_geometry {
+                (
+                    Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: None,
+                        contents: bytemuck::cast_slice(&pass.verts),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    })),
+                    Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: None,
+                        contents: bytemuck::cast_slice(&pass.idx),
+                        usage: wgpu::BufferUsages::INDEX,
+                    })),
+                )
+            } else {
+                (None, None)
+            };
             let cam_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("cam"),
                 size: 16,
@@ -676,6 +800,33 @@ impl Gfx {
             }
             drop(rpass);
             let _ = is_screen;
+        }
+        // egui рисует в кадр — кадр обязан существовать даже если ни один
+        // нативный пасс не выполнен (редактор: весь контент — egui; фон —
+        // чистый чёрный, как clear экранного пасса по умолчанию).
+        if self.egui_pending && frame.is_none() {
+            let Some(tex) = self.acquire_surface_texture() else {
+                return;
+            };
+            let view = tex.texture.create_view(&Default::default());
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("egui-backdrop"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            drop(rpass);
+            frame = Some(tex);
         }
         self.queue.submit([encoder.finish()]);
         if self.egui_pending {

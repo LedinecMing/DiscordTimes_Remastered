@@ -1,21 +1,21 @@
 //! Экран «Редактор карт» (Menu::Editor): egui-оболочка над editor-core.
 //!
 //! ЕДИНЫЙ РЕНДЕР КАРТЫ: запекание идёт тем же bake-путём wgpu_ui, что и в
-//! игре (tile_pixels + registry + GameMap → offscreen RT → TexId), а RT
-//! рисуется в egui-канвас как текстура. Никакого второго софтверного рендера.
+//! игре (tile_pixels + registry + GameMap → offscreen RT), а RT
+//! регистрируется как нативная egui-текстура и рисуется в канвас.
+//! Никакого второго софтверного рендера и GPU→CPU readback.
 //!
 //! Слои экрана: top bar (File/Edit/Lint), канвас с зумом/паном/ховом,
 //! левая панель инструментов + палитра тайлов, статус-бар.
 
 use crate::camera::{default_camera, Camera};
-use crate::gfx::{colors, Target, TexId};
+use crate::gfx::{colors, Target};
 use crate::state::{EditorUi, Menu, SIZE};
 use crate::Ctx;
 use editor_core::command::{PaintTile, PlaceArmy, PlaceBuilding, PlaceDeco};
 use editor_core::CommandResult;
 use egui::{
-    Align2, Color32, ColorImage, FontId, Frame, Layout, RichText, Sense, Stroke, TextureHandle,
-    TextureOptions, Ui, Vec2,
+    Align2, Color32, FontId, Frame, Layout, RichText, Sense, Stroke, Ui, Vec2,
 };
 use winit::keyboard::KeyCode;
 
@@ -26,8 +26,19 @@ const ASSETS_TERRAIN: &str = "assets/Terrain";
 pub fn editor_screen(ctx: &mut Ctx) -> bool {
     // Хоткеи до UI: Ctrl+Z undo, Ctrl+Shift+Z redo (Единая точка правды).
     handle_hotkeys(ctx);
-    // Запек по грязному флагу: project.GameMap → bake.rs → RT (игровой путь).
-    rebake_if_dirty(&mut EditorCtx::split(ctx));
+    // Запек по грязному флагу: project.GameMap → bake.rs → RT (игровой путь);
+    // RT регистрируется как нативная egui-текстура (zero-copy, без readback).
+    {
+        let Ctx {
+            gfx,
+            assets,
+            tile_pixels,
+            editor,
+            egui,
+            ..
+        } = ctx;
+        rebake_if_dirty(gfx, assets, tile_pixels, editor, &mut **egui);
+    }
     let keep_open = draw_editor(ctx);
     if !keep_open {
         ctx.ui.main = Menu::Main;
@@ -66,25 +77,29 @@ fn handle_hotkeys(ctx: &mut Ctx) {
     }
 }
 
-/// Запек карты редактора в RT тем же кодом, что и игра (bake.rs).
-fn rebake_if_dirty(ectx: &mut EditorCtx) {
-    if !ectx.editor.bake_dirty {
+/// Запек карты редактора в RT тем же кодом, что и игра (bake.rs), и
+/// привязка RT как нативной egui-текстуры (сэмпл того же GPU-объекта).
+fn rebake_if_dirty(
+    gfx: &mut crate::gfx::Gfx,
+    assets: &crate::assets::Assets,
+    tile_pixels: &[image::RgbaImage],
+    editor: &mut EditorUi,
+    egui: &mut crate::egui_layer::EguiLayer,
+) {
+    if !editor.bake_dirty {
         return;
     }
-    let size = ectx.editor.project.size();
+    let size = editor.project.size();
     // RT создаётся лениво под размер карты (32x22 на тайл, как в игре).
-    // Rt не Clone — rebake берёт его через &mut Gfx borrow split.
-    let need_create = ectx.editor.rt.is_none();
-    if need_create {
-        // Временно вынимаем Rt из EditorUi, чтобы одолжить gfx раздельно.
-        ectx.editor.rt = Some(ectx.gfx.create_rt(
+    let mut rt_recreated = false;
+    if editor.rt.is_none() {
+        editor.rt = Some(gfx.create_rt(
             (SIZE.0 * size as f32) as u32,
             (SIZE.1 * size as f32) as u32,
         ));
+        rt_recreated = true;
     }
-    // bake+tex: заново кладём rt на место и рисуем через сырой указатель.
-    // borrow split: rt хранится в EditorUi, gfx в Ctx — берём через локал.
-    let rt_index = ectx.editor.rt.as_ref().expect("rt just created").index;
+    let rt_index = editor.rt.as_ref().expect("rt just created").index;
     {
         // Bake в RT по индексу (единый игровой путь).
         let cam = crate::camera::Camera::from_display_rect(
@@ -93,20 +108,43 @@ fn rebake_if_dirty(ectx: &mut EditorCtx) {
             SIZE.0 * size as f32,
             -SIZE.1 * size as f32,
         );
-        ectx.gfx.begin_pass(crate::gfx::Target::Rt(rt_index), Some([0., 0., 0., 0.]), &cam);
-        crate::bake::draw_editor_tiles(ectx.gfx, ectx.assets, &ectx.editor.project.map.tilemap, &ectx.tile_pixels);
-        ectx.gfx.end_pass();
+        gfx.begin_pass(crate::gfx::Target::Rt(rt_index), Some([0., 0., 0., 0.]), &cam);
+        crate::bake::draw_editor_tiles(
+            gfx,
+            assets,
+            &editor.project.map.tilemap,
+            tile_pixels,
+        );
+        gfx.end_pass();
     }
-    // RT как текстура (Nearest — пиксель-арт, как игровой map-слой).
-    // Rt — простой {index,size}: восстанавливаем по индексу слота.
-    let rt_for_tex = crate::gfx::Rt { index: rt_index, size: ((SIZE.0 * size as f32) as u32, (SIZE.1 * size as f32) as u32) };
-    let tex = ectx.gfx.rt_as_texture(&rt_for_tex, crate::gfx::Filter::Nearest);
-    // Сабмит запечённых пассов немедленно (как init-запек в lib.rs:433):
-    // иначе RT пишется в end_frame-encoder'е ПОСЛЕ egui-encoder'а, а egui
-    // читает RT-текстуру до записи — канвас получает мусор/пустоту.
-    ectx.gfx.end_frame();
-    ectx.editor.baked = Some(tex);
-    ectx.editor.bake_dirty = false;
+    let view = gfx.rt_view(&editor.rt.as_ref().expect("rt just created"));
+    match editor.egui_tex {
+        Some(id) if !rt_recreated => {
+            // Тот же RT-объект: bind group уже смотрит на живой view,
+            // перерегистрация не нужна (данные обновляются на GPU).
+        }
+        Some(id) => egui.update_native_texture(
+            &gfx.device,
+            &view,
+            wgpu::FilterMode::Nearest,
+            id,
+        ),
+        None => {
+            editor.egui_tex = Some(egui.register_native_texture(
+                &gfx.device,
+                &view,
+                wgpu::FilterMode::Nearest,
+            ));
+        }
+    }
+    drop(view);
+    // Сабмит ТОЛЬКО RT-пассов (запечка), БЕЗ экрана: end_frame заберёт
+    // deferred_frame/презент — а экранный кадр этого же кадра ещё рисуется
+    // (draw_editor + egui поверх). Это была причина чёрного канваса и
+    // «недошедшего» egui: двойной end_frame ломал конвейер кадра.
+    gfx.submit_rt_passes();
+    editor.baked = true;
+    editor.bake_dirty = false;
 }
 
 fn draw_editor(ctx: &mut Ctx) -> bool {
@@ -149,6 +187,9 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         keep_open: true,
         actions: Actions { click_tile: None },
     };
+    if std::env::var("DT_EGUI_DEBUG").is_ok() {
+        eprintln!("egui: run() start");
+    }
     egui_layer.run(input, 1.0, |ui| {
         ui.ctx().all_styles_mut(|style| {
             style.visuals.panel_fill = Color32::from_rgb(24, 24, 28);
@@ -184,20 +225,6 @@ struct EditorCtx<'a> {
     registry: &'a mut dt_lib::registry::GameInfo,
     editor: &'a mut EditorUi,
     ui: &'a mut crate::state::UiState,
-}
-
-impl<'a> EditorCtx<'a> {
-    fn split(ctx: &'a mut Ctx) -> EditorCtx<'a> {
-        EditorCtx {
-            gfx: ctx.gfx,
-            input: ctx.input,
-            assets: ctx.assets,
-            tile_pixels: ctx.tile_pixels,
-            registry: ctx.registry,
-            editor: ctx.editor,
-            ui: ctx.ui,
-        }
-    }
 }
 
 /// Действия, собранные до egui-панелей (клики по канвасу, кнопки).
@@ -304,10 +331,11 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
 
 /// Канвас: RT-текстура карты, зум/пан колесом и ПКМ-драг, ховер, клик.
 fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
-    let Some(tex) = ectx.editor.baked else {
+    if !ectx.editor.baked {
         ui.label("Запекание…");
         return None;
-    };
+    }
+    let tex_id = ectx.editor.egui_tex.expect("baked => egui_tex зарегистрирован");
     let size = ectx.editor.project.size();
     let world_w = SIZE.0 * size as f32;
     let world_h = SIZE.1 * size as f32;
@@ -333,14 +361,13 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             cam_target[1] + (p.y - rect.center().y) / zoom,
         ]
     };
-    // Текстура: egui::Image из TexId RT. egui хранит текстуры по имени;
-    // регистрируем RT-текстуру один раз на размер и обновляем при запеке.
-    let handle = register_baked_texture(ui, ectx, tex, world_w as usize, world_h as usize);
+    // Текстура: нативная egui-текстура того же RT (zero-copy, без readback);
+    // регистрируется/обновляется в rebake_if_dirty при запеке.
     let draw_min = world_to_screen([0., 0.]);
     let draw_max = world_to_screen([world_w, world_h]);
     let draw_rect = egui::Rect::from_min_max(draw_min, draw_max);
     painter.image(
-        handle.id(),
+        tex_id,
         draw_rect,
         egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
         Color32::WHITE,
@@ -433,24 +460,6 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     clicked
 }
 
-/// Регистрирует запечённую RT-текстуру в egui (по TexId).
-/// egui не знает про TexId: копируем RT в egui-текстуру при каждом запеке
-/// (обновление только по bake_dirty — не в кадре).
-fn register_baked_texture(
-    ui: &mut Ui,
-    ectx: &mut EditorCtx,
-    _tex: TexId,
-    w: usize,
-    h: usize,
-) -> TextureHandle {
-    // Читаем пиксели RT (read_rt) и кладём в egui-текстуру.
-    let rt = ectx.editor.rt.as_ref().expect("rt exists after bake");
-    let rgba = ectx.gfx.read_rt(rt);
-    let image = ColorImage::from_rgba_unmultiplied([w, h], &rgba);
-    let handle = ui.ctx().load_texture("editor_map_baked", image, TextureOptions::NEAREST);
-    handle
-}
-
 /// Применить активный инструмент: построить команду и выполнить.
 fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
     let editor = &mut ectx.editor;
@@ -495,7 +504,9 @@ fn new_project(ectx: &mut EditorCtx, size: usize) {
     editor.cam = Camera::from_display_rect(0., SIZE.1 * size as f32, SIZE.0 * size as f32, -SIZE.1 * size as f32);
     // Размер карты изменился — пересоздать RT.
     editor.rt = None;
-    editor.baked = None;
+    editor.baked = false;
+    // egui-текстура перепривязается к новому RT при следующем запеке
+    // (rt_recreated → update_native_texture).
     editor.status = format!("Новая карта {size}×{size}");
 }
 
@@ -524,7 +535,9 @@ fn open_project(ectx: &mut EditorCtx, path: std::path::PathBuf) {
             editor.bake_dirty = true;
             editor.selected = None;
             editor.rt = None;
-            editor.baked = None;
+            editor.baked = false;
+            // egui-текстура перепривязается к новому RT при следующем запеке
+            // (rt_recreated → update_native_texture).
             editor.cam = Camera::from_display_rect(
                 0.,
                 SIZE.1 * size as f32,

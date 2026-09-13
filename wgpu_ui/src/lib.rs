@@ -241,6 +241,9 @@ impl App {
         }
         self.input.end_frame();
         self.gfx.as_mut().unwrap().end_frame();
+        if std::env::var("DT_EGUI_DEBUG").is_ok() {
+            eprintln!("egui: finish() start, had_frame={}", egui_had_frame);
+        }
         if let (Some(egui), Some(gfx)) = (self.egui.as_mut(), self.gfx.as_mut()) {
             let mut encoder = gfx
                 .device
@@ -448,6 +451,12 @@ impl ApplicationHandler for App {
         self.gfx = Some(gfx);
         self.text = Some(text);
         self.state = Some(state);
+        // DT_EGUI_DEBUG=1: пропустить игру — первый экран сразу редактор
+        // (диагностика связки egui↔wgpu в изоляции от экранов игры).
+        if std::env::var("DT_EGUI_DEBUG").is_ok() {
+            self.state.as_mut().unwrap().ui.main = state::Menu::Editor;
+            eprintln!("DT_EGUI_DEBUG: старт с Menu::Editor (без игровых экранов)");
+        }
         self.window = Some(window);
         self.last_frame = std::time::Instant::now();
     }
