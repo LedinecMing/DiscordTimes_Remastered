@@ -98,7 +98,27 @@ pub struct Skin {
     pub text_color: [f32; 4],
     pub text_hovered: [f32; 4],
     pub button_tex: TexId,
+    /// Текстура нажатой кнопки (hover + зажатая ЛКМ).
+    pub button_down_tex: TexId,
     pub window_tex: TexId,
+    /// Декор окна в стиле ассетов Window (окно строений/боя); None — plain window_tex.
+    pub window_decor: Option<WindowDecor>,
+    /// Крест-закрытие (Up/Down) и зелёный крест подтверждения.
+    pub close_up: TexId,
+    pub close_down: TexId,
+    pub confirm_tex: TexId,
+}
+
+/// Набор текстур декоративного окна: плитка фона (Win-marble / Win-red 480x480),
+/// орнамент-полоса краёв (WinLong 1024x64) и углы (Corner_Frame-* 34x34).
+#[derive(Clone, Copy)]
+pub struct WindowDecor {
+    pub tile: TexId,
+    pub band: TexId,
+    pub corner_lu: TexId,
+    pub corner_ru: TexId,
+    pub corner_ld: TexId,
+    pub corner_rd: TexId,
 }
 
 // ---------------- Значения виджетов ----------------
@@ -267,8 +287,13 @@ impl<'a> UiCtx<'a> {
     fn button_rect(&mut self, x: f32, y: f32, w: f32, h: f32, text: &str) -> bool {
         let r = Rect::new(x, y, w, h);
         let hovered = self.is_hovered(r);
-        self.gfx
-            .draw_texture(self.skin.button_tex, x, y, w, h, colors::WHITE);
+        // Up обычно; Down при hover + зажатой ЛКМ (порт нажатия Btn1Up/Btn1Down).
+        let tex = if hovered && self.input.mouse_button_down(0) {
+            self.skin.button_down_tex
+        } else {
+            self.skin.button_tex
+        };
+        self.gfx.draw_texture(tex, x, y, w, h, colors::WHITE);
         let color = if hovered {
             self.skin.text_hovered
         } else {
@@ -285,6 +310,15 @@ impl<'a> UiCtx<'a> {
             1.,
             color,
         );
+        self.is_clicked(r)
+    }
+
+    /// Текстурная кнопка Up/Down (крест-закрытие и т.п.): картинка без надписи.
+    pub fn tex_button_ud(&mut self, up: TexId, down: TexId, x: f32, y: f32, size: f32) -> bool {
+        let r = Rect::new(x, y, size, size);
+        let hovered = self.is_hovered(r);
+        let tex = if hovered && self.input.mouse_button_down(0) { down } else { up };
+        self.gfx.draw_texture(tex, x, y, size, size, colors::WHITE);
         self.is_clicked(r)
     }
 
@@ -460,9 +494,41 @@ impl<'a> UiCtx<'a> {
         self.gfx.set_scissor(0, 0, u32::MAX, u32::MAX);
     }
 
+    /// Фон окна: при Skin.window_decor — плитка (Win-marble/Win-red), орнаментная
+    /// полоса WinLong по верх/низ краям и углы Corner_Frame; иначе plain window_tex.
+    fn draw_window_bg(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let Some(d) = self.skin.window_decor else {
+            self.gfx
+                .draw_texture(self.skin.window_tex, x, y, w, h, colors::WHITE);
+            return;
+        };
+        // Плитка: тайлим 480x480 кусками (растяжение замылило бы мрамор).
+        const TILE: f32 = 480.;
+        let mut ty = y;
+        while ty < y + h {
+            let th = TILE.min(y + h - ty);
+            let mut tx = x;
+            while tx < x + w {
+                let tw = TILE.min(x + w - tx);
+                self.gfx.draw_texture(d.tile, tx, ty, tw, th, colors::WHITE);
+                tx += tw;
+            }
+            ty += th;
+        }
+        // Полоса WinLong (1024x64) сверху и снизу, растянутая по ширине окна.
+        const BAND_H: f32 = 44.;
+        self.gfx.draw_texture(d.band, x, y, w, BAND_H, colors::WHITE);
+        self.gfx.draw_texture(d.band, x, y + h - BAND_H, w, BAND_H, colors::WHITE);
+        // Углы Corner_Frame 34x34 поверх полос.
+        const C: f32 = 44.;
+        self.gfx.draw_texture(d.corner_lu, x, y, C, C, colors::WHITE);
+        self.gfx.draw_texture(d.corner_ru, x + w - C, y, C, C, colors::WHITE);
+        self.gfx.draw_texture(d.corner_ld, x, y + h - C, C, C, colors::WHITE);
+        self.gfx.draw_texture(d.corner_rd, x + w - C, y + h - C, C, C, colors::WHITE);
+    }
+
     pub fn window(&mut self, x: f32, y: f32, w: f32, h: f32, f: impl FnOnce(&mut Self)) {
-        self.gfx
-            .draw_texture(self.skin.window_tex, x, y, w, h, colors::WHITE);
+        self.draw_window_bg(x, y, w, h);
         // Содержимое окна — в координатах относительно окна (как в macroquad).
         let prev_origin = self.origin;
         self.origin = [x, y];

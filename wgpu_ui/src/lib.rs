@@ -19,7 +19,7 @@ use gfx::{colors, Gfx, Rt, TexId};
 use state::{Game, Menu, State};
 use std::sync::{Arc, LazyLock};
 use text::TextRenderer;
-use ui::{InputState, Skin};
+use ui::{InputState, Skin, WindowDecor};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -41,10 +41,13 @@ pub fn fps() -> f32 {
 /// Тип карты виджет-состояния (порт ui.get_any/get_bool).
 pub type WidgetMap = ahash::HashMap<u64, ui::Val>;
 
-/// Два скина (порт main_skin/dop_skin, quad_ui main.rs:2164-2230).
+/// Скины (порт main_skin/dop_skin, quad_ui main.rs:2164-2230). building —
+/// окно строений на плитке Win-marble; battle — боевой экран на Win-red.
 pub struct Skins {
     pub main: Skin,
     pub dop: Skin,
+    pub building: Skin,
+    pub battle: Skin,
 }
 
 impl Skins {
@@ -59,24 +62,48 @@ impl Skins {
         let menu = load("Menu.png");
         let paper = load("Paper.png");
         let font = assets.get_font(assets::BENGUIAT);
-        Skins {
-            main: Skin {
-                font,
-                font_size: 32,
-                text_color: colors::WHITE,
-                text_hovered: colors::DARKBLUE,
-                button_tex: button,
-                window_tex: menu,
-            },
-            dop: Skin {
-                font,
-                font_size: 32,
-                text_color: colors::BLACK,
-                text_hovered: colors::DARKBLUE,
-                button_tex: button,
-                window_tex: paper,
-            },
-        }
+        // Кнопки/кресты/декор из оригинальных ассетов Window.
+        let btn_up = load("Btn1Up.png");
+        let btn_down = load("Btn1Down.png");
+        let close_up = load("CloseButtonRed-Up.png");
+        let close_down = load("CloseButtonRed-Down2.png");
+        let confirm = load("CloseButtonGreen-Up.png");
+        let marble = load("Win-marble.png");
+        let red = load("Win-red.png");
+        let band = load("WinLong.png");
+        let decor = WindowDecor {
+            tile: marble,
+            band,
+            corner_lu: load("Corner_Frame-LU.png"),
+            corner_ru: load("Corner_Frame-RU.png"),
+            corner_ld: load("Corner_Frame-LD.png"),
+            corner_rd: load("Corner_Frame-RD.png"),
+        };
+        let red_decor = WindowDecor { tile: red, ..decor };
+        let base = Skin {
+            font,
+            font_size: 32,
+            text_color: colors::WHITE,
+            text_hovered: colors::DARKBLUE,
+            button_tex: button,
+            button_down_tex: button,
+            window_tex: menu,
+            window_decor: None,
+            close_up,
+            close_down,
+            confirm_tex: confirm,
+        };
+        let dop = Skin { text_color: colors::BLACK, window_tex: paper, ..base.clone() };
+        // Вкладки/кнопки строений — Btn1 (старый button.png остался для прочих экранов).
+        let mut building = base.clone();
+        building.button_tex = btn_up;
+        building.button_down_tex = btn_down;
+        building.window_decor = Some(decor);
+        let mut battle = base.clone();
+        battle.button_tex = btn_up;
+        battle.button_down_tex = btn_down;
+        battle.window_decor = Some(red_decor);
+        Skins { main: base, dop, building, battle }
     }
 }
 

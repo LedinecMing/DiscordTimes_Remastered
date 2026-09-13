@@ -4,7 +4,9 @@
 // Снапшоты данных — до UiCtx (короткие guard'ы SendMut); мутации игры — в
 // apply() после отрисовки; ввод карты не читается (отдельный экран).
 use crate::gfx::{colors, Target, TexId};
-use crate::state::{get_unit_info_texture, get_unit_texture, BuildingTab, Menu, SIZE};
+use crate::state::{
+    get_unit_info_texture, get_unit_texture, BuildingTab, MapRenderSettings, Menu, SIZE,
+};
 use crate::ui::{Rect, UiCtx};
 use crate::Ctx;
 use dt_lib::battle::army::Army;
@@ -198,7 +200,7 @@ pub fn building_screen(ctx: &mut Ctx) -> bool {
     let known_spell_names: Vec<String> = army
         .spells
         .iter()
-        .map(|id| ctx.registry.effects[*id].name.clone())
+        .filter_map(|id| ctx.registry.effects.get(*id).map(|e| e.name.clone()))
         .collect();
 
     let hires: Vec<HireSnap> = building
@@ -207,33 +209,35 @@ pub fn building_screen(ctx: &mut Ctx) -> bool {
         .map(|rec| {
             rec.units
                 .iter()
-                .map(|recruit| {
-                    let info = &ctx.registry.units[recruit.unit];
-                    HireSnap {
+                .filter_map(|recruit| {
+                    let info = ctx.registry.units.get(recruit.unit)?;
+                    Some(HireSnap {
                         unit: recruit.unit,
                         count: recruit.count,
                         price: info.cost_hire,
                         name: info.name.clone(),
                         portrait: get_unit_info_texture(ctx.assets, info),
                         detail: hire_detail_lines(info),
-                    }
+                    })
                 })
                 .collect()
         })
         .unwrap_or_default();
 
     let known_ids = army.spells.clone();
+    // registry.effects может быть пуст на картах с грязными id спеллов —
+    // индексация [] паниковала (len 0, index 4). Только registry.get + skip.
     let spells: Vec<SpellSnap> = building
         .spells_to_learn
         .iter()
-        .map(|spell| {
-            let info = &ctx.registry.effects[*spell];
-            SpellSnap {
+        .filter_map(|spell| {
+            let info = ctx.registry.effects.get(*spell)?;
+            Some(SpellSnap {
                 spell: *spell,
                 name: info.name.clone(),
                 desc: info.desc.clone(),
                 learned: known_ids.contains(spell),
-            }
+            })
         })
         .collect();
 
@@ -244,14 +248,41 @@ pub fn building_screen(ctx: &mut Ctx) -> bool {
         .filter_map(|e| ctx.game.executor.events.get(*e).and_then(|ev| ev.message.clone()))
         .collect();
 
-    // Текстуры-заглушки и кнопки (снапшот до UiCtx).
+    // Текстуры полей отряда (wb1 мечи=Front, wb2 арбалет=Back, wb3 шатёр=Reserve)
+    // и кнопки (снапшот до UiCtx).
     let placeholder: [TexId; 3] = [
-        ctx.assets.get("backyard.png"),
-        ctx.assets.get("front.png"),
-        ctx.assets.get("tent.png"),
+        ctx.assets.get("wb2.png"), // Field::Back
+        ctx.assets.get("wb1.png"), // Field::Front
+        ctx.assets.get("wb3.png"), // Field::Reserve
     ];
+    let slot_deco = ctx.assets.get("DownCorner_alpha.png");
     let buttonblue = ctx.assets.get("buttonblue.png");
     let paper = ctx.assets.get("Paper.png");
+    let quest_border = ctx.assets.get("QuestBorder.png");
+    // Картинка строения по имени объекта из реестра (building.id → ObjectInfo.name).
+    let building_art: TexId = {
+        let obj_name = ctx
+            .registry
+            .objects
+            .inner
+            .iter()
+            .find(|obj| obj.index == building.id)
+            .map(|obj| obj.name.clone())
+            .unwrap_or_default();
+        let prefix = obj_name.trim_end_matches(|c: char| c.is_ascii_digit());
+        let art = match prefix {
+            "Town" => "S_Town.png",
+            "Village" => "S_Village.png",
+            "Castle" => "S_Castle.png",
+            "Market" => "S_Market.png",
+            "Tavern" => "S_Tavern.png",
+            "Church" => "S_Church.png",
+            "Port" => "S_Shipyard.png",
+            "Ruins" => "S_Ruin.png",
+            _ => "S_Town.png",
+        };
+        ctx.assets.get(art)
+    };
 
     let state_pick_buy = ctx.building_ui.market_pick.clone();
     let state_pick_sell = ctx.building_ui.player_pick.clone();
@@ -262,13 +293,19 @@ pub fn building_screen(ctx: &mut Ctx) -> bool {
     let mut actions = Actions::default();
     {
         let input = ctx.input;
-        let mut ui = UiCtx::new(ctx.gfx, ctx.text, input, &ctx.skins.main, ctx.widgets);
+        let mut ui = UiCtx::new(ctx.gfx, ctx.text, input, &ctx.skins.building, ctx.widgets);
         ui.window(WINDOW_X, WINDOW_Y, WINDOW_W, WINDOW_H, |mut ui| {
             ui.label(Some([WINDOW_W / 2. - 160., 10.]), &building.name);
-            if ui.button(Some([WINDOW_W - 60., 4.]), "X") {
+            // Крест-закрытие CloseButtonRed (Up/Down) в правом верхнем углу.
+            if ui.tex_button_ud(
+                ui.skin.close_up,
+                ui.skin.close_down,
+                WINDOW_W - 40.,
+                8.,
+                28.,
+            ) {
                 actions.close = true;
             }
-            // Левая колонка: вкладки по возможностям строения.
             let mut y = 80.;
             if tab != BuildingTab::Main
                 && ui.button_sized([20., y], [TAB_W - 40., 50.], "Главный зал")
@@ -309,7 +346,9 @@ pub fn building_screen(ctx: &mut Ctx) -> bool {
                 colors::DARKGRAY,
             );
             match tab {
-                BuildingTab::Main => draw_main_tab(&mut ui, paper, &rumors),
+                BuildingTab::Main => {
+                    draw_main_tab(&mut ui, paper, &rumors, quest_border, building_art)
+                }
                 BuildingTab::Market => draw_market_tab(
                     &mut ui,
                     &market_cards,
@@ -332,6 +371,7 @@ pub fn building_screen(ctx: &mut Ctx) -> bool {
                     drag_from,
                     &placeholder,
                     buttonblue,
+                    slot_deco,
                     &mut actions,
                 ),
                 BuildingTab::Spells => {
@@ -381,12 +421,21 @@ fn hire_detail_lines(info: &UnitInfo) -> Vec<String> {
 }
 
 /// Замороженная карта: запечённые слоёй камерой из сохранённых настроек
-/// Menu::Map. Ввод карты не читается совсем.
+/// Menu::Map. Ввод карты не читается совсем. Если настроек нет (вход в строение
+/// не с карты — загрузка/события), рисуем карту с камерой по умолчанию — иначе
+/// под окном остаётся чёрный экран.
 fn draw_map_frozen(ctx: &mut Ctx) {
-    let settings = ctx.map_settings.borrow().clone();
-    let Some(settings) = settings else {
-        return;
-    };
+    let settings = ctx.map_settings.borrow().clone().unwrap_or_else(|| {
+        let mut s = MapRenderSettings::default();
+        // Вписать всю карту в экран (тайл 50px в bake — см. MapRenderSettings::default).
+        s.camera = crate::camera::Camera::from_display_rect(
+            0.,
+            SIZE.1 * 50.,
+            SIZE.0 * 50.,
+            -(SIZE.1 * 50.),
+        );
+        s
+    });
     ctx.gfx
         .begin_pass(Target::Screen, Some(colors::WHITE), &settings.camera);
     let size = ctx.game.executor.gamemap.tilemap.size as u32;
@@ -470,15 +519,22 @@ fn draw_stats_card(
 
 // ---------------- Главное меню строения ----------------
 
-fn draw_main_tab(ui: &mut UiCtx, paper: TexId, rumors: &[String]) {
+fn draw_main_tab(ui: &mut UiCtx, paper: TexId, rumors: &[String], border: TexId, art: TexId) {
     let (x, y, w) = (TAB_W + 20., 70., WINDOW_W - TAB_W - 60.);
-    // Фон-картинка строения (дебаг: Menu.png из assets/Window).
-    ui.gfx.draw_texture(ui.skin.window_tex, x, y, w, 340., colors::WHITE);
-    // Окно слухов и событий: «бумага» + текст.
+    // Картинка строения (S_* 628x290) справа, вписана с сохранением пропорций.
+    let art_w = 500.;
+    let art_h = art_w * 290. / 628.;
+    ui.gfx.draw_texture(art, x + w - art_w, y + 30., art_w, art_h, colors::WHITE);
+    // Окно слухов и событий: бумага с рамкой QuestBorder (верхняя полоса + низ).
     let py = y + 360.;
     let ph = WINDOW_H - py - 60.;
     ui.gfx.draw_texture(paper, x, py, w, ph, colors::WHITE);
-    ui.label(Some([x + 20., py + 16.]), "Слухи и события строения:");
+    // Рамка: полоса 435x52 растянута по ширине, низ — перевёрнута отрисовкой
+    // в нижний край (та же полоса, темнее не нужно — декоративная).
+    const QB_H: f32 = 26.;
+    ui.gfx.draw_texture(border, x, py, w, QB_H, colors::WHITE);
+    ui.gfx.draw_texture(border, x, py + ph - QB_H, w, QB_H, colors::WHITE);
+    ui.label(Some([x + 20., py + QB_H + 12.]), "Слухи и события строения:");
     let text = if rumors.is_empty() {
         "(события строения пока не подключены)".to_string()
     } else {
@@ -487,7 +543,7 @@ fn draw_main_tab(ui: &mut UiCtx, paper: TexId, rumors: &[String]) {
     ui.text.draw_multiline(
         ui.gfx,
         &text,
-        (x + 24., py + 60.),
+        (x + 24., py + QB_H + 52.),
         w - 48.,
         false,
         ui.skin.font,
@@ -512,6 +568,8 @@ fn draw_market_tab(
     let mut tip: Vec<String> = Vec::new();
     // Сетка товаров рынка.
     let mut x = area_x;
+    // Шаг ряда: карточка + подпись цены (2 строки) + зазор — без налезаний.
+    const ROW_STEP: f32 = CARD + 56.;
     let mut y = 120.;
     for (i, card) in market.iter().enumerate() {
         let r = Rect::new(x, y, CARD, CARD);
@@ -539,13 +597,12 @@ fn draw_market_tab(
         x += CARD + 16.;
         if x + CARD > WINDOW_W - 40. {
             x = area_x;
-            y += CARD + 50.;
+            y += ROW_STEP;
         }
     }
-    // Инвентарь игрока.
-    let iy = y + CARD + 60.;
+    // Инвентарь игрока: отступ от последнего ряда товаров (цена + зазор).
+    let iy = y + ROW_STEP + 10.;
     ui.label(Some([area_x, iy - 36.]), "Ваш инвентарь (продажа = 50% стоимости):");
-    x = area_x;
     y = iy + 10.;
     for (i, card) in inventory.iter().enumerate() {
         let r = Rect::new(x, y, CARD, CARD);
@@ -570,11 +627,11 @@ fn draw_market_tab(
         x += CARD + 16.;
         if x + CARD > WINDOW_W - 40. {
             x = area_x;
-            y += CARD + 40.;
+            y += ROW_STEP;
         }
     }
-    // Лог последней сделки.
-    let ly = iy + CARD + 70.;
+    // Лог последней сделки: от последнего ряда инвентаря, не налезает на карточки.
+    let ly = y + ROW_STEP;
     for (i, line) in deal_log.iter().enumerate() {
         ui.label_colored([area_x, ly + i as f32 * 30.], line, colors::DARKGRAY);
     }
@@ -603,6 +660,7 @@ fn draw_recruits_tab(
     drag_from: Option<usize>,
     placeholder: &[TexId; 3],
     buttonblue: TexId,
+    slot_deco: TexId,
     actions: &mut Actions,
 ) {
     let area_x = TAB_W + 30.;
@@ -677,7 +735,8 @@ fn draw_recruits_tab(
         let col = slot % columns;
         let row = slot / columns;
         let x = area_x + col as f32 * (SLOT + 12.);
-        let y = grid_y + row as f32 * (SLOT + 70.);
+        // Шаг строки: слот + декор-орнамент + две строки мини-статов.
+        let y = grid_y + row as f32 * (SLOT + 90.);
         draw_army_slot(
             ui,
             troops,
@@ -689,6 +748,7 @@ fn draw_recruits_tab(
             y,
             placeholder,
             buttonblue,
+            slot_deco,
             drag_from,
             actions,
         );
@@ -725,10 +785,13 @@ fn draw_army_slot(
     y: f32,
     placeholder: &[TexId; 3],
     buttonblue: TexId,
+    slot_deco: TexId,
     drag_from: Option<usize>,
     actions: &mut Actions,
 ) {
     let r = Rect::new(x, y, SLOT, SLOT);
+    // Декор под слотом: орнамент DownCorner_alpha растянут по ширине слота.
+    ui.gfx.draw_texture(slot_deco, x, y + SLOT, SLOT, 22., colors::WHITE);
     // Мёртвый юнит вне hitmap рисуется на своём pos-слоте (затемнён).
     let dead_here = troops.iter().find(|t| t.is_dead && t.slot == slot);
     if let Some(dead) = dead_here {
@@ -753,12 +816,12 @@ fn draw_army_slot(
         let w = snap.size.0 as f32 * SLOT;
         let h = snap.size.1 as f32 * SLOT;
         ui.gfx.draw_texture(snap.portrait, x, y, w, h, colors::WHITE);
-        // Мини-статы под карточкой.
+        // Мини-статы под карточкой (ниже декора-орнамента).
         ui.text.draw_text(
             ui.gfx,
             &snap.lines[0],
             x,
-            y + SLOT + 20.,
+            y + SLOT + 26.,
             ui.skin.font,
             SMALL_FONT,
             1.,
@@ -768,7 +831,7 @@ fn draw_army_slot(
             ui.gfx,
             &snap.lines[1],
             x,
-            y + SLOT + 20. + SMALL_FONT as f32 + 2.,
+            y + SLOT + 26. + SMALL_FONT as f32 + 2.,
             ui.skin.font,
             SMALL_FONT,
             1.,
@@ -853,17 +916,22 @@ fn draw_spells_tab(
         } else if ui.button_sized([area_x + 500., y - 8.], [160., 40.], "Купить") {
             actions.buy_spell = Some(i);
         }
-        ui.text.draw_multiline(
-            ui.gfx,
-            &spell.desc,
-            (area_x + 20., y + 34.),
-            700.,
-            false,
-            ui.skin.font,
-            24,
-            colors::WHITE,
-        );
-        y += 120.;
+        // Шаг строки — по фактической высоте описания: описания не налезают
+        // на следующее заклинание (было фиксированные 120px).
+        let desc_h = ui
+            .text
+            .draw_multiline(
+                ui.gfx,
+                &spell.desc,
+                (area_x + 20., y + 34.),
+                700.,
+                false,
+                ui.skin.font,
+                24,
+                colors::WHITE,
+            )
+            .1;
+        y += 34. + desc_h + 26.;
     }
     // Книга армии: перечень изученных заклинаний.
     y += 20.;
