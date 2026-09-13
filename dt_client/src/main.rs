@@ -30,7 +30,9 @@ async fn main() {
     let mut room = String::new();
     stdin().read_line(&mut room);
     room = room.trim().to_owned();
-    let mut conn = connect(room, hwid::get_id().unwrap()).await;
+    // connect(ip, room, id): ip локального сервера, id — hwid игрока.
+    let mut conn =
+        connect("127.0.0.1:8080".to_owned(), room, hwid::get_id().unwrap()).await;
 
     //conn.events_sender.try_send(OutcomingEvent((0,0))).unwrap();
     // tokio::spawn(conn.incoming_events.for_each(|msg| async {
