@@ -229,7 +229,8 @@ impl App {
         dispatch(&mut ctx);
         let t1 = std::time::Instant::now();
         drop(ctx);
-        // egui: буферы (тесселяция/текстуры) — до submit игровых пассов.
+        // egui: тесселяция/буферы ПОСЛЕ игровых пассов: редактор читает RT
+        // (rt_as_texture) в этом же кадре — порядок wgpu: write → read.
         let egui_had_frame = self
             .egui
             .as_ref()
@@ -238,6 +239,8 @@ impl App {
             let gfx = self.gfx.as_mut().unwrap();
             gfx.egui_pending = egui_had_frame;
         }
+        self.input.end_frame();
+        self.gfx.as_mut().unwrap().end_frame();
         if let (Some(egui), Some(gfx)) = (self.egui.as_mut(), self.gfx.as_mut()) {
             let mut encoder = gfx
                 .device
@@ -245,8 +248,6 @@ impl App {
             egui.finish(&gfx.device, &gfx.queue, &mut encoder);
             gfx.queue.submit([encoder.finish()]);
         }
-        self.input.end_frame();
-        self.gfx.as_mut().unwrap().end_frame();
         // egui: рендер поверх кадра (present внутри render_egui).
         if egui_had_frame {
             let egui = self.egui.as_mut().unwrap();

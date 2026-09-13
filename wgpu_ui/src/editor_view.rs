@@ -101,6 +101,10 @@ fn rebake_if_dirty(ectx: &mut EditorCtx) {
     // Rt — простой {index,size}: восстанавливаем по индексу слота.
     let rt_for_tex = crate::gfx::Rt { index: rt_index, size: ((SIZE.0 * size as f32) as u32, (SIZE.1 * size as f32) as u32) };
     let tex = ectx.gfx.rt_as_texture(&rt_for_tex, crate::gfx::Filter::Nearest);
+    // Сабмит запечённых пассов немедленно (как init-запек в lib.rs:433):
+    // иначе RT пишется в end_frame-encoder'е ПОСЛЕ egui-encoder'а, а egui
+    // читает RT-текстуру до записи — канвас получает мусор/пустоту.
+    ectx.gfx.end_frame();
     ectx.editor.baked = Some(tex);
     ectx.editor.bake_dirty = false;
 }

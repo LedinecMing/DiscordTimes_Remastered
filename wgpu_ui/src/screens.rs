@@ -51,7 +51,7 @@ pub fn main_menu(ctx: &mut Ctx) {
     let mut ui = UiCtx::new(ctx.gfx, ctx.text, input, skin, ctx.widgets);
     ui.window(0., 0., viewport[0], viewport[1], |ui| {
         ui.label(Some([50., 50.]), &game_name);
-        if ui.button(Some([250., 300.]), &start_title) {
+        if ui.button(Some([250., 350.]), &start_title) {
             *menu = Menu::Map(MapRenderSettings::default());
         }
         if ui.button(Some([50., 100.]), "Atlas") {
