@@ -172,8 +172,10 @@ pub struct EditorUi {
     pub decos_rt: Option<crate::gfx::Rt>,
     /// Нативная egui-текстура слоя декораций.
     pub decos_tex: Option<egui::TextureId>,
-    /// Кэш egui-текстур маркеров (E1..E4) из gfx-ассетов.
-    pub marker_cache: std::collections::HashMap<String, egui::TextureId>,
+    /// egui-текстуры маркеров (E1..E4): родной egui-пайплайн (premultiplied
+    /// alpha — сырой PNG с straight-alpha через нативную регистрацию
+    /// рисовался белым фоном).
+    pub marker_handles: std::collections::HashMap<String, egui::TextureHandle>,
     pub cam: crate::camera::Camera,
     /// Строка статуса (последняя операция/ошибка).
     pub status: String,
@@ -225,7 +227,7 @@ impl Default for EditorUi {
             egui_tex: None,
             decos_rt: None,
             decos_tex: None,
-            marker_cache: std::collections::HashMap::new(),
+            marker_handles: std::collections::HashMap::new(),
             rt: None,
             cam: crate::camera::Camera::from_display_rect(
                 0.,
@@ -548,23 +550,14 @@ pub async fn game_init(gfx: &mut Gfx, text: &mut TextRenderer) -> State {
             })
             .to_vec(),
         );
-        // Маркеры редактора (assets_editor): уникальные имена-ключи —
-        // E1 армия неактивная, E2 фонарик без событий, E3 локальное
-        // событие, E4 фонарик с событиями, SHIP1-3 корабли на воде
-        // (феодальный/бандиты/торговый). Ключ = имя файла (E1.png).
+        // Корабли на воде (assets_editor): SHIP1 феодальный, SHIP2 бандиты,
+        // SHIP3 торговый — рисуются в RT-слое bake. Маркеры E1-E4 грузятся
+        /// egui-пайплайном с диска (editor_view), не как gfx-текстуры.
         let req_assets_editor_list = (
             "assets_editor",
-            [
-                "E1.png",
-                "E2.png",
-                "E3.png",
-                "E4.png",
-                "SHIP1.png",
-                "SHIP2.png",
-                "SHIP3.png",
-            ]
-            .map(|x| x.to_string())
-            .to_vec(),
+            ["SHIP1.png", "SHIP2.png", "SHIP3.png"]
+                .map(|x| x.to_string())
+                .to_vec(),
         );
         let req_assets_list = [
             req_assets_objects,

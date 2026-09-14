@@ -161,6 +161,9 @@ impl EguiLayer {
         }
         // Колесо: egui-панели редактора скроллятся; игра читает тот же wheel
         // для зума карты — экраны не пересекаются.
+        if input.wheel != 0. && std::env::var("DT_EGUI_DEBUG").is_ok() {
+            eprintln!("[egui] wheel: {}", input.wheel);
+        }
         if input.wheel != 0. {
             events.push(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,

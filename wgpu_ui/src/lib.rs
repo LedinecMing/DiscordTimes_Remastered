@@ -241,9 +241,6 @@ impl App {
         }
         self.input.end_frame();
         self.gfx.as_mut().unwrap().end_frame();
-        if std::env::var("DT_EGUI_DEBUG").is_ok() {
-            eprintln!("egui: finish() start, had_frame={}", egui_had_frame);
-        }
         if let (Some(egui), Some(gfx)) = (self.egui.as_mut(), self.gfx.as_mut()) {
             let mut encoder = gfx
                 .device
@@ -499,11 +496,12 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                // Накопление за кадр (порт mouse_delta_position): несколько
-                // событий CursorMoved между кадрами суммируются.
                 self.input.mouse_delta[0] += position.x as f32 - self.input.mouse[0];
                 self.input.mouse_delta[1] += position.y as f32 - self.input.mouse[1];
                 self.input.mouse = [position.x as f32, position.y as f32];
+                if std::env::var("DT_EGUI_DEBUG").is_ok() {
+                    eprintln!("[winit] move: {:.0},{:.0}", position.x, position.y);
+                }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let idx = match button {
@@ -512,6 +510,10 @@ impl ApplicationHandler for App {
                     winit::event::MouseButton::Middle => 2,
                     _ => 3,
                 };
+                if std::env::var("DT_EGUI_DEBUG").is_ok() {
+                    let down = state == ElementState::Pressed;
+                    eprintln!("[winit] btn{idx} down={down}");
+                }
                 if idx < 3 {
                     match state {
                         ElementState::Pressed => self.input.mouse_down[idx] = true,
@@ -522,10 +524,15 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => self.input.wheel += y * 10.,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => self.input.wheel += pos.y as f32,
-            },
+            WindowEvent::MouseWheel { delta, .. } => {
+                if std::env::var("DT_EGUI_DEBUG").is_ok() {
+                    eprintln!("[winit] wheel: {delta:?}");
+                }
+                match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => self.input.wheel += y * 10.,
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => self.input.wheel += pos.y as f32,
+                }
+            }
             WindowEvent::RedrawRequested => {
                 REDRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.frame();
