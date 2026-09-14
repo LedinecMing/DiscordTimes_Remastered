@@ -8,6 +8,7 @@ use dt_lib::map::deco::MapDeco;
 use dt_lib::map::map::*;
 use dt_lib::map::object::ObjectType;
 use dt_lib::map::tile::TILES;
+use dt_lib::battle::control::Control;
 use dt_lib::registry::{GameInfo, Objects};
 use std::collections::HashMap;
 
@@ -57,13 +58,14 @@ fn draw_tiles(gfx: &mut Gfx, assets: &crate::assets::Assets, tilemap: &TileMap<u
         .iter()
         .map(|tile| assets.get(tile.sprite()))
         .collect::<Vec<_>>();
-    for i in 0..tilemap.size {
-        for j in 0..tilemap.size {
-            let tile_index = tilemap[(j, i)];
+    for y in 0..tilemap.size {
+        for x in 0..tilemap.size {
+            // Конвенция (x=колонка, y=строка) — как hitmap/tile_at в игре.
+            let tile_index = tilemap[(y, x)];
             gfx.draw_texture(
                 tile_textures[tile_index],
-                i as f32 * SIZE.0,
-                j as f32 * SIZE.1,
+                x as f32 * SIZE.0,
+                y as f32 * SIZE.1,
                 SIZE.0,
                 SIZE.1,
                 WHITE,
@@ -203,8 +205,10 @@ fn make_quad_overlay(pattern: &[u8], corner: usize, bw: f32, bh: f32, a: f32) ->
     }
     bytes
 }
-
-// Рисует наплывы поверх уже нарисованных тайлов. Возвращает число уникальных текстур.
+/// Рисует наплывы поверх уже нарисованных тайлов. Возвращает число уникальных
+/// текстур. Оверлей-текстуры кэшируются в gfx.overlay_cache ПЕРСИСТЕНТНО:
+/// на пару тайлов 32×22-текстура создаётся один раз за сессию (локальный
+/// кэш = до ~2000 текстур на каждый перезапек + утечка в gfx.textures).
 pub fn draw_blend_overlays(
     gfx: &mut Gfx,
     tilemap: &TileMap<usize>,
@@ -216,11 +220,6 @@ pub fn draw_blend_overlays(
     let a = if strong { OVERLAY_A.1 } else { OVERLAY_A.0 };
     let rounded = mode.rounded();
     let (band_w, band_h) = (SIZE.0 * OVERLAY_BAND, SIZE.1 * OVERLAY_BAND);
-    let mut textures: Vec<TexId> = Vec::new();
-    let mut edge_cache: HashMap<(usize, usize, usize), TexId, RandomState> =
-        HashMap::with_hasher(RandomState::new());
-    let mut quad_cache: HashMap<(usize, usize, usize), TexId, RandomState> =
-        HashMap::with_hasher(RandomState::new());
     let mut pattern_cache: HashMap<usize, [u8; 32 * 22 * 3], RandomState> =
         HashMap::with_hasher(RandomState::new());
     let mut draws: Vec<(TexId, f32, f32)> = Vec::new();
@@ -234,6 +233,9 @@ pub fn draw_blend_overlays(
             // при равном — больший id; пары разных спрайтов не пропускаются.
             let bleeds = |n: usize| !same(n) && (TILE_PRIORITY[n], n) > (pri, id);
             let (cx, cy) = (i as f32 * SIZE.0, j as f32 * SIZE.1);
+            // Кэш ключуется и по strong-режиму (альфа отличается):
+            // side/corner кодируют 0..3, режим — битом 8.
+            let mode_bit = if strong { 1 << 8 } else { 0 };
             // 4 стороны: вода/приоритетная сторона наплывает на соседа.
             let mut side = |di: isize, dj: isize, s: usize| {
                 let (ni, nj) = (i as isize + di, j as isize + dj);
@@ -244,8 +246,8 @@ pub fn draw_blend_overlays(
                 if !bleeds(n) {
                     return;
                 }
-                let key = (id, n, s);
-                let tex = if let Some(&t) = edge_cache.get(&key) {
+                let key = (id, n, s | mode_bit);
+                let tex = if let Some(&t) = gfx.overlay_cache.get(&key) {
                     t
                 } else {
                     let pat = *pattern_cache
@@ -253,8 +255,7 @@ pub fn draw_blend_overlays(
                         .or_insert_with(|| neighbor_pattern(&tile_pixels[n]));
                     let buf = make_side_overlay(&pat, s, band_w, band_h, a);
                     let t = gfx.push_texture_rgba(&buf, SIZE.0 as u32, SIZE.1 as u32, Filter::Nearest);
-                    edge_cache.insert(key, t);
-                    textures.push(t);
+                    gfx.overlay_cache.insert(key, t);
                     t
                 };
                 draws.push((tex, cx, cy));
@@ -273,8 +274,8 @@ pub fn draw_blend_overlays(
                     if !bleeds(n) {
                         return;
                     }
-                    let key = (id, n, c);
-                    let tex = if let Some(&t) = quad_cache.get(&key) {
+                    let key = (id, n, c | 4 | mode_bit);
+                    let tex = if let Some(&t) = gfx.overlay_cache.get(&key) {
                         t
                     } else {
                         let pat = *pattern_cache
@@ -283,8 +284,7 @@ pub fn draw_blend_overlays(
                         let buf = make_quad_overlay(&pat, c, band_w, band_h, a);
                         let t =
                             gfx.push_texture_rgba(&buf, SIZE.0 as u32, SIZE.1 as u32, Filter::Nearest);
-                        quad_cache.insert(key, t);
-                        textures.push(t);
+                        gfx.overlay_cache.insert(key, t);
                         t
                     };
                     draws.push((tex, cx, cy));
@@ -301,7 +301,7 @@ pub fn draw_blend_overlays(
     for (tex, x, y) in draws {
         gfx.draw_texture(tex, x, y, SIZE.0, SIZE.1, WHITE);
     }
-    textures.len()
+    gfx.overlay_cache.len()
 }
 
 // Запечка тайлов+наплывов в RT (порт bake_map_textures).
@@ -309,11 +309,11 @@ pub fn bake_map_textures(
     gfx: &mut Gfx,
     rt: &Rt,
     assets: &crate::assets::Assets,
-    game: &Game,
+    gamemap: &GameMap,
     tile_pixels: &[image::RgbaImage],
     blend_mode: BlendMode,
 ) {
-    let size = game.executor.gamemap.tilemap.size as f32;
+    let size = gamemap.tilemap.size as f32;
     let camera = Camera::from_display_rect(0., SIZE.1 * size, SIZE.0 * size, -SIZE.1 * size);
     gfx.begin_pass(
         Target::Rt(rt.index),
@@ -321,10 +321,10 @@ pub fn bake_map_textures(
         &camera,
     );
     let t_bake = std::time::Instant::now();
-    draw_tiles(gfx, assets, &game.executor.gamemap.tilemap);
+    draw_tiles(gfx, assets, &gamemap.tilemap);
     let mut n_overlays = 0;
     if blend_mode != BlendMode::Off {
-        n_overlays = draw_blend_overlays(gfx, &game.executor.gamemap.tilemap, tile_pixels, blend_mode);
+        n_overlays = draw_blend_overlays(gfx, &gamemap.tilemap, tile_pixels, blend_mode);
     }
     gfx.end_pass();
     println!(
@@ -384,18 +384,18 @@ pub fn render_decos_layer(
     gfx: &mut Gfx,
     rt: &Rt,
     assets: &crate::assets::Assets,
-    game: &Game,
+    gamemap: &GameMap,
     registry: &GameInfo,
     seed: u64,
     buildings_render: bool,
+    armies_render: bool,
 ) {
-    let size = game.executor.gamemap.tilemap.size as f32;
+    let size = gamemap.tilemap.size as f32;
     let camera = Camera::from_display_rect(0., SIZE.1 * size, SIZE.0 * size, -SIZE.1 * size);
     gfx.begin_pass(Target::Rt(rt.index), Some([0., 0., 0., 0.]), &camera);
 
     let find_decos = |name: &'static str| -> Vec<MapDeco> {
-        game.executor
-            .gamemap
+        gamemap
             .decomap
             .iter()
             .filter(|deco| {
@@ -416,9 +416,7 @@ pub fn render_decos_layer(
     let mountains = find_decos("Mountain");
     let trees = find_decos("Tree");
     let rocks = find_decos("Rocks");
-    let rest = game
-        .executor
-        .gamemap
+    let rest = gamemap
         .decomap
         .iter()
         .filter(|deco| {
@@ -468,7 +466,7 @@ pub fn render_decos_layer(
         }
     }
     if buildings_render {
-        for b in &game.executor.gamemap.buildings {
+        for b in &gamemap.buildings {
             let (i, j) = b.pos;
             if let Some(obj) = registry.objects.inner.iter().find(|el| el.index == b.id) {
                 let tex = match lookups.get(&obj.path) {
@@ -490,6 +488,62 @@ pub fn render_decos_layer(
                     size.1 / 22. * SIZE.1,
                 ));
             }
+        }
+    }
+    if armies_render {
+        for army in &gamemap.armys {
+            if army.defeated {
+                continue;
+            }
+            let (i, j) = army.pos;
+            // Вода под армией → корабль по типу: феодальный/бандиты/торговый
+            // (SHIP1/2/3 из assets_editor, предзагруженные вызывающим);
+            // суша — моделька юнита как в игре (мертвяк/разбойник/феодал/
+            // некромант/ГГследопыт), статичный кадр 40 (запек статичен).
+            let on_water = {
+                let t = gamemap.tilemap[(j, i)];
+                dt_lib::map::tile::TILES[t].need_transport()
+            };
+            let unit_type = army
+                .troops
+                .get(0)
+                .map(|tr| tr.get().unit.get_info(&registry.units).unit_type)
+                .unwrap_or(dt_lib::units::unit::UnitType::People);
+            let pic: String = if on_water {
+                // Корабль по типу армии: Rogue → бандиты (SHIP2), иначе
+                match unit_type {
+                    dt_lib::units::unit::UnitType::Rogue => "SHIP2.png".into(),
+                    _ => "SHIP1.png".into(),
+                }
+            } else {
+                let model = match (&army.control, unit_type) {
+                    (Control::Player(_), _) => "ГГследопыт",
+                    (_, dt_lib::units::unit::UnitType::Undead) => "мертвяк",
+                    (_, dt_lib::units::unit::UnitType::Rogue) => "разбойник",
+                    (_, dt_lib::units::unit::UnitType::Hero
+                    | dt_lib::units::unit::UnitType::People) => "феодал",
+                    _ => "некромант",
+                };
+                format!("{model}/Unit_40.png")
+            };
+            let tex = match lookups.get(&pic) {
+                Some(&t) => t,
+                None => {
+                    let t = tex_cache.len();
+                    tex_cache.push(assets.get(&pic));
+                    lookups.insert(pic.clone(), t);
+                    t
+                }
+            };
+            // 1×2 клетки, низ в клетке армии — как draw армий в map_view.
+            items.push((
+                j as f32 * SIZE.1,
+                i as f32 * SIZE.0,
+                j as f32 * SIZE.1 - SIZE.1,
+                tex,
+                SIZE.0,
+                SIZE.1 * 2.,
+            ));
         }
     }
     // Порядок отрисовки: база ниже на экране — поверх; при равной базе крупнее — поверх.
@@ -515,12 +569,22 @@ pub fn prepare_textures(
     gfx: &mut Gfx,
     rts: (&Rt, &Rt),
     assets: &crate::assets::Assets,
-    game: &Game,
+    gamemap: &GameMap,
     registry: &GameInfo,
     tile_pixels: &[image::RgbaImage],
+    armies_render: bool,
 ) -> (TexId, TexId) {
-    bake_map_textures(gfx, rts.0, assets, game, tile_pixels, BlendMode::Rounded);
-    render_decos_layer(gfx, rts.1, assets, game, registry, 0, true);
+    bake_map_textures(gfx, rts.0, assets, gamemap, tile_pixels, BlendMode::Rounded);
+    render_decos_layer(
+        gfx,
+        rts.1,
+        assets,
+        gamemap,
+        registry,
+        0,
+        true,
+        armies_render,
+    );
     // NB: чтение RT (debug_check_gradient) — только ПОСЛЕ сабмита end_frame().
     (
         gfx.rt_as_texture(rts.0, Filter::Linear),

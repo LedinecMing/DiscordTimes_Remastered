@@ -96,6 +96,11 @@ pub struct Gfx {
     nearest: wgpu::Sampler,
     passes: Vec<Pass>,
     current: Pass,
+    /// Персистентный кэш оверлей-текстур запечки карты (bake.rs): ключ —
+    /// (тайл-сосед, тайл-цель, сторона/угол). Раньше кэш был локален
+    /// вызову draw_blend_overlays: каждый перезапек создавал до ~2000
+    /// GPU-текстур и тек в self.textures — перезапек замедлялся.
+    pub overlay_cache: std::collections::HashMap<(usize, usize, usize), crate::TexId>,
     /// Отложенный кадр: end_frame не делал present — ждёт render_egui.
     pub deferred_frame: Option<wgpu::SurfaceTexture>,
 }
@@ -263,6 +268,7 @@ impl Gfx {
             egui_pending: false,
             device,
             queue,
+            overlay_cache: std::collections::HashMap::new(),
             surface,
             config,
             viewport: (0., 0.),
@@ -468,6 +474,11 @@ impl Gfx {
         self.current.runs.clear();
         self.current.draw_index_base = 0;
         self.current.scissor = None;
+    }
+
+    /// View загруженной текстуры (для нативной регистрации в egui).
+    pub fn texture_view(&self, tex: TexId) -> &wgpu::TextureView {
+        &self.textures[tex.0 as usize].view
     }
 
     fn new_pass(

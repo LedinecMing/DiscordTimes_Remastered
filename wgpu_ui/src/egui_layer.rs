@@ -22,7 +22,10 @@ pub struct EguiLayer {
     pending_output: Option<egui::FullOutput>,
     /// Прямоугольник экрана последнего кадра.
     last_screen_rect: egui::Rect,
-    /// Результат end_frame, потребляемый render()/after_render().
+    /// Состояние кнопок мыши прошлого кадра (edge-детект press/release).
+    prev_mouse_down: [bool; 3],
+    /// Позиция мыши прошлого кадра (PointerMoved только при изменении).
+    prev_mouse_pos: Option<egui::Pos2>,
     primitives: Vec<egui::ClippedPrimitive>,
     screen_descriptor: egui_wgpu::ScreenDescriptor,
     pending_free: Vec<egui::TextureId>,
@@ -49,6 +52,8 @@ impl EguiLayer {
                 pixels_per_point: 1.0,
             },
             pending_free: Vec::new(),
+            prev_mouse_down: [false; 3],
+            prev_mouse_pos: None,
         }
     }
 
@@ -62,6 +67,14 @@ impl EguiLayer {
         ui_fn: impl FnMut(&mut egui::Ui),
     ) {
         let raw = self.build_input(input, pixels_per_point);
+        if std::env::var("DT_EGUI_DEBUG").is_ok() {
+            let (any_p, any_r, any_click) = self.ctx.input(|i| {
+                (i.pointer.any_pressed(), i.pointer.any_released(), i.pointer.any_click())
+            });
+            if any_p || any_r || any_click {
+                eprintln!("[egui] pointer: pressed={any_p} released={any_r} click={any_click}");
+            }
+        }
         self.pending_output = Some(self.ctx.run_ui(raw, ui_fn));
     }
 
@@ -116,28 +129,36 @@ impl EguiLayer {
                 });
             }
         }
-        events.push(egui::Event::ModifiersChanged(modifiers));
-        // Мышь: движение + кнопки (egui сам различает drag/click по таймингу).
+        // Мышь: egui ждёт EDGE-события (press/release один раз), как
+        // egui-winit. Событийный поток «состояние каждый кадр» ломает
+        // click-детекцию (potential_click_id сбрасывается фоновыми
+        // Released), поэтому шлём только переходы + Moved при движении.
         let mouse_pos = egui::pos2(input.mouse[0], input.mouse[1]);
-        events.push(egui::Event::PointerMoved(mouse_pos));
-        events.push(egui::Event::PointerButton {
-            pos: mouse_pos,
-            button: egui::PointerButton::Primary,
-            pressed: input.mouse_button_down(0),
-            modifiers,
-        });
-        events.push(egui::Event::PointerButton {
-            pos: mouse_pos,
-            button: egui::PointerButton::Secondary,
-            pressed: input.mouse_button_down(1),
-            modifiers,
-        });
-        events.push(egui::Event::PointerButton {
-            pos: mouse_pos,
-            button: egui::PointerButton::Middle,
-            pressed: input.mouse_button_down(2),
-            modifiers,
-        });
+        if self.prev_mouse_pos != Some(mouse_pos) {
+            events.push(egui::Event::PointerMoved(mouse_pos));
+        }
+        for (b, down) in [0usize, 1, 2]
+            .into_iter()
+            .zip([
+                input.mouse_button_down(0),
+                input.mouse_button_down(1),
+                input.mouse_button_down(2),
+            ])
+        {
+            let button = match b {
+                0 => egui::PointerButton::Primary,
+                1 => egui::PointerButton::Secondary,
+                _ => egui::PointerButton::Middle,
+            };
+            if down != self.prev_mouse_down[b] {
+                events.push(egui::Event::PointerButton {
+                    pos: mouse_pos,
+                    button,
+                    pressed: down,
+                    modifiers,
+                });
+            }
+        }
         // Колесо: egui-панели редактора скроллятся; игра читает тот же wheel
         // для зума карты — экраны не пересекаются.
         if input.wheel != 0. {
@@ -166,6 +187,13 @@ impl EguiLayer {
             events,
             ..Default::default()
         };
+        // prev-состояния для edge-детекта следующего кадра.
+        self.prev_mouse_down = [
+            input.mouse_button_down(0),
+            input.mouse_button_down(1),
+            input.mouse_button_down(2),
+        ];
+        self.prev_mouse_pos = Some(mouse_pos);
         self.modifiers = modifiers;
         raw
     }

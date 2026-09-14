@@ -33,11 +33,12 @@ pub fn editor_screen(ctx: &mut Ctx) -> bool {
             gfx,
             assets,
             tile_pixels,
+            registry,
             editor,
             egui,
             ..
         } = ctx;
-        rebake_if_dirty(gfx, assets, tile_pixels, editor, &mut **egui);
+        rebake_if_dirty(gfx, assets, tile_pixels, registry, editor, &mut **egui);
     }
     let keep_open = draw_editor(ctx);
     if !keep_open {
@@ -77,67 +78,87 @@ fn handle_hotkeys(ctx: &mut Ctx) {
     }
 }
 
-/// Запек карты редактора в RT тем же кодом, что и игра (bake.rs), и
-/// привязка RT как нативной egui-текстуры (сэмпл того же GPU-объекта).
 fn rebake_if_dirty(
     gfx: &mut crate::gfx::Gfx,
     assets: &crate::assets::Assets,
     tile_pixels: &[image::RgbaImage],
+    registry: &dt_lib::registry::GameInfo,
     editor: &mut EditorUi,
     egui: &mut crate::egui_layer::EguiLayer,
 ) {
     if !editor.bake_dirty {
         return;
     }
-    let size = editor.project.size();
-    // RT создаётся лениво под размер карты (32x22 на тайл, как в игре).
+    // Запекаем из ЖИВОГО state.project() — источник истины после команд
+    // (PaintTile и т.п. меняют state, а editor.project — лишь снапшот
+    // new/open; запек по снапшоту не отражал правки).
+    let project = editor.state.project().clone();
+    let size = project.size();
+    // Два RT — как в игре: тайлы+наплывы и декорации+строения+армии
+    // (единый рендер-путь bake_map_textures/render_decos_layer).
     let mut rt_recreated = false;
-    if editor.rt.is_none() {
+    if editor.rt.is_none() || editor.decos_rt.is_none() {
         editor.rt = Some(gfx.create_rt(
+            (SIZE.0 * size as f32) as u32,
+            (SIZE.1 * size as f32) as u32,
+        ));
+        editor.decos_rt = Some(gfx.create_rt(
             (SIZE.0 * size as f32) as u32,
             (SIZE.1 * size as f32) as u32,
         ));
         rt_recreated = true;
     }
-    let rt_index = editor.rt.as_ref().expect("rt just created").index;
-    {
-        // Bake в RT по индексу (единый игровой путь).
-        let cam = crate::camera::Camera::from_display_rect(
-            0.,
-            SIZE.1 * size as f32,
-            SIZE.0 * size as f32,
-            -SIZE.1 * size as f32,
-        );
-        gfx.begin_pass(crate::gfx::Target::Rt(rt_index), Some([0., 0., 0., 0.]), &cam);
-        crate::bake::draw_editor_tiles(
-            gfx,
-            assets,
-            &editor.project.map.tilemap,
-            tile_pixels,
-        );
-        gfx.end_pass();
-    }
-    let view = gfx.rt_view(&editor.rt.as_ref().expect("rt just created"));
-    match editor.egui_tex {
-        Some(id) if !rt_recreated => {
-            // Тот же RT-объект: bind group уже смотрит на живой view,
-            // перерегистрация не нужна (данные обновляются на GPU).
+    // ЕДИНЫЙ рендер-путь с игрой (bake.rs): тайлы, декорации, строения,
+    // армии (модельки/корабли на воде). Маркеры редактора — egui-слой.
+    crate::bake::bake_map_textures(
+        gfx,
+        editor.rt.as_ref().expect("rt just created"),
+        assets,
+        &project.map,
+        tile_pixels,
+        crate::state::BlendMode::Rounded,
+    );
+    crate::bake::render_decos_layer(
+        gfx,
+        editor.decos_rt.as_ref().expect("rt just created"),
+        assets,
+        &project.map,
+        registry,
+        0,
+        true,
+        true,
+    );
+    // egui-текстуры обоих слоёв (zero-copy, Nearest — пиксель-арт).
+    let mut register = |gfx: &mut crate::gfx::Gfx,
+                         egui: &mut crate::egui_layer::EguiLayer,
+                         rt: &crate::gfx::Rt,
+                         current: &mut Option<egui::TextureId>| {
+        let view = gfx.rt_view(rt);
+        match *current {
+            Some(id) if !rt_recreated => {}
+            Some(id) => egui.update_native_texture(&gfx.device, &view, wgpu::FilterMode::Nearest, id),
+            None => *current = Some(egui.register_native_texture(&gfx.device, &view, wgpu::FilterMode::Nearest)),
         }
-        Some(id) => egui.update_native_texture(
-            &gfx.device,
-            &view,
-            wgpu::FilterMode::Nearest,
-            id,
-        ),
-        None => {
-            editor.egui_tex = Some(egui.register_native_texture(
-                &gfx.device,
-                &view,
-                wgpu::FilterMode::Nearest,
-            ));
+    };
+    register(gfx, egui, editor.rt.as_ref().unwrap(), &mut editor.egui_tex);
+    register(
+        gfx,
+        egui,
+        editor.decos_rt.as_ref().unwrap(),
+        &mut editor.decos_tex,
+    );
+    // Маркеры E1..E4: нативные egui-текстуры из gfx-ассетов (однократно,
+    // кэш в EditorUi.marker_cache).
+    for name in ["E1.png", "E2.png", "E3.png", "E4.png"] {
+        if editor.marker_cache.contains_key(name) {
+            continue;
+        }
+        if let Some(&tex) = assets.inner.get(name) {
+            let view = gfx.texture_view(tex);
+            let id = egui.register_native_texture(&gfx.device, &view, wgpu::FilterMode::Nearest);
+            editor.marker_cache.insert(name.to_string(), id);
         }
     }
-    drop(view);
     // Сабмит ТОЛЬКО RT-пассов (запечка), БЕЗ экрана: end_frame заберёт
     // deferred_frame/презент — а экранный кадр этого же кадра ещё рисуется
     // (draw_editor + egui поверх). Это была причина чёрного канваса и
@@ -171,6 +192,7 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         registry,
         editor,
         ui,
+        rt,
         ..
     } = ctx;
     let mut rest = EditorCtx {
@@ -181,6 +203,7 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         registry,
         editor,
         ui,
+        rt,
     };
     let egui_layer = &mut **egui;
     let mut state = ScreenState {
@@ -194,6 +217,8 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         ui.ctx().all_styles_mut(|style| {
             style.visuals.panel_fill = Color32::from_rgb(24, 24, 28);
         });
+        // Результаты async-диалогов (открыть/сохранить) — до панелей.
+        poll_dialogs(&mut rest);
         egui::Panel::top("editor_top").show(ui, |ui| {
             top_bar(ui, &mut rest, &mut state);
         });
@@ -206,6 +231,8 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         egui::CentralPanel::default().show(ui, |ui| {
             state.actions.click_tile = canvas(ui, &mut rest);
         });
+        // Модальное окно размера новой карты (поверх панелей).
+        size_dialog_window(ui, &mut rest);
     });
     state.keep_open
 }
@@ -225,6 +252,7 @@ struct EditorCtx<'a> {
     registry: &'a mut dt_lib::registry::GameInfo,
     editor: &'a mut EditorUi,
     ui: &'a mut crate::state::UiState,
+    rt: &'a tokio::runtime::Runtime,
 }
 
 /// Действия, собранные до egui-панелей (клики по канвасу, кнопки).
@@ -241,8 +269,8 @@ fn top_bar(ui: &mut Ui, ectx: &mut EditorCtx, state: &mut ScreenState) {
     let keep_open = &mut state.keep_open;
     ui.horizontal(|ui| {
         ui.menu_button("Файл", |ui| {
-            if ui.button("Новая (50×50)").clicked() {
-                new_project(ectx, 50);
+            if ui.button("Новая…").clicked() {
+                ectx.editor.size_dialog = Some(crate::state::NewMapDialog { size: 50 });
             }
             if ui.button("Открыть…").clicked() {
                 open_dialog(ectx);
@@ -329,6 +357,11 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
     ));
 }
 
+/// Лимиты зума канваса в экранных единицах (screen-px на world-px):
+/// MIN — карта занимает ≥ 1/50 канваса, MAX — ≤ 16 экранов на карту.
+pub const ZOOM_MIN: f32 = 0.02;
+pub const ZOOM_MAX: f32 = 16.0;
+
 /// Канвас: RT-текстура карты, зум/пан колесом и ПКМ-драг, ховер, клик.
 fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     if !ectx.editor.baked {
@@ -336,7 +369,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         return None;
     }
     let tex_id = ectx.editor.egui_tex.expect("baked => egui_tex зарегистрирован");
-    let size = ectx.editor.project.size();
+    let size = ectx.editor.state.project().size();
     let world_w = SIZE.0 * size as f32;
     let world_h = SIZE.1 * size as f32;
     let available = ui.available_size();
@@ -361,17 +394,21 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             cam_target[1] + (p.y - rect.center().y) / zoom,
         ]
     };
-    // Текстура: нативная egui-текстура того же RT (zero-copy, без readback);
-    // регистрируется/обновляется в rebake_if_dirty при запеке.
+    // Слои: тайлы (RT0) и декорации/строения/армии (RT1) — обе нативные
+    // egui-текстуры (zero-copy), порядок как в игре: тайлы, затем декор.
     let draw_min = world_to_screen([0., 0.]);
     let draw_max = world_to_screen([world_w, world_h]);
     let draw_rect = egui::Rect::from_min_max(draw_min, draw_max);
-    painter.image(
-        tex_id,
-        draw_rect,
-        egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-        Color32::WHITE,
-    );
+    let uv = egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.));
+    painter.image(tex_id, draw_rect, uv, Color32::WHITE);
+    if let Some(decos_tex) = ectx.editor.decos_tex {
+        painter.image(decos_tex, draw_rect, uv, Color32::WHITE);
+    }
+    // Маркеры редактора (E1 армии, E2/E4 фонарики) поверх слоёв.
+    {
+        let markers = ectx.editor.marker_cache.clone();
+        markers_layer(ui, ectx, world_to_screen, &markers);
+    }
     // Сетка.
     let grid_step = 8.0 / zoom;
     if zoom > 1.0 {
@@ -425,14 +462,19 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             egui::StrokeKind::Inside,
         );
     }
-    // Зум колесом вокруг курсора.
+    // Зум колесом вокруг курсора. Лимиты — в ЭКРАННОМ масштабе
+    // (screen-px на world-px = zoom[0] * world_w): «подход» = карта
+    // занимает ≥ 1/16 канваса, «детально» = ≤ 16 экранов на карту.
     if response.hovered() && ectx.input.wheel != 0. {
         let factor = 1.2f32.powf((ectx.input.wheel / 24.).clamp(-4., 4.));
         let anchor_world = ui
             .input(|i| i.pointer.hover_pos())
             .map(screen_to_world)
             .unwrap_or(cam.target);
-        cam.zoom[0] = (cam.zoom[0] * factor).clamp(fit / world_w * 0.5, 4.0);
+        let scale = cam.zoom[0] * world_w;
+        let new_scale = (scale * factor).clamp(ZOOM_MIN, ZOOM_MAX);
+        let factor = new_scale / scale;
+        cam.zoom[0] = new_scale / world_w;
         cam.zoom[1] = cam.zoom[0];
         cam.target = [
             anchor_world[0] + (cam.target[0] - anchor_world[0]) / factor,
@@ -445,19 +487,95 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         cam.target[0] -= delta.x / zoom;
         cam.target[1] -= delta.y / zoom;
     }
-    // Клик ЛКМ: выделение + команда активного инструмента.
+    // Клик/драг ЛКМ: выделение + команда активного инструмента. При
+    // зажатой ЛКМ траектория указателя сэмплируется шагом в ПОЛКЛЕТКИ от
+    // позиции прошлого кадра — кисть идёт сплошняком без зазоров, кривые
+    // движения не срезаются прямыми линиями (сегмент кадра короткий,
+    // кривизна внутри него ничтожна). Noop-команды в историю не попадают.
     let mut clicked: Option<(usize, usize)> = None;
-    if response.clicked() {
-        if let Some(pos) = response.hover_pos() {
-            if let Some(tile) = tile_at(pos) {
+    let painting = response.clicked() || response.dragged_by(egui::PointerButton::Primary);
+    if painting {
+        let pointer = response
+            .interact_pointer_pos()
+            .or_else(|| response.hover_pos());
+        if let Some(pos) = pointer {
+            let to = screen_to_world(pos);
+            let from = ectx.editor.brush_pos.replace(to).unwrap_or(to);
+            // Шаг сэмплирования — пол клетки по X; минимум один сэмпл.
+            let step = SIZE.0 * 0.5;
+            let dist = ((to[0] - from[0]).powi(2) + (to[1] - from[1]).powi(2)).sqrt();
+            let steps = ((dist / step).ceil() as usize).clamp(1, 64);
+            for k in 1..=steps {
+                let t = k as f32 / steps as f32;
+                let p = [
+                    from[0] + (to[0] - from[0]) * t,
+                    from[1] + (to[1] - from[1]) * t,
+                ];
+                let tx = (p[0] / SIZE.0).floor();
+                let ty = (p[1] / SIZE.1).floor();
+                if tx < 0. || ty < 0. || tx >= size as f32 || ty >= size as f32 {
+                    continue;
+                }
+                let tile = (tx as usize, ty as usize);
                 ectx.editor.selected = Some(tile);
                 apply_tool(ectx, tile);
                 clicked = Some(tile);
             }
         }
+    } else {
+        // Кисть отпущена: следующее нажатие начнёт новую траекторию.
+        ectx.editor.brush_pos = None;
     }
-    ectx.editor.cam = cam;
     clicked
+}
+
+/// Слой редакторских маркеров поверх канваса (egui painter):
+/// E1 — неактивные армии (active=false), активные рисуются модельками
+/// в RT-слое; E2 — фонарик без событий; E4 — фонарик с событиями
+/// (eventmap той же клетки непуст). E3 «чисто локальные события» —
+fn markers_layer(
+    ui: &mut Ui,
+    ectx: &mut EditorCtx,
+    world_to_screen: impl Fn([f32; 2]) -> egui::Pos2,
+    markers: &std::collections::HashMap<String, egui::TextureId>,
+) {
+    let Some(e1) = markers.get("E1.png").copied() else { return; };
+    let e2 = markers.get("E2.png").copied();
+    let e4 = markers.get("E4.png").copied();
+    let project = ectx.editor.state.project();
+    let painter = ui.painter();
+    let size = project.size();
+    for army in &project.map.armys {
+        if army.active {
+            continue; // активные — игровой моделькой в RT-слое
+        }
+        let (i, j) = army.pos;
+        if i >= size || j >= size {
+            continue;
+        }
+        let pos = world_to_screen([i as f32 * SIZE.0, j as f32 * SIZE.1]);
+        painter.image(
+            e1,
+            egui::Rect::from_min_size(pos, egui::vec2(SIZE.0, SIZE.1 * 2.)),
+            egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
+            Color32::WHITE,
+        );
+    }
+    for light in &project.lights {
+        if light.x >= size || light.y >= size {
+            continue;
+        }
+        let pos = world_to_screen([light.x as f32 * SIZE.0, light.y as f32 * SIZE.1]);
+        let has_event = !project.map.eventmap[(light.x, light.y)].is_empty();
+        let tex = if has_event { e4 } else { e2 };
+        let Some(tex) = tex else { continue; };
+        painter.image(
+            tex,
+            egui::Rect::from_min_size(pos, egui::vec2(SIZE.0, SIZE.1 * 2.)),
+            egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
+            Color32::WHITE,
+        );
+    }
 }
 
 /// Применить активный инструмент: построить команду и выполнить.
@@ -494,8 +612,7 @@ fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
 /// Новый проект: чистый EditorUi (без кэшей прошлой карты).
 fn new_project(ectx: &mut EditorCtx, size: usize) {
     let editor = &mut ectx.editor;
-    editor.project = editor_core::MapProject::new(size, 0);
-    editor.state = editor_core::EditorState::new(editor.project.clone());
+    editor.state = editor_core::EditorState::new(editor_core::MapProject::new(size, 0));
     editor.history = editor_core::CommandHistory::new();
     editor.project_path = None;
     editor.issues.clear();
@@ -528,7 +645,7 @@ fn open_project(ectx: &mut EditorCtx, path: std::path::PathBuf) {
             let size = project.size();
             let editor = &mut ectx.editor;
             editor.state = editor_core::EditorState::new(project);
-            editor.project = editor.state.project().clone();
+
             editor.history = editor_core::CommandHistory::new();
             editor.project_path = Some(path);
             editor.issues.clear();
@@ -594,17 +711,6 @@ fn do_save(ectx: &mut EditorCtx, path: std::path::PathBuf) {
     }
 }
 
-fn save_as_dialog(ectx: &mut EditorCtx) {
-    if let Some(path) = pick_save_path() {
-        do_save(ectx, path);
-    }
-}
-
-fn open_dialog(ectx: &mut EditorCtx) {
-    if let Some(path) = pick_open_path() {
-        open_project(ectx, path);
-    }
-}
 
 /// Статус-бар: координаты, инструмент, валидаторы, история, путь.
 fn status_bar(ui: &mut Ui, ectx: &mut EditorCtx) {
@@ -645,26 +751,111 @@ fn status_bar(ui: &mut Ui, ectx: &mut EditorCtx) {
     });
 }
 
-// ---------------- rfd-диалоги: НЕ блокировать render-loop ----------------
+// ---------------- rfd-диалоги: async на tokio-рантайме ----------------
 //
-// rfd::AsyncFileDialog на xdg-портале возвращает future; поллинг результата —
-// в кадре редактора (не-blocking try_recv-семантика через Option-слот).
+// Блокирующий rfd::FileDialog на xdg-портале паниковал: zbus требует
+// Tokio-реактор в потоке. AsyncFileDialog запускается на ctx.rt (State),
+// результат приходит через oneshot-канал и забирается в кадре редактора.
 
-/// Неблокирующий диалог сохранения: канал результата забирается в кадре.
-fn pick_save_path() -> Option<std::path::PathBuf> {
-    // Синхронный rfd-диалог на xdg-портале допустим ТОЛЬКО как fallback:
-    // портальный диалог блокирует вызывающий поток. Основной путь — async.
-    // Фаза 1: блокирующий вызов (риски см. бриф) — канал ниже.
-    rfd::FileDialog::new()
-        .set_title("Сохранить карту Discord Times")
-        .add_filter("Discord Times map", &["dtm", "DTm"])
-        .set_file_name("map.dtm")
-        .pick_file()
+/// Запуск неблокирующего диалога открытия: результат → editor.open_slot.
+fn open_dialog(ectx: &mut EditorCtx) {
+    if ectx.editor.open_slot.is_some() {
+        return; // диалог уже открыт
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    ectx.editor.open_slot = Some(rx);
+    ectx.rt.spawn(async move {
+        let file = rfd::AsyncFileDialog::new()
+            .set_title("Открыть карту Discord Times")
+            .add_filter("Discord Times map", &["dtm", "DTm"])
+            .pick_file()
+            .await;
+        let path = file.map(|f| f.path().to_path_buf());
+        // Отмена диалога (None) тоже долетает — статус обновится.
+        let _ = tx.send(path.unwrap_or_default());
+    });
 }
 
-fn pick_open_path() -> Option<std::path::PathBuf> {
-    rfd::FileDialog::new()
-        .set_title("Открыть карту Discord Times")
-        .add_filter("Discord Times map", &["dtm", "DTm"])
-        .pick_file()
+/// Запуск неблокирующего диалога сохранения: результат → editor.save_slot.
+fn save_as_dialog(ectx: &mut EditorCtx) {
+    if ectx.editor.save_slot.is_some() {
+        return; // диалог уже открыт
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    ectx.editor.save_slot = Some(rx);
+    ectx.rt.spawn(async move {
+        let file = rfd::AsyncFileDialog::new()
+            .set_title("Сохранить карту Discord Times")
+            .add_filter("Discord Times map", &["dtm", "DTm"])
+            .set_file_name("map.dtm")
+            .save_file()
+            .await;
+        let path = file.map(|f| f.path().to_path_buf());
+        let _ = tx.send(path.unwrap_or_default());
+    });
+}
+
+/// Поллинг слотов диалогов в кадре: try_recv, без блокировки.
+fn poll_dialogs(ectx: &mut EditorCtx) {
+    let mut opened: Option<std::path::PathBuf> = None;
+    let mut saved: Option<std::path::PathBuf> = None;
+    if let Some(rx) = ectx.editor.open_slot.as_mut() {
+        if let Ok(path) = rx.try_recv() {
+            ectx.editor.open_slot = None;
+            if !path.as_os_str().is_empty() {
+                opened = Some(path);
+            }
+        }
+    }
+    if let Some(rx) = ectx.editor.save_slot.as_mut() {
+        if let Ok(path) = rx.try_recv() {
+            ectx.editor.save_slot = None;
+            if !path.as_os_str().is_empty() {
+                saved = Some(path);
+            }
+        }
+    }
+    if let Some(path) = opened {
+        open_project(ectx, path);
+    }
+    if let Some(path) = saved {
+        do_save(ectx, path);
+    }
+}
+
+/// Окно «Новая карта»: размер 16..200 (слайдер + числовой ввод).
+fn size_dialog_window(ui: &mut Ui, ectx: &mut EditorCtx) {
+    let Some(dialog) = ectx.editor.size_dialog.as_mut() else {
+        return;
+    };
+    let mut create = false;
+    let mut close = false;
+    egui::Window::new("Новая карта")
+        .anchor(egui::Align2::CENTER_CENTER, [0., 0.])
+        .collapsible(false)
+        .resizable(false)
+        .show(ui.ctx(), |ui| {
+            ui.label("Размер стороны карты (тайлов):");
+            ui.add(
+                egui::Slider::new(&mut dialog.size, 16..=200)
+                    .clamping(egui::SliderClamping::Always)
+                    .text("тайлов"),
+            );
+            ui.add(egui::DragValue::new(&mut dialog.size).range(16..=200).speed(1.));
+            ui.horizontal(|ui| {
+                if ui.button("Создать").clicked() {
+                    create = true;
+                }
+                if ui.button("Отмена").clicked() {
+                    close = true;
+                }
+            });
+        });
+    if create {
+        let size = ectx.editor.size_dialog.unwrap().size.clamp(16, 200);
+        ectx.editor.size_dialog = None;
+        new_project(ectx, size);
+    } else if close {
+        ectx.editor.size_dialog = None;
+    }
 }

@@ -423,9 +423,10 @@ impl ApplicationHandler for App {
             &mut gfx,
             (&rt0, &rt1),
             &state.assets,
-            &state.game,
+            &state.game.executor.gamemap,
             &state.registry,
             &state.tile_pixels,
+            true,
         );
         let mut state = state;
         state.textures = state::RenderTextures {

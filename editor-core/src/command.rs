@@ -118,7 +118,9 @@ impl Command for PaintTile {
         if x >= tilemap.size || y >= tilemap.size {
             return CommandResult::Noop;
         }
-        let cell = &mut tilemap[(x, y)];
+        // Конвенция экрана: pos=(x=колонка, y=строка), хранение tilemap[(строка,
+        // колонка)] — как draw_tiles. Прежний прямой (x,y) транспонировал клетки.
+        let cell = &mut tilemap[(y, x)];
         if *cell == self.tile {
             return CommandResult::Noop; // идемпотентность: тот же тайл — no-op
         }
@@ -130,8 +132,9 @@ impl Command for PaintTile {
     fn undo(&mut self, state: &mut EditorState) {
         if let Some(prev) = self.previous {
             let tilemap = &mut state.project_mut().map.tilemap;
-            if self.pos.0 < tilemap.size && self.pos.1 < tilemap.size {
-                tilemap[self.pos] = prev;
+            let (x, y) = self.pos;
+            if x < tilemap.size && y < tilemap.size {
+                tilemap[(y, x)] = prev;
             }
         }
     }

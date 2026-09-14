@@ -154,17 +154,26 @@ pub enum Menu {
 /// Состояние вкладки «Редактор карт»: проект, история команд, запечка.
 /// По образцу PvpState/BuildingUi — живёт в State, не в Menu.
 pub struct EditorUi {
-    pub project: editor_core::MapProject,
+    /// Источник истины — state.project() (снапшот editor.project удалён:
+    /// запек/вьюхи читают живой state, иначе правки не отражались).
     pub history: editor_core::CommandHistory,
     pub state: editor_core::EditorState,
     pub tool: editor_core::Tool,
     /// Запечка завершена (RT залит, egui-текстура привязана).
     pub baked: bool,
-    /// Нативная egui-текстура запечённой RT (zero-copy сэмпл GPU-объекта).
-    pub egui_tex: Option<egui::TextureId>,
-    /// RT, в который запекается карта редактора.
+    /// RT тайлового слоя (первый слой, как в игре).
     pub rt: Option<crate::gfx::Rt>,
-    /// Камера канваса (пан/зум — как у игровой карты).
+    /// Нативная egui-текстура тайлового слоя (zero-copy сэмпл GPU-объекта).
+    pub egui_tex: Option<egui::TextureId>,
+    /// Последняя world-позиция кисти (непрерывный drag-paint: траектория
+    /// сэмплируется шагом в полклетки — без пропусков на кривых движениях).
+    pub brush_pos: Option<[f32; 2]>,
+    /// RT слоя декораций/строений/армий (второй слой, как в игре).
+    pub decos_rt: Option<crate::gfx::Rt>,
+    /// Нативная egui-текстура слоя декораций.
+    pub decos_tex: Option<egui::TextureId>,
+    /// Кэш egui-текстур маркеров (E1..E4) из gfx-ассетов.
+    pub marker_cache: std::collections::HashMap<String, egui::TextureId>,
     pub cam: crate::camera::Camera,
     /// Строка статуса (последняя операция/ошибка).
     pub status: String,
@@ -180,12 +189,24 @@ pub struct EditorUi {
     pub active_tile: usize,
     /// Выделенная клетка (рамка egui-пейнтера).
     pub selected: Option<(usize, usize)>,
+    /// Слоты результатов rfd-диалогов (async, xdg-портал; zbus требует
+    /// tokio-реактор — блокирующий FileDialog паниковал вне runtime).
+    pub open_slot: Option<tokio::sync::oneshot::Receiver<std::path::PathBuf>>,
+    pub save_slot: Option<tokio::sync::oneshot::Receiver<std::path::PathBuf>>,
+    /// Диалог размера новой карты (ввод + слайдер 16..200).
+    pub size_dialog: Option<NewMapDialog>,
+}
+
+/// Диалог «Новая карта»: выбранный размер (16..200, по умолчанию 50).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewMapDialog {
+    pub size: usize,
 }
 
 impl std::fmt::Debug for EditorUi {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EditorUi")
-            .field("size", &self.project.size())
+            .field("size", &self.state.project().size())
             .field("undo", &self.history.undo_len())
             .field("tool", &self.tool)
             .field("path", &self.project_path)
@@ -196,12 +217,15 @@ impl std::fmt::Debug for EditorUi {
 impl Default for EditorUi {
     fn default() -> Self {
         Self {
-            project: editor_core::MapProject::new(50, 0),
             history: editor_core::CommandHistory::new(),
+            brush_pos: None,
             state: editor_core::EditorState::new(editor_core::MapProject::new(50, 0)),
             tool: editor_core::Tool::default(),
             baked: false,
             egui_tex: None,
+            decos_rt: None,
+            decos_tex: None,
+            marker_cache: std::collections::HashMap::new(),
             rt: None,
             cam: crate::camera::Camera::from_display_rect(
                 0.,
@@ -211,11 +235,14 @@ impl Default for EditorUi {
             ),
             status: String::new(),
             project_path: None,
-            counter: 0,
             issues: Vec::new(),
             bake_dirty: true,
+            counter: 0,
             active_tile: 0,
             selected: None,
+            open_slot: None,
+            save_slot: None,
+            size_dialog: None,
         }
     }
 }
@@ -521,6 +548,24 @@ pub async fn game_init(gfx: &mut Gfx, text: &mut TextRenderer) -> State {
             })
             .to_vec(),
         );
+        // Маркеры редактора (assets_editor): уникальные имена-ключи —
+        // E1 армия неактивная, E2 фонарик без событий, E3 локальное
+        // событие, E4 фонарик с событиями, SHIP1-3 корабли на воде
+        // (феодальный/бандиты/торговый). Ключ = имя файла (E1.png).
+        let req_assets_editor_list = (
+            "assets_editor",
+            [
+                "E1.png",
+                "E2.png",
+                "E3.png",
+                "E4.png",
+                "SHIP1.png",
+                "SHIP2.png",
+                "SHIP3.png",
+            ]
+            .map(|x| x.to_string())
+            .to_vec(),
+        );
         let req_assets_list = [
             req_assets_objects,
             req_assets_items,
@@ -529,6 +574,7 @@ pub async fn game_init(gfx: &mut Gfx, text: &mut TextRenderer) -> State {
             req_assets_windows,
             req_assets_stats_list,
             req_assets_armies_list,
+            req_assets_editor_list,
         ];
         load_assets(gfx, text, &req_assets_list, fonts).await
     };

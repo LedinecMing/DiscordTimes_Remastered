@@ -95,7 +95,9 @@ impl MapProject {
     /// Тайл в позиции, если внутри карты.
     pub fn tile(&self, pos: Pos) -> Option<usize> {
         let (x, y) = pos;
-        (x < self.size() && y < self.size()).then(|| self.map.tilemap[(x, y)])
+        // Конвенция экрана (x=колонка, y=строка): индекс tilemap — (строка,
+        // колонка), как draw_tiles/hitmap. Инверсия зеркалила карту.
+        (x < self.size() && y < self.size()).then(|| self.map.tilemap[(y, x)])
     }
 
     /// Сериализация снапшота проекта в JSON (метаданные и состояние для

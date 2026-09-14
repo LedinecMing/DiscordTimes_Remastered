@@ -39,10 +39,11 @@ pub fn map_screen(ctx: &mut Ctx) {
             ctx.gfx,
             &ctx.rts.1,
             ctx.assets,
-            ctx.game,
+            &ctx.game.executor.gamemap,
             ctx.registry,
             settings.seed,
             settings.buildings_render,
+            settings.armies_render,
         );
         settings.decos_dirty = false;
     }
@@ -51,7 +52,7 @@ pub fn map_screen(ctx: &mut Ctx) {
             ctx.gfx,
             &ctx.rts.0,
             ctx.assets,
-            ctx.game,
+            &ctx.game.executor.gamemap,
             ctx.tile_pixels,
             settings.blend_mode,
         );
