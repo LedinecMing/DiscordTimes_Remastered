@@ -24,6 +24,21 @@ const ASSETS_TERRAIN: &str = "assets/Terrain";
 
 /// Открыть/закрыть экран: возврат false = выйти в главное меню.
 pub fn editor_screen(ctx: &mut Ctx) -> bool {
+    // Дефолтная карта при первом входе (путь из каталога запуска dt/),
+    // чтобы редактор стартовал с живыми данными, а не пустым 50×50.
+    if !ctx.editor.baked && ctx.editor.project_path.is_none() {
+        let default_map = std::path::PathBuf::from("Maps_Rus/Другой берег.DTm");
+        if default_map.exists() {
+            // Раздельные &mut-заимствования: загрузка трогает только
+            // registry+editor; RT-запек ниже перечитает свежий state.
+            let Ctx {
+                registry,
+                editor,
+                ..
+            } = ctx;
+            open_project_parts(registry, editor, &default_map);
+        }
+    }
     // Хоткеи до UI: Ctrl+Z undo, Ctrl+Shift+Z redo (Единая точка правды).
     handle_hotkeys(ctx);
     // Запек по грязному флагу: project.GameMap → bake.rs → RT (игровой путь);
@@ -189,17 +204,27 @@ fn rebake_if_dirty(
         editor.decos_rt.as_ref().unwrap(),
         &mut editor.decos_tex,
     );
-    // Маркеры E1..E4: нативные egui-текстуры из gfx-ассетов (однократно,
-    // кэш в EditorUi.marker_cache).
+    // Маркеры E1..E4: родные egui-текстуры из PNG на диске (load_texture —
+    // premultiplied alpha; PNG через нативную регистрацию wgpu рисовался
+    // белым фоном: straight-alpha ≠ формат egui-рендерера; readback GPU
+    // недопустим — текстуры ассетов без COPY_SRC).
     for name in ["E1.png", "E2.png", "E3.png", "E4.png"] {
-        if editor.marker_cache.contains_key(name) {
+        if editor.marker_handles.contains_key(name) {
             continue;
         }
-        if let Some(&tex) = assets.inner.get(name) {
-            let view = gfx.texture_view(tex);
-            let id = egui.register_native_texture(&gfx.device, &view, wgpu::FilterMode::Nearest);
-            editor.marker_cache.insert(name.to_string(), id);
-        }
+        let Ok(img) = image::open(format!("assets_editor/{name}")) else {
+            continue;
+        };
+        let img = img.to_rgba8();
+        let (w, h) = img.dimensions();
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [w as usize, h as usize],
+            img.as_raw(),
+        );
+        let handle = egui
+            .ctx
+            .load_texture(name, image, egui::TextureOptions::NEAREST);
+        editor.marker_handles.insert(name.to_string(), handle);
     }
     // Сабмит ТОЛЬКО RT-пассов (запечка), БЕЗ экрана: end_frame заберёт
     // deferred_frame/презент — а экранный кадр этого же кадра ещё рисуется
@@ -252,9 +277,6 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         keep_open: true,
         actions: Actions { click_tile: None },
     };
-    if std::env::var("DT_EGUI_DEBUG").is_ok() {
-        eprintln!("egui: run() start");
-    }
     egui_layer.run(input, 1.0, |ui| {
         ui.ctx().all_styles_mut(|style| {
             style.visuals.panel_fill = Color32::from_rgb(24, 24, 28);
@@ -783,7 +805,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             cam_target[1] + (p.y - rect.center().y) / zoom,
         ]
     };
-    // Слои: тайлы (RT0) и декорации/строения/армии (RT1) — обе нативные
+    // Слои: тайлы (RT0) и декорации/строения/армий (RT1) — обе нативные
     // egui-текстуры (zero-copy), порядок как в игре: тайлы, затем декор.
     let draw_min = world_to_screen([0., 0.]);
     let draw_max = world_to_screen([world_w, world_h]);
@@ -831,7 +853,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     }
     // Маркеры редактора (E1 армии, E2/E4 фонарики) поверх слоёв.
     if ectx.editor.render_settings.markers {
-        let markers = ectx.editor.marker_cache.clone();
+        let markers = ectx.editor.marker_handles.clone();
         markers_layer(ui, ectx, world_to_screen, &markers);
     }
     // Сетка (вкладка «Рендер»).
@@ -887,19 +909,17 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             egui::StrokeKind::Inside,
         );
     }
-    // Зум колесом вокруг курсора. Лимиты — в ЭКРАННОМ масштабе
-    // (screen-px на world-px = zoom[0] * world_w): «подход» = карта
-    // занимает ≥ 1/16 канваса, «детально» = ≤ 16 экранов на карту.
+    // Зум колесом вокруг курсора.
     if response.hovered() && ectx.input.wheel != 0. {
         let factor = 1.2f32.powf((ectx.input.wheel / 24.).clamp(-4., 4.));
         let anchor_world = ui
             .input(|i| i.pointer.hover_pos())
             .map(screen_to_world)
             .unwrap_or(cam.target);
-        let scale = cam.zoom[0] * world_w;
-        let new_scale = (scale * factor).clamp(ZOOM_MIN, ZOOM_MAX);
-        let factor = new_scale / scale;
-        cam.zoom[0] = new_scale / world_w;
+        // Реверт к оригиналу (f96705f): zoom-фактор = cam.zoom[0]*world_w*0.5,
+        // кламп в ЕДИНИЦААХ cam.zoom[0]: min = fit/world_w*0.5 (карта вдвое
+        // меньше канваса — «подход»), max = 4.0 (карта ×4 — детальный вид).
+        cam.zoom[0] = (cam.zoom[0] * factor).clamp(fit / world_w * 0.5, 4.0);
         cam.zoom[1] = cam.zoom[0];
         cam.target = [
             anchor_world[0] + (cam.target[0] - anchor_world[0]) / factor,
@@ -951,22 +971,21 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         // Кисть отпущена: следующее нажатие начнёт новую траекторию.
         ectx.editor.brush_pos = None;
     }
+    ectx.editor.cam = cam;
     clicked
 }
 
 /// Слой редакторских маркеров поверх канваса (egui painter):
 /// E1 — неактивные армии (active=false), активные рисуются модельками
-/// в RT-слое; E2 — фонарик без событий; E4 — фонарик с событиями
-/// (eventmap той же клетки непуст). E3 «чисто локальные события» —
 fn markers_layer(
     ui: &mut Ui,
     ectx: &mut EditorCtx,
     world_to_screen: impl Fn([f32; 2]) -> egui::Pos2,
-    markers: &std::collections::HashMap<String, egui::TextureId>,
+    markers: &std::collections::HashMap<String, egui::TextureHandle>,
 ) {
-    let Some(e1) = markers.get("E1.png").copied() else { return; };
-    let e2 = markers.get("E2.png").copied();
-    let e4 = markers.get("E4.png").copied();
+    let Some(e1) = markers.get("E1.png") else { return; };
+    let e2 = markers.get("E2.png");
+    let e4 = markers.get("E4.png");
     let project = ectx.editor.state.project();
     let painter = ui.painter();
     let size = project.size();
@@ -980,7 +999,7 @@ fn markers_layer(
         }
         let pos = world_to_screen([i as f32 * SIZE.0, j as f32 * SIZE.1]);
         painter.image(
-            e1,
+            e1.id(),
             egui::Rect::from_min_size(pos, egui::vec2(SIZE.0, SIZE.1 * 2.)),
             egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
             Color32::WHITE,
@@ -995,7 +1014,7 @@ fn markers_layer(
         let tex = if has_event { e4 } else { e2 };
         let Some(tex) = tex else { continue; };
         painter.image(
-            tex,
+            tex.id(),
             egui::Rect::from_min_size(pos, egui::vec2(SIZE.0, SIZE.1 * 2.)),
             egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
             Color32::WHITE,
@@ -1090,22 +1109,24 @@ fn new_project(ectx: &mut EditorCtx, size: usize) {
     editor.issues.clear();
     editor.bake_dirty = true;
     editor.selected = None;
-    editor.cam = Camera::from_display_rect(0., SIZE.1 * size as f32, SIZE.0 * size as f32, -SIZE.1 * size as f32);
     // Размер карты изменился — пересоздать RT.
     editor.rt = None;
+    editor.decos_rt = None;
     editor.baked = false;
-    // egui-текстура перепривязается к новому RT при следующем запеке
-    // (rt_recreated → update_native_texture).
     editor.status = format!("Новая карта {size}×{size}");
 }
 
-/// Open .dtm: parse_dtm_map → convert_dtm_map (registry уже загружен игрой).
-fn open_project(ectx: &mut EditorCtx, path: std::path::PathBuf) {
+/// рассечены), и из диалога.
+fn open_project_parts(
+    registry: &mut dt_lib::registry::GameInfo,
+    editor: &mut EditorUi,
+    path: &std::path::Path,
+) {
     let result = (|| -> Result<editor_core::MapProject, String> {
-        let data = dt_lib::map::convert::parse_dtm_map(&path)
+        let data = dt_lib::map::convert::parse_dtm_map(path)
             .map_err(|_| "parse_dtm_map: не удалось разобрать файл".to_string())?;
         let (map, events) =
-            dt_lib::map::convert::convert_dtm_map(data, ectx.registry);
+            dt_lib::map::convert::convert_dtm_map(data, registry);
         Ok(editor_core::MapProject {
             map,
             events,
@@ -1115,18 +1136,15 @@ fn open_project(ectx: &mut EditorCtx, path: std::path::PathBuf) {
     match result {
         Ok(project) => {
             let size = project.size();
-            let editor = &mut ectx.editor;
             editor.state = editor_core::EditorState::new(project);
-
             editor.history = editor_core::CommandHistory::new();
-            editor.project_path = Some(path);
+            editor.project_path = Some(path.to_path_buf());
             editor.issues.clear();
             editor.bake_dirty = true;
             editor.selected = None;
             editor.rt = None;
+            editor.decos_rt = None;
             editor.baked = false;
-            // egui-текстура перепривязается к новому RT при следующем запеке
-            // (rt_recreated → update_native_texture).
             editor.cam = Camera::from_display_rect(
                 0.,
                 SIZE.1 * size as f32,
@@ -1135,8 +1153,13 @@ fn open_project(ectx: &mut EditorCtx, path: std::path::PathBuf) {
             );
             editor.status = "Карта открыта".into();
         }
-        Err(err) => ectx.editor.status = err,
+        Err(err) => editor.status = err,
     }
+}
+
+/// Open .dtm: parse_dtm_map → convert_dtm_map (registry уже загружен игрой).
+fn open_project(ectx: &mut EditorCtx, path: std::path::PathBuf) {
+    open_project_parts(ectx.registry, ectx.editor, &path);
 }
 
 /// Save: валидаторы (Error блокируют) → gamemap_to_dtm → fs::write.
