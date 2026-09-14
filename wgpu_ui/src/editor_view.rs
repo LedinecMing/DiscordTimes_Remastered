@@ -977,6 +977,16 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
 
 /// Слой редакторских маркеров поверх канваса (egui painter):
 /// E1 — неактивные армии (active=false), активные рисуются модельками
+/// в RT-слое; E2 — фонарик без событий; E4 — фонарик с событиями
+/// (eventmap той же клетки непуст); E3 — «чисто локальные события»:
+/// клетки eventmap с событиями, где НЕТ фонарика.
+///
+/// Геометрия: спрайты E*.png — 32×32; армия занимает 1×2 клетки
+/// (SIZE.0×SIZE.1*2 = 32×44 world-px). Маркер масштабируется до высоты
+/// в 2 клетки (ширина пропорционально аспекту), низ — на нижней грани
+/// клетки, X — по центру клетки (как строения/армии в bake):
+///   h = SIZE.1 * 2; w = tex_w * (h / tex_h)
+///   min = [ i*SIZE.0 + SIZE.0/2 - w/2 , (j+1)*SIZE.1 - h ]
 fn markers_layer(
     ui: &mut Ui,
     ectx: &mut EditorCtx,
@@ -985,40 +995,79 @@ fn markers_layer(
 ) {
     let Some(e1) = markers.get("E1.png") else { return; };
     let e2 = markers.get("E2.png");
+    let e3 = markers.get("E3.png");
     let e4 = markers.get("E4.png");
     let project = ectx.editor.state.project();
     let painter = ui.painter();
     let size = project.size();
+    // У новой карты (MapProject::new) eventmap пуст (size=0) — индексация
+    // по (x,y) невозможна; у открытых .dtm eventmap всегда согласован.
+    let eventmap_ok = project.map.eventmap.size == size
+        && project.map.eventmap.inner.len() == size * size;
+    let events_at = |x: usize, y: usize| -> bool {
+        eventmap_ok && !project.map.eventmap[(x, y)].is_empty()
+    };
+    // Общий расчёт прямоугольника маркера 1×2 клетки, центрированного
+    // по X клетки (i, j) и стоящего низом на её нижней грани.
+    let marker_rect = |i: usize, j: usize, tex: &egui::TextureHandle| -> egui::Rect {
+        let tex_size = tex.size_vec2();
+        let (tw, th) = (tex_size.x, tex_size.y);
+        let h = SIZE.1 * 2.;
+        let w = if th > 0. { tw * (h / th) } else { SIZE.0 };
+        let min = world_to_screen([
+            i as f32 * SIZE.0 + SIZE.0 * 0.5 - w * 0.5,
+            (j + 1) as f32 * SIZE.1 - h,
+        ]);
+        egui::Rect::from_min_size(min, egui::vec2(w, h))
+    };
+    let uv = egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.));
+
+    // E1: неактивные армии (активные — игровой моделькой в RT-слое).
     for army in &project.map.armys {
         if army.active {
-            continue; // активные — игровой моделькой в RT-слое
+            continue;
         }
         let (i, j) = army.pos;
         if i >= size || j >= size {
             continue;
         }
-        let pos = world_to_screen([i as f32 * SIZE.0, j as f32 * SIZE.1]);
-        painter.image(
-            e1.id(),
-            egui::Rect::from_min_size(pos, egui::vec2(SIZE.0, SIZE.1 * 2.)),
-            egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-            Color32::WHITE,
-        );
+        painter.image(e1.id(), marker_rect(i, j, e1), uv, Color32::WHITE);
     }
+
+    // E2/E4: фонарики (E4 — если в той же клетке есть события).
     for light in &project.lights {
         if light.x >= size || light.y >= size {
             continue;
         }
-        let pos = world_to_screen([light.x as f32 * SIZE.0, light.y as f32 * SIZE.1]);
-        let has_event = !project.map.eventmap[(light.x, light.y)].is_empty();
+        let has_event = events_at(light.x, light.y);
         let tex = if has_event { e4 } else { e2 };
         let Some(tex) = tex else { continue; };
-        painter.image(
-            tex.id(),
-            egui::Rect::from_min_size(pos, egui::vec2(SIZE.0, SIZE.1 * 2.)),
-            egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-            Color32::WHITE,
-        );
+        painter.image(tex.id(), marker_rect(light.x, light.y, tex), uv, Color32::WHITE);
+    }
+
+    // E3: «чисто локальные события» — клетки eventmap с событиями, в
+    // которых НЕТ фонарика (фонарик с событиями уже показан E4; без
+    // событий — E2). Location::Place без координат в dt_lib пока не
+    // несёт позицию — единственный координированный источник локальных
+    // событий это eventmap (заполняется из lanterns map_model=9).
+    if let Some(e3) = e3 {
+        if !eventmap_ok {
+            return;
+        }
+        let light_cells: std::collections::HashSet<(usize, usize)> =
+            project.lights.iter().map(|l| (l.x, l.y)).collect();
+        for flat in 0..size * size {
+            if project.map.eventmap.inner[flat].is_empty() {
+                continue;
+            }
+            // TileMap::index((x, y)) = inner[y + x*size] → инверсия:
+            // x = flat / size, y = flat % size (как ownership-слой).
+            let (x, y) = (flat / size, flat % size);
+            if light_cells.contains(&(x, y)) {
+                continue;
+            }
+            painter.image(e3.id(), marker_rect(x, y, e3), uv, Color32::WHITE);
+        }
     }
 }
 
