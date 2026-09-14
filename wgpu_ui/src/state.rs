@@ -88,8 +88,17 @@ impl BlendMode {
     pub fn rounded(self) -> bool {
         matches!(self, BlendMode::Rounded | BlendMode::RoundedStrong)
     }
+    /// Подпись для комбобокса настроек рендера.
+    pub fn label(self) -> &'static str {
+        match self {
+            BlendMode::Off => "Off",
+            BlendMode::Edges => "Edges",
+            BlendMode::EdgesStrong => "Strong",
+            BlendMode::Rounded => "Rounded",
+            BlendMode::RoundedStrong => "Rounded Strong",
+        }
+    }
 }
-
 #[derive(Debug, Clone)]
 pub struct MapRenderSettings {
     pub camera: Camera,
@@ -201,7 +210,8 @@ pub struct EditorUi {
     pub active_building: Option<usize>,
     /// Выбранный армейский шаблон (id юнита-главы из реестра units).
     pub active_army_template: Option<usize>,
-    /// Строка поиска по имени/ID в палитре (декор/строения/армии).
+    /// Кэш egui-текстур палитры (ключ = имя ассета; load_texture по надобности).
+    pub palette_tex: std::collections::HashMap<String, egui::TextureHandle>,
     pub palette_search: String,
     /// Фильтр категории декораций (первое слово имени; None = все).
     pub deco_category: Option<String>,
@@ -209,8 +219,6 @@ pub struct EditorUi {
     pub building_category: Option<String>,
     /// Фильтр типа армейских шаблонов (None = все).
     pub army_nature: Option<ArmyNature>,
-    /// Кэш egui-текстур палитры (ключ = имя ассета; регистрация по надобности).
-    pub palette_tex: std::collections::HashMap<String, egui::TextureId>,
     /// Таймер повтора Ctrl+Z/Y: время последнего повтора (сек),
     /// None — удержание только началось (ждём задержку до первого повтора).
     pub hotkey_repeat_at: Option<f64>,

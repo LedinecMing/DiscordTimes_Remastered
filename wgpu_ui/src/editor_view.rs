@@ -47,25 +47,66 @@ pub fn editor_screen(ctx: &mut Ctx) -> bool {
     keep_open
 }
 
-/// Хоткеи редактора: Ctrl+Z / Ctrl+Shift+Z, Escape — выход.
+/// Хоткеи редактора: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, Escape — выход.
+///
+/// Повтор при удержании: первая отмена — по нажатию, далее автоповтор
+/// 4 раза/сек (задержка до первого повтора 0.4с), таймер в
+/// EditorUi.hotkey_repeat_at (crate::time_secs).
+const REPEAT_DELAY: f64 = 0.4;
+const REPEAT_INTERVAL: f64 = 0.25; // 4 повтора/сек
+
 fn handle_hotkeys(ctx: &mut Ctx) {
     let ctrl = ctx.input.key_down(KeyCode::ControlLeft)
         || ctx.input.key_down(KeyCode::ControlRight);
     let shift = ctx.input.key_down(KeyCode::ShiftLeft)
         || ctx.input.key_down(KeyCode::ShiftRight);
-    if ctrl && ctx.input.key_pressed(KeyCode::KeyZ) {
-        let editor = &mut ctx.editor;
-        if shift {
-            if let Some(name) = editor.history.redo(&mut editor.state) {
-                editor.status = format!("Redo: {name}");
-                editor.bake_dirty = true;
+    let undo_held = ctrl && ctx.input.key_down(KeyCode::KeyZ) && !shift;
+    let redo_held = (ctrl && ctx.input.key_down(KeyCode::KeyY))
+        || (ctrl && ctx.input.key_down(KeyCode::KeyZ) && shift);
+    let now = crate::time_secs();
+
+    // Один и тот же повтор для undo/redo: действие выбирается зажатой
+    // клавишей; приоритет у redo при удержании обоих.
+    let undo_pressed = ctrl && ctx.input.key_pressed(KeyCode::KeyZ) && !shift;
+    let redo_pressed = (ctrl && ctx.input.key_pressed(KeyCode::KeyY))
+        || (ctrl && ctx.input.key_pressed(KeyCode::KeyZ) && shift);
+    let mut fire_undo = false;
+    let mut fire_redo = false;
+    if undo_pressed || redo_pressed {
+        // Нажатие: мгновенное срабатывание + старт таймера повтора.
+        fire_undo = undo_pressed;
+        fire_redo = redo_pressed && !undo_pressed;
+        ctx.editor.hotkey_repeat_at = Some(now);
+    } else if undo_held || redo_held {
+        // Удержание: автоповтор по таймеру (задержка, затем интервал).
+        if let Some(last) = ctx.editor.hotkey_repeat_at {
+            let elapsed = now - last;
+            let due = if elapsed >= REPEAT_DELAY {
+                (elapsed - REPEAT_DELAY) / REPEAT_INTERVAL >= 1.
+            } else {
+                false
+            };
+            if due {
+                fire_redo = redo_held;
+                fire_undo = undo_held && !redo_held;
+                ctx.editor.hotkey_repeat_at = Some(now - REPEAT_DELAY);
             }
-        } else if let Some(name) = editor.history.undo(&mut editor.state) {
+        } else {
+            // Клавиша была зажата до входа в редактор: старт таймера.
+            ctx.editor.hotkey_repeat_at = Some(now);
+        }
+    } else {
+        ctx.editor.hotkey_repeat_at = None;
+    }
+
+    if fire_undo {
+        let editor = &mut ctx.editor;
+        if let Some(name) = editor.history.undo(&mut editor.state) {
             editor.status = format!("Undo: {name}");
             editor.bake_dirty = true;
         }
     }
-    if ctrl && ctx.input.key_pressed(KeyCode::KeyY) {
+    if fire_redo {
         let editor = &mut ctx.editor;
         if let Some(name) = editor.history.redo(&mut editor.state) {
             editor.status = format!("Redo: {name}");
@@ -109,14 +150,15 @@ fn rebake_if_dirty(
         rt_recreated = true;
     }
     // ЕДИНЫЙ рендер-путь с игрой (bake.rs): тайлы, декорации, строения,
-    // армии (модельки/корабли на воде). Маркеры редактора — egui-слой.
+    // армии (модельки/корабли на воде). Настройки слоёв — вкладка «Рендер»
+    // (blend_mode, строения, армии); маркеры редактора — egui-слой.
     crate::bake::bake_map_textures(
         gfx,
         editor.rt.as_ref().expect("rt just created"),
         assets,
         &project.map,
         tile_pixels,
-        crate::state::BlendMode::Rounded,
+        editor.render_settings.blend_mode,
     );
     crate::bake::render_decos_layer(
         gfx,
@@ -125,8 +167,8 @@ fn rebake_if_dirty(
         &project.map,
         registry,
         0,
-        true,
-        true,
+        editor.render_settings.buildings,
+        editor.render_settings.armies,
     );
     // egui-текстуры обоих слоёв (zero-copy, Nearest — пиксель-арт).
     let mut register = |gfx: &mut crate::gfx::Gfx,
@@ -225,9 +267,13 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         egui::Panel::bottom("editor_status").show(ui, |ui| {
             status_bar(ui, &mut rest);
         });
-        egui::Panel::left("editor_tools").show(ui, |ui| {
-            tool_panel(ui, &mut rest);
-        });
+        egui::Panel::left("editor_tools")
+            .default_size(240.)
+            .min_size(200.)
+            .resizable(true)
+            .show(ui, |ui| {
+                tool_panel(ui, &mut rest);
+            });
         egui::CentralPanel::default().show(ui, |ui| {
             state.actions.click_tile = canvas(ui, &mut rest);
         });
@@ -324,7 +370,29 @@ fn top_bar(ui: &mut Ui, ectx: &mut EditorCtx, state: &mut ScreenState) {
     });
 }
 
-/// Панель инструментов слева: инструменты, палитра тайлов, инфо.
+/// Вкладка панели инструментов (палитра по типу элемента + настройки).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PaletteTab {
+    /// Палитра активного инструмента (тайлы/декор/строения/армии).
+    Tool,
+    /// Настройки рендера редактора.
+    Render,
+}
+
+impl PaletteTab {
+    fn label(self) -> &'static str {
+        match self {
+            PaletteTab::Tool => "Палитра",
+            PaletteTab::Render => "Рендер",
+        }
+    }
+}
+
+/// Активная вкладка панели (нетабличное состояние кадра — egui id).
+const TAB_STATE: &str = "editor_palette_tab";
+
+/// Панель инструментов слева: инструменты, вкладки палитры (гриды иконок
+/// с поиском и фильтрами категорий) и настройки рендера.
 fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
     ui.heading("Инструменты");
     let active = ectx.editor.tool;
@@ -337,24 +405,345 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
         }
     }
     ui.separator();
-    ui.heading("Тайлы");
-    ui.horizontal_wrapped(|ui| {
-        for tile in 0..editor_core::project::TILE_COUNT {
+    // Вкладки: палитра активного инструмента / настройки рендера.
+    let mut tab: i32 = ui
+        .ctx()
+        .data_mut(|d| d.get_temp(egui::Id::new(TAB_STATE)))
+        .unwrap_or(0);
+    ui.horizontal(|ui| {
+        for (i, t) in [PaletteTab::Tool, PaletteTab::Render].iter().enumerate() {
             if ui
-                .selectable_label(ectx.editor.active_tile == tile, format!("{tile}"))
+                .selectable_label(tab == i as i32, t.label())
                 .clicked()
             {
-                ectx.editor.active_tile = tile;
-                ectx.editor.state.set_active_tile(tile);
+                tab = i as i32;
             }
         }
     });
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(egui::Id::new(TAB_STATE), tab));
+    match tab {
+        1 => render_settings_tab(ui, ectx),
+        _ => palette_tab(ui, ectx),
+    }
     ui.separator();
     ui.label(format!(
         "undo: {} redo: {}",
         ectx.editor.history.undo_len(),
         if ectx.editor.history.can_redo() { "+" } else { "-" },
     ));
+}
+
+/// Вкладка «Рендер»: переключатели слоёв канваса и режим наплывов.
+fn render_settings_tab(ui: &mut Ui, ectx: &mut EditorCtx) {
+    let rs = &mut ectx.editor.render_settings;
+    let mut rebake = false;
+    ui.checkbox(&mut rs.markers, "Маркеры E1/E2/E4");
+    ui.checkbox(&mut rs.grid, "Сетка");
+    ui.checkbox(&mut rs.ownership, "Принадлежность строений");
+    ui.checkbox(&mut rs.buildings, "Строения");
+    ui.checkbox(&mut rs.armies, "Армии");
+    ui.separator();
+    ui.label("Наплывы тайлов:");
+    egui::ComboBox::from_id_salt("blend_mode")
+        .selected_text(rs.blend_mode.label())
+        .show_ui(ui, |ui| {
+            for mode in crate::state::BlendMode::ALL {
+                ui.selectable_value(&mut rs.blend_mode, mode, mode.label());
+            }
+        });
+    if ui.button("Перезапечь карту").clicked() {
+        rebake = true;
+    }
+    if rebake {
+        ectx.editor.bake_dirty = true;
+    }
+}
+
+/// Вкладка палитры: грид иконок активного инструмента. Тайлы — иконки
+/// TILES; декорации/строения — иконки registry.objects (по типу объекта);
+/// армии — 4 базовых шаблона по Nature + заглушка «свои шаблоны».
+fn palette_tab(ui: &mut Ui, ectx: &mut EditorCtx) {
+    match ectx.editor.tool {
+        editor_core::Tool::Brush => tiles_palette(ui, ectx),
+        editor_core::Tool::Deco => objects_palette(ui, ectx, false),
+        editor_core::Tool::Building => objects_palette(ui, ectx, true),
+        editor_core::Tool::Army => armies_palette(ui, ectx),
+    }
+}
+
+/// Подпись поиска над гридом: фильтрует по подстроке имени или id.
+fn search_field(ui: &mut Ui, ectx: &mut EditorCtx) {
+    ui.horizontal(|ui| {
+        ui.label("Поиск:");
+        ui.text_edit_singleline(&mut ectx.editor.palette_search);
+        if ui.button("✕").clicked() {
+            ectx.editor.palette_search.clear();
+        }
+    });
+}
+
+/// Пропускает ли объект поисковый фильтр (имя или id как подстрока).
+fn matches_search(search: &str, name: &str, id: usize) -> bool {
+    let search = search.trim();
+    if search.is_empty() {
+        return true;
+    }
+    // Числовой запрос — точное совпадение id (не подстрока имени).
+    if let Ok(num) = search.parse::<usize>() {
+        return num == id;
+    }
+    name.to_lowercase().contains(&search.to_lowercase())
+}
+
+/// Категория объекта = первое слово имени (Tree/GreenHills/Church/...):
+/// поле category в Objects.ini пустое.
+fn object_category(obj: &dt_lib::map::object::ObjectInfo) -> String {
+    obj.name
+        .split(|c: char| c.is_ascii_digit())
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// Грид тайлов: иконки TILES (спрайты уже в gfx-ассетах assets/Terrain).
+fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
+    search_field(ui, ectx);
+    egui::ScrollArea::vertical()
+        .id_salt("tiles_palette")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let names: Vec<String> = dt_lib::map::tile::TILES
+                .iter()
+                .map(|t| {
+                    t.sprite()
+                        .trim_end_matches(".png")
+                        .to_string()
+                })
+                .collect();
+            ui.horizontal_wrapped(|ui| {
+                for tile in 0..editor_core::project::TILE_COUNT {
+                    if !matches_search(
+                        &ectx.editor.palette_search,
+                        &names[tile],
+                        tile,
+                    ) {
+                        continue;
+                    }
+                    let selected = ectx.editor.active_tile == tile;
+                    let cell = ui
+                        .selectable_label(selected, format!("{}\n{}", names[tile], tile))
+                        .on_hover_text(format!("{} ({})", names[tile], tile));
+                    if cell.clicked() {
+                        ectx.editor.active_tile = tile;
+                        ectx.editor.state.set_active_tile(tile);
+                    }
+                }
+            });
+        });
+}
+
+/// Грид декораций (buildings=false) или строений (buildings=true):
+/// иконки registry.objects по obj_type, поиск + фильтр категории.
+fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
+    search_field(ui, ectx);
+    // Категории из префиксов имён объектов нужного типа, отсортированные.
+    let mut categories: Vec<String> = ectx
+        .registry
+        .objects
+        .inner
+        .iter()
+        .filter(|o| {
+            matches!(
+                o.obj_type,
+                dt_lib::map::object::ObjectType::Building { .. }
+                    | dt_lib::map::object::ObjectType::Bridge { .. }
+            ) == buildings
+                || (!buildings
+                    && matches!(
+                        o.obj_type,
+                        dt_lib::map::object::ObjectType::MapDeco { .. }
+                    ))
+        })
+        .map(object_category)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    categories.dedup();
+    let current = if buildings {
+        &mut ectx.editor.building_category
+    } else {
+        &mut ectx.editor.deco_category
+    };
+    egui::ComboBox::from_id_salt(if buildings {
+        "building_category"
+    } else {
+        "deco_category"
+    })
+    .selected_text(current.clone().unwrap_or_else(|| "все".into()))
+    .show_ui(ui, |ui| {
+        ui.selectable_value(current, None, "все");
+        for cat in &categories {
+            ui.selectable_value(current, Some(cat.clone()), cat);
+        }
+    });
+    let category = current.clone();
+    egui::ScrollArea::vertical()
+        .id_salt(if buildings {
+            "buildings_palette"
+        } else {
+            "decos_palette"
+        })
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let entries: Vec<(usize, &dt_lib::map::object::ObjectInfo)> = ectx
+                .registry
+                .objects
+                .inner
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| {
+                    let is_building = matches!(
+                        o.obj_type,
+                        dt_lib::map::object::ObjectType::Building { .. }
+                            | dt_lib::map::object::ObjectType::Bridge { .. }
+                    );
+                    is_building == buildings
+                        && category
+                            .as_ref()
+                            .is_none_or(|c| object_category(o) == *c)
+                        && matches_search(&ectx.editor.palette_search, &o.name, o.index)
+                })
+                .collect();
+            // Иконки: кэш на кадр по имени ассета (повторяющиеся объекты
+            // одного спрайта не перечитывают PNG).
+            let mut icons: std::collections::HashMap<String, Option<egui::TextureId>> =
+                std::collections::HashMap::new();
+            ui.horizontal_wrapped(|ui| {
+                for (idx, obj) in entries {
+                    let selected = if buildings {
+                        ectx.editor.active_building == Some(idx)
+                    } else {
+                        ectx.editor.active_deco == Some(idx)
+                    };
+                    let cell_size = egui::vec2(72., 80.);
+                    let path = obj.path.clone();
+                    let tex = if let Some(t) = icons.get(&path) {
+                        *t
+                    } else {
+                        let t = palette_icon_cache(
+                            ui.ctx(),
+                            ectx.editor,
+                            &path,
+                            &format!("assets/Objects/{path}"),
+                        );
+                        icons.insert(path, t);
+                        t
+                    };
+                    let cell = egui::Button::new(
+                        egui::RichText::new(format!("{}\n({})", obj.name, obj.index))
+                            .small()
+                            .color(if selected {
+                                egui::Color32::YELLOW
+                            } else {
+                                egui::Color32::LIGHT_GRAY
+                            }),
+                    )
+                    .min_size(cell_size);
+                    let resp = ui.add_enabled(tex.is_some(), cell).on_hover_text(format!(
+                        "{} ({}) {:?}",
+                        obj.name, obj.index, obj.size
+                    ));
+                    if let Some(tex) = tex {
+                        // Иконка в верхней части ячейки, над подписью.
+                        let icon_rect = egui::Rect::from_min_size(
+                            resp.rect.left_top() + egui::vec2(4., 2.),
+                            egui::vec2(64., 44.),
+                        );
+                        ui.painter().image(
+                            tex,
+                            icon_rect,
+                            egui::Rect::from_min_max(
+                                egui::pos2(0., 0.),
+                                egui::pos2(1., 1.),
+                            ),
+                            egui::Color32::WHITE,
+                        );
+                    }
+                    if resp.clicked() {
+                        if buildings {
+                            ectx.editor.active_building = Some(idx);
+                        } else {
+                            ectx.editor.active_deco = Some(idx);
+                        }
+                    }
+                    if selected {
+                        ui.painter().rect_stroke(
+                            resp.rect,
+                            3.,
+                            egui::Stroke::new(2., egui::Color32::YELLOW),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                }
+            });
+        });
+}
+
+/// Палитра армий: 4 базовых шаблона (феодал/разбойник/деревенщина/нежить)
+/// по характерному юниту из реестра + заглушка «свои шаблоны».
+fn armies_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
+    ui.label("Базовые шаблоны:");
+    for nature in crate::state::ArmyNature::ALL {
+        let Some(unit_id) = ectx
+            .registry
+            .units
+            .str_to_id(&nature.template_unit_name().to_string())
+        else {
+            continue;
+        };
+        let unit = &ectx.registry.units[unit_id];
+        let selected = ectx.editor.active_army_template == Some(unit_id);
+        let icon_name = format!("unit_{}.png", unit.icon_index - 1);
+        ui.horizontal(|ui| {
+            if let Some(tex) = palette_icon_cache(
+                ui.ctx(),
+                ectx.editor,
+                &icon_name,
+                &format!("assets/Icons/{icon_name}"),
+            ) {
+                ui.image((tex, egui::vec2(40., 40.)));
+            }
+            let label = format!("{} — {} ({})", nature.label(), unit.name, unit_id);
+            if ui.selectable_label(selected, label).clicked() {
+                ectx.editor.active_army_template = Some(unit_id);
+            }
+        });
+    }
+    ui.separator();
+    ui.label("Свои шаблоны:");
+    ui.label(RichText::new("(добавьте свои)").weak().small());
+}
+
+/// Кэш egui-текстур иконок палитры (ключ = имя ассета; load_texture с
+/// диска через egui-пайплайн — premultiplied alpha, как marker_handles).
+fn palette_icon_cache(
+    ctx: &egui::Context,
+    editor: &mut EditorUi,
+    asset_name: &str,
+    path: &str,
+) -> Option<egui::TextureId> {
+    if let Some(handle) = editor.palette_tex.get(asset_name) {
+        return Some(handle.id());
+    }
+    let img = image::open(path).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw());
+    let handle = ctx.load_texture(asset_name, image, egui::TextureOptions::NEAREST);
+    let id = handle.id();
+    editor.palette_tex.insert(asset_name.to_string(), handle);
+    Some(id)
 }
 
 /// Лимиты зума канваса в экранных единицах (screen-px на world-px):
@@ -404,14 +793,50 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     if let Some(decos_tex) = ectx.editor.decos_tex {
         painter.image(decos_tex, draw_rect, uv, Color32::WHITE);
     }
+    // Ownership-заливка строений (вкладка «Рендер»): полупрозрачные
+    // прямоугольники спанов строений, цвет — HSV-хеш индекса (как F9
+    // в игре, building_ownership_color).
+    if ectx.editor.render_settings.ownership {
+        // Спаны строений через calc_hitboxes (проектный hitmap мог
+        // протухнуть после правок; пересчёт на клоне).
+        let mut map = ectx.editor.state.project().map.clone();
+        map.calc_hitboxes(&ectx.registry.objects.inner);
+        let map_size = map.hitmap.size;
+        if map_size == size && !map.hitmap.inner.is_empty() {
+            let flat_iter = map.hitmap.inner.iter().enumerate();
+            for (flat, hit) in flat_iter {
+                if let Some(building) = hit.building {
+                    // TileMap::index((x, y)) = inner[y + x*size] → по
+                    // linear индексу x = flat/size, y = flat%size.
+                    let (tx, ty) = (flat / map_size, flat % map_size);
+                    let a = world_to_screen([tx as f32 * SIZE.0, ty as f32 * SIZE.1]);
+                    let b = world_to_screen([
+                        (tx + 1) as f32 * SIZE.0,
+                        (ty + 1) as f32 * SIZE.1,
+                    ]);
+                    let [r, g, bch, _] = building_ownership_color(building);
+                    let color = Color32::from_rgb(
+                        (r * 255.) as u8,
+                        (g * 255.) as u8,
+                        (bch * 255.) as u8,
+                    );
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(a, b),
+                        0.,
+                        color.gamma_multiply(0.35),
+                    );
+                }
+            }
+        }
+    }
     // Маркеры редактора (E1 армии, E2/E4 фонарики) поверх слоёв.
-    {
+    if ectx.editor.render_settings.markers {
         let markers = ectx.editor.marker_cache.clone();
         markers_layer(ui, ectx, world_to_screen, &markers);
     }
-    // Сетка.
+    // Сетка (вкладка «Рендер»).
     let grid_step = 8.0 / zoom;
-    if zoom > 1.0 {
+    if zoom > 1.0 && ectx.editor.render_settings.grid {
         let mut x = 0.;
         while x <= world_w {
             let a = world_to_screen([x, 0.]);
@@ -578,25 +1003,72 @@ fn markers_layer(
     }
 }
 
+/// Детерминированный цвет строения для ownership-слоя (как F9 в игре,
+/// map_view::building_ownership_color): HSV-хеш индекса, золотое сечение.
+fn building_ownership_color(building: usize) -> [f32; 4] {
+    let hue = (building as f32 * 0.618_034) % 1.;
+    let h6 = hue * 6.;
+    let sector = (h6.floor() as i32).rem_euclid(6);
+    let frac = h6 - h6.floor();
+    let (r, g, b) = match sector {
+        0 => (1., frac, 0.),
+        1 => (1. - frac, 1., 0.),
+        2 => (0., 1., frac),
+        3 => (0., 1. - frac, 1.),
+        4 => (frac, 0., 1.),
+        _ => (1., 0., 1. - frac),
+    };
+    let sat = 0.75;
+    let mix = |c: f32| c * sat + (1. - sat);
+    [mix(r), mix(g), mix(b), 1.]
+}
+
 /// Применить активный инструмент: построить команду и выполнить.
 fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
     let editor = &mut ectx.editor;
-    let command: Box<dyn editor_core::Command> = match editor.tool {
-        editor_core::Tool::Brush => {
-            Box::new(PaintTile::new(tile, editor.active_tile))
-        }
-        editor_core::Tool::Deco => {
-            editor.counter += 1;
-            Box::new(PlaceDeco::new(tile, editor.counter))
-        }
-        editor_core::Tool::Building => {
-            editor.counter += 1;
-            Box::new(PlaceBuilding::new(tile, editor.counter % 14))
-        }
+    let command: Option<Box<dyn editor_core::Command>> = match editor.tool {
+        editor_core::Tool::Brush => Some(Box::new(PaintTile::new(tile, editor.active_tile))),
+        editor_core::Tool::Deco => editor
+            .active_deco
+            .and_then(|idx| {
+                ectx.registry
+                    .objects
+                    .inner
+                    .get(idx)
+                    .map(|obj| match obj.obj_type {
+                        dt_lib::map::object::ObjectType::MapDeco { id } => id,
+                        _ => 0,
+                    })
+            })
+            .map(|deco_id| Box::new(PlaceDeco::new(tile, deco_id)) as Box<dyn editor_core::Command>),
+        editor_core::Tool::Building => editor
+            .active_building
+            .and_then(|idx| ectx.registry.objects.inner.get(idx))
+            .map(|obj| {
+                Box::new(PlaceBuilding::new(tile, obj.index))
+                    as Box<dyn editor_core::Command>
+            }),
         editor_core::Tool::Army => {
+            // Шаблон: выбранный юнит палитры (или пустая армия-заглушка).
+            let template = editor.active_army_template;
+            let units = template.map(|u| vec![u]).unwrap_or_default();
             editor.counter += 1;
-            Box::new(PlaceArmy::new(tile, format!("Армия {}", editor.counter)))
+            let name = template
+                .map(|u| {
+                    format!("{} {}", ectx.registry.units[u].name, editor.counter)
+                })
+                .unwrap_or_else(|| format!("Армия {}", editor.counter));
+            Some(Box::new(PlaceArmy::with_units(
+                tile,
+                name,
+                units,
+                ectx.registry,
+            )))
         }
+    };
+    let Some(command) = command else {
+        editor.status = "Выберите элемент в палитре".into();
+        return;
     };
     match editor.history.execute(command, &mut editor.state) {
         CommandResult::Applied => {
