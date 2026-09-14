@@ -2,7 +2,8 @@
 //!
 //! Фонарик (light) с радиусом вне 0..=24 вызывает вылеты игры.
 //! В dt_lib фонарик — `convert::LightOrEvent` (x, y, light_radius) в бинарной
-//! .DTm-карте; в проекте редактора фонарики — [`editor_core::project::Light`].
+//! .DTm-карте; в проекте редактора точки событий/фонарики — единая
+//! структура `MapLantern` (MapProject.lanterns).
 
 use crate::issue::{Issue, IssueLocation};
 use crate::Validator;
@@ -24,16 +25,16 @@ impl Validator for RadiusRangeCheck {
 
     fn validate(&self, project: &MapProject) -> Vec<Issue> {
         let mut issues = Vec::new();
-        for light in &project.lights {
-            if light.radius > LIGHT_RADIUS_MAX {
+        for lantern in &project.lanterns {
+            if lantern.light_radius as u64 > LIGHT_RADIUS_MAX {
                 issues.push(Issue::error(
                     self.name(),
                     self.guide_reference(),
                     format!(
                         "Радиус фонарика ({}, {}) равен {} — максимум {LIGHT_RADIUS_MAX}; вылет при выходе за диапазон",
-                        light.x, light.y, light.radius
+                        lantern.x, lantern.y, lantern.light_radius
                     ),
-                    IssueLocation::Map(light.x, light.y),
+                    IssueLocation::Map(lantern.x, lantern.y),
                 ));
             }
         }
@@ -46,26 +47,31 @@ impl Validator for RadiusRangeCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use editor_core::project::Light;
+    use dt_lib::map::map::MapLantern;
 
-    fn project_with_lights(lights: Vec<Light>) -> MapProject {
+    fn project_with_lanterns(lanterns: Vec<MapLantern>) -> MapProject {
         let mut project = MapProject::new(50, 0);
-        project.lights = lights;
+        project.lanterns = lanterns;
         project
     }
 
     #[test]
     fn positive_radius_in_range_passes() {
-        let project = project_with_lights(vec![
-            Light { x: 1, y: 2, radius: 0 },
-            Light { x: 3, y: 4, radius: 24 },
+        let project = project_with_lanterns(vec![
+            MapLantern { x: 1, y: 2, light_radius: 0, ..Default::default() },
+            MapLantern { x: 3, y: 4, light_radius: 24, ..Default::default() },
         ]);
         assert!(RadiusRangeCheck.validate(&project).is_empty());
     }
 
     #[test]
     fn negative_radius_over_24_fails() {
-        let project = project_with_lights(vec![Light { x: 5, y: 6, radius: 25 }]);
+        let project = project_with_lanterns(vec![MapLantern {
+            x: 5,
+            y: 6,
+            light_radius: 25,
+            ..Default::default()
+        }]);
         let issues = RadiusRangeCheck.validate(&project);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].severity, crate::Severity::Error);
@@ -74,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn no_lights_passes() {
+    fn no_lanterns_passes() {
         let project = MapProject::new(10, 0);
         assert!(RadiusRangeCheck.validate(&project).is_empty());
     }

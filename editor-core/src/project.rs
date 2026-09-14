@@ -43,14 +43,6 @@ impl ProjectMeta {
     }
 }
 
-/// Фонарик карты: позиция и радиус света (0..=24, см. editor-validators).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Light {
-    pub x: usize,
-    pub y: usize,
-    pub radius: u64,
-}
-
 /// Проект карты: обёртка над `GameMap` + данные редактора.
 #[derive(Clone, Debug, Default)]
 pub struct MapProject {
@@ -61,8 +53,11 @@ pub struct MapProject {
     pub map: GameMap,
     /// События карты (в GameMap не входят: игра хранит их рядом с картой).
     pub events: Events,
-    /// Фонарики (радиус 0..=24; валидатор RadiusRangeCheck).
-    pub lights: Vec<Light>,
+    /// Точки событий/фонарики — ЕДИНЫЙ источник: map.lanterns
+    /// (MapLantern). Отдельного Vec<Light> больше нет: фонарик и его
+    /// события — одна сущность (радиус для RadiusRangeCheck —
+    /// MapLantern.light_radius).
+    pub lanterns: Vec<dt_lib::map::map::MapLantern>,
 }
 impl MapProject {
     /// Новый проект: квадратная карта `size`x`size` (50/100/200/400/800),
@@ -83,7 +78,7 @@ impl MapProject {
                 ..Default::default()
             },
             events: Vec::new(),
-            lights: Vec::new(),
+            lanterns: Vec::new(),
         }
     }
 
@@ -126,10 +121,11 @@ impl MapProject {
                     .into_iter()
                     .map(|(index, x, y)| dt_lib::map::deco::MapDeco { index, x, y })
                     .collect(),
+                lanterns: snapshot.lanterns.clone(),
                 ..Default::default()
             },
             events: snapshot.events,
-            lights: snapshot.lights,
+            lanterns: snapshot.lanterns,
         })
     }
 }
@@ -146,7 +142,7 @@ struct ProjectSnapshot {
     /// Декорации: (index, x, y).
     decos: Vec<(usize, usize, usize)>,
     events: Events,
-    lights: Vec<Light>,
+    lanterns: Vec<dt_lib::map::map::MapLantern>,
 }
 
 impl ProjectSnapshot {
@@ -164,7 +160,7 @@ impl ProjectSnapshot {
                 .map(|d| (d.index, d.x, d.y))
                 .collect(),
             events: project.events.clone(),
-            lights: project.lights.clone(),
+            lanterns: project.lanterns.clone(),
         }
     }
 }
@@ -213,11 +209,17 @@ mod tests {
     }
 
     #[test]
-    fn json_roundtrip_keeps_tiles_events_lights() {
+    fn json_roundtrip_keeps_tiles_events_lanterns() {
         let mut p = MapProject::new(4, 2);
         p.map.tilemap[(2, 1)] = 5;
         p.map.decomap.push(dt_lib::map::deco::MapDeco::new(3, 1, 1));
-        p.lights.push(Light { x: 1, y: 2, radius: 10 });
+        p.lanterns.push(dt_lib::map::map::MapLantern {
+            x: 1,
+            y: 2,
+            light_radius: 10,
+            events: vec![3, 7],
+            ..Default::default()
+        });
         p.events.push(Event::default());
         p.map.start.name = "Test map".into();
         let json = p.to_json().expect("serialize");
@@ -228,6 +230,6 @@ mod tests {
         assert_eq!(back.map.start.name, "Test map");
         assert_eq!(back.map.decomap.len(), 1);
         assert_eq!(back.events.len(), 1);
-        assert_eq!(back.lights, p.lights);
+        assert_eq!(back.lanterns, p.lanterns);
     }
 }
