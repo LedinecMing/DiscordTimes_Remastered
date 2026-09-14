@@ -226,6 +226,13 @@ pub struct EditorUi {
     pub hotkey_repeat_at: Option<f64>,
     /// Настройки рендера редактора (вкладка «Рендер»).
     pub render_settings: EditorRenderSettings,
+    /// Выбранная ЛКМ точка событий/фонарик (индекс в lanterns) —
+    /// открывает вкладку «Точка событий».
+    pub selected_lantern: Option<usize>,
+    /// Активный ПКМ-драг точки (индекс, исходная клетка, текущая клетка
+    /// курсора): маркер рисуется в текущей клетке (без мутации проекта),
+    /// ПКМ up завершает командой MoveLantern (from → текущая).
+    pub lantern_drag: Option<(usize, (usize, usize), (usize, usize))>,
 }
 
 /// Настройки рендера редактора: слои и режимы вкладки «Рендер».
@@ -361,6 +368,8 @@ impl Default for EditorUi {
             palette_tex: std::collections::HashMap::new(),
             hotkey_repeat_at: None,
             render_settings: EditorRenderSettings::default(),
+            selected_lantern: None,
+            lantern_drag: None,
         }
     }
 }

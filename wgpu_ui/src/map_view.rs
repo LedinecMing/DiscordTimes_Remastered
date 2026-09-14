@@ -104,7 +104,7 @@ fn draw_map(ctx: &mut Ctx, settings: &mut MapRenderSettings) -> Option<Menu> {
     if settings.event_render {
         for i in 0..size {
             for j in 0..size {
-                let events = &ctx.game.executor.gamemap.eventmap[(j as usize, i as usize)];
+                let events = ctx.game.executor.gamemap.events_at(j as usize, i as usize);
                 if !events.is_empty() {
                     ctx.gfx.draw_rect(
                         i as f32 * SIZE.0,
