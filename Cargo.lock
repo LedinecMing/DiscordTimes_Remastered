@@ -24,6 +24,8 @@ version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3b7f7f85a7e5f68090000ed7622545829afd484d210358702ae4cb97dd0c320"
 dependencies = [
+ "enumn",
+ "serde",
  "uuid 1.26.1",
 ]
 
@@ -85,6 +87,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.3.4",
  "once_cell",
+ "serde",
  "version_check",
  "zerocopy",
 ]
@@ -1530,6 +1533,7 @@ checksum = "0656a7530b9e2841ee7a5f983965bdd9840c32f4012f759cfd44b912cced6b34"
 dependencies = [
  "bytemuck",
  "emath",
+ "serde",
 ]
 
 [[package]]
@@ -1566,9 +1570,32 @@ dependencies = [
  "log",
  "nohash-hasher",
  "profiling",
+ "serde",
  "smallvec",
  "unicode-segmentation",
  "web-sys",
+]
+
+[[package]]
+name = "egui-scale"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16194efd2800275df80448afa0ee11d3e23ce0220f6754e1af53fec8e9b7467a"
+dependencies = [
+ "egui",
+]
+
+[[package]]
+name = "egui-snarl"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "247c36a1f3b71fb25597f16f9396687641fec220a8116d5093941138fae59e61"
+dependencies = [
+ "ahash 0.8.12",
+ "egui",
+ "egui-scale",
+ "slab",
+ "smallvec",
 ]
 
 [[package]]
@@ -1590,6 +1617,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui_tiles"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87147a0a2f03415a3082a92dba79062912d70d555f2495a54d16a7be2c81ac55"
+dependencies = [
+ "ahash 0.8.12",
+ "egui",
+ "itertools 0.15.0",
+ "log",
+ "serde",
+]
+
+[[package]]
 name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1602,6 +1642,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c8d4141cf0f60fb2f7aefaf352d3ffa5171ef0ab09731c64391801e95e48f1"
 dependencies = [
  "bytemuck",
+ "serde",
 ]
 
 [[package]]
@@ -1659,6 +1700,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "enumn"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f9ed6b3789237c8a0c1c505af1c7eb2c560df6186f01b098c3a1064ea532f38"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "epaint"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1668,6 +1720,7 @@ dependencies = [
  "bytemuck",
  "ecolor",
  "emath",
+ "epaint_default_fonts",
  "font-types 0.12.5",
  "harfrust",
  "log",
@@ -1675,12 +1728,19 @@ dependencies = [
  "parking_lot 0.12.5",
  "profiling",
  "self_cell",
+ "serde",
  "skrifa 0.44.0",
  "smallvec",
  "unicode-general-category",
  "unicode-segmentation",
  "vello_cpu",
 ]
+
+[[package]]
+name = "epaint_default_fonts"
+version = "0.36.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773fa9c96dd0dbef887e39d0ed6177f141cce4d68e6041df77570aa3702dfa13"
 
 [[package]]
 name = "equivalent"
@@ -1809,6 +1869,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8eb065f3251655b3c90e22e5e363f310fc5332fb3402e37bbc94752283248f6"
 dependencies = [
  "bytemuck",
+ "serde",
 ]
 
 [[package]]
@@ -4884,6 +4945,9 @@ name = "smallvec"
 version = "1.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "smithay-client-toolkit"
@@ -6277,7 +6341,9 @@ dependencies = [
  "editor-core",
  "editor-validators",
  "egui",
+ "egui-snarl",
  "egui-wgpu",
+ "egui_tiles",
  "fontdue",
  "futures-util",
  "image",

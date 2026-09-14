@@ -23,8 +23,12 @@ rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "t
 # Пин унификации фич ashpd: только tokio-бекенд (rfd xdg-portal везёт zbus default-features=false;
 # без явного пина cargo включает zbus/async-io через чужие фичи и ashpd не собирается).
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
-egui = { version = "0.36", default-features = false }
+egui = { version = "0.36", default-features = false, features = ["default_fonts"] }
 egui-wgpu = { version = "0.36", default-features = false }
+# Докинг/тилинг окон редактора (egui_tiles 0.17.1 -> egui 0.36) и графы
+# событий (egui-snarl 0.12 -> egui ^0.36); одобрено владельцем 2026-09-14.
+egui_tiles = "0.17.1"
+egui-snarl = "0.12"
 editor-core = { path = "../editor-core" }
 editor-validators = { path = "../editor-validators" }
 

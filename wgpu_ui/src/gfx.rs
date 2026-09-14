@@ -786,8 +786,10 @@ impl Gfx {
             });
             rpass.set_pipeline(&self.pipeline);
             rpass.set_bind_group(0, &cam_bind, &[]);
-            rpass.set_vertex_buffer(0, vbuf.slice(..));
-            rpass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+            if has_geometry {
+                rpass.set_vertex_buffer(0, vbuf.expect("geometry").slice(..));
+                rpass.set_index_buffer(ibuf.expect("geometry").slice(..), wgpu::IndexFormat::Uint32);
+            }
             for run in &pass.runs {
                 if run.count == 0 {
                     continue;
