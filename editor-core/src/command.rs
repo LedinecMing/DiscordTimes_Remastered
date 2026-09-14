@@ -235,19 +235,55 @@ impl Command for PlaceBuilding {
     }
 }
 
-/// Постановка армии (позиция + имя отряда).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Постановка армии (позиция + имя отряда + юниты-шаблон).
+///
+/// `template_units` — id юнитов из реестра units (Units.ini): армия
+/// заполняется палеточным шаблоном (рыцарь/бандит/крестьянин/зомби).
+/// Команда самодостаточна: армия строится при создании (реестр нужен
+/// только там) через `default_army_with_registry` — hitmap/max_troops/
+/// инвентарь корректны, как при загрузке .dtm.
 pub struct PlaceArmy {
     pub pos: Pos,
     pub army_name: String,
+    /// Готовая армия (юниты-шаблоны уже внутри).
+    army: dt_lib::battle::army::Army,
     placed_at: Option<usize>,
 }
 
+impl std::fmt::Debug for PlaceArmy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlaceArmy")
+            .field("pos", &self.pos)
+            .field("army_name", &self.army_name)
+            .finish()
+    }
+}
+
 impl PlaceArmy {
+    /// Пустая армия (без юнитов) — как в тестах/минимальной постановке.
     pub fn new(pos: Pos, army_name: impl Into<String>) -> Self {
+        Self::with_units(pos, army_name, Vec::new(), &dt_lib::registry::GameInfo::new())
+    }
+
+    /// Армия с юнитами-шаблонами: `template_units` — id из реестра units
+    /// (первый — главный), `registry` — реестр игры (уже загружен).
+    pub fn with_units(
+        pos: Pos,
+        army_name: impl Into<String>,
+        template_units: Vec<usize>,
+        registry: &dt_lib::registry::GameInfo,
+    ) -> Self {
+        let army_name = army_name.into();
+        let army = dt_lib::map::object::default_army_with_registry(
+            &template_units,
+            army_name.clone(),
+            pos,
+            registry,
+        );
         Self {
             pos,
-            army_name: army_name.into(),
+            army_name,
+            army,
             placed_at: None,
         }
     }
@@ -256,14 +292,9 @@ impl PlaceArmy {
 impl Command for PlaceArmy {
     fn apply(&mut self, state: &mut EditorState) -> CommandResult {
         let project = state.project_mut();
-        project.map.armys.push(dt_lib::battle::army::Army {
-            pos: self.pos,
-            stats: dt_lib::battle::army::ArmyStats {
-                army_name: self.army_name.clone(),
-                ..Default::default()
-            },
-            ..Default::default()
-        });
+        let mut army = self.army.clone();
+        army.pos = self.pos;
+        project.map.armys.push(army);
         self.placed_at = Some(project.map.armys.len() - 1);
         CommandResult::Applied
     }

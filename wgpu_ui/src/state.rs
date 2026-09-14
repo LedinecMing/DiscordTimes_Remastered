@@ -195,6 +195,104 @@ pub struct EditorUi {
     pub save_slot: Option<tokio::sync::oneshot::Receiver<std::path::PathBuf>>,
     /// Диалог размера новой карты (ввод + слайдер 16..200).
     pub size_dialog: Option<NewMapDialog>,
+    /// Выбранная декорация в палитре (индекс в registry.objects.inner).
+    pub active_deco: Option<usize>,
+    /// Выбранное строение в палитре (индекс в registry.objects.inner).
+    pub active_building: Option<usize>,
+    /// Выбранный армейский шаблон (id юнита-главы из реестра units).
+    pub active_army_template: Option<usize>,
+    /// Строка поиска по имени/ID в палитре (декор/строения/армии).
+    pub palette_search: String,
+    /// Фильтр категории декораций (первое слово имени; None = все).
+    pub deco_category: Option<String>,
+    /// Фильтр категории строений (первое слово имени; None = все).
+    pub building_category: Option<String>,
+    /// Фильтр типа армейских шаблонов (None = все).
+    pub army_nature: Option<ArmyNature>,
+    /// Кэш egui-текстур палитры (ключ = имя ассета; регистрация по надобности).
+    pub palette_tex: std::collections::HashMap<String, egui::TextureId>,
+    /// Таймер повтора Ctrl+Z/Y: время последнего повтора (сек),
+    /// None — удержание только началось (ждём задержку до первого повтора).
+    pub hotkey_repeat_at: Option<f64>,
+    /// Настройки рендера редактора (вкладка «Рендер»).
+    pub render_settings: EditorRenderSettings,
+}
+
+/// Настройки рендера редактора: слои и режимы вкладки «Рендер».
+#[derive(Debug, Clone)]
+pub struct EditorRenderSettings {
+    /// Маркеры E1 (неактивные армии), E2/E4 (фонарики).
+    pub markers: bool,
+    /// Сетка канваса.
+    pub grid: bool,
+    /// Заливка принадлежности тайлов строениям (цвет — HSV-хеш строения).
+    pub ownership: bool,
+    /// Режим наплывов тайлов (Off/Strong/Rounded и т.д.).
+    pub blend_mode: BlendMode,
+    /// Рисование армий (модельки/корабли в слое декораций).
+    pub armies: bool,
+    /// Рисование строений в слое декораций.
+    pub buildings: bool,
+}
+
+impl Default for EditorRenderSettings {
+    fn default() -> Self {
+        Self {
+            markers: true,
+            grid: true,
+            ownership: false,
+            blend_mode: BlendMode::Rounded,
+            armies: true,
+            buildings: true,
+        }
+    }
+}
+
+/// Тип армейского шаблона для палитры (4 базовых фракции старого
+/// редактора). Это UI-категория, а не UnitType: в Units.ini Крестьянин
+/// и Бандит оба Nature=Rogue — различаем по характерному юниту.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmyNature {
+    /// Феодальный (рыцарь).
+    Feudal,
+    /// Разбойник (бандит).
+    Rogue,
+    /// Деревенщина (крестьянин).
+    Peasant,
+    /// Нежить (мертвяк/зомби).
+    Undead,
+}
+
+impl ArmyNature {
+    /// Русская подпись для фильтра палитры.
+    pub fn label(self) -> &'static str {
+        match self {
+            ArmyNature::Feudal => "Феодальный",
+            ArmyNature::Rogue => "Разбойник",
+            ArmyNature::Peasant => "Деревенщина",
+            ArmyNature::Undead => "Нежить",
+        }
+    }
+
+
+    /// Имя характерного юнита-шаблона (Units.ini, поле Name): феодал →
+    /// рыцарь, разбойник → бандит, деревенщина → крестьянин, нежить →
+    /// мертвяк. id разрешается по реестру units в editor_view.
+    pub fn template_unit_name(self) -> &'static str {
+        match self {
+            ArmyNature::Feudal => "Рыцарь",
+            ArmyNature::Rogue => "Бандит",
+            ArmyNature::Peasant => "Крестьянин",
+            ArmyNature::Undead => "Мертвяк",
+        }
+    }
+    /// Все типы в порядке палитры.
+    pub const ALL: [ArmyNature; 4] = [
+        ArmyNature::Feudal,
+        ArmyNature::Rogue,
+        ArmyNature::Peasant,
+        ArmyNature::Undead,
+    ];
 }
 
 /// Диалог «Новая карта»: выбранный размер (16..200, по умолчанию 50).
@@ -243,6 +341,16 @@ impl Default for EditorUi {
             open_slot: None,
             save_slot: None,
             size_dialog: None,
+            active_deco: None,
+            active_building: None,
+            active_army_template: None,
+            palette_search: String::new(),
+            deco_category: None,
+            building_category: None,
+            army_nature: None,
+            palette_tex: std::collections::HashMap::new(),
+            hotkey_repeat_at: None,
+            render_settings: EditorRenderSettings::default(),
         }
     }
 }

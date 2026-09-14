@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
 use crate::{
-    battle::{army::Army, control::Relations, troop::Troop}, items::Item, registry::{GameInfo, Items, UnitId, Units}, units::unit::{Unit, UnitPos}
+    battle::{army::{Army, ArmyStats}, control::{Control, Relations}, troop::Troop},
+    items::Item,
+    mutrc::SendMut,
+    registry::{GameInfo, Items, UnitId, Units},
+    units::unit::{Unit, UnitPos},
 };
 use advini::*;
 use alkahest::alkahest;
@@ -283,3 +287,32 @@ pub fn resurrect(troop: &mut Troop, gold: u64, registry: &GameInfo) -> Result<u6
     Ok(cost)
 }
 
+
+/// Армия по умолчанию для редактора карт: юниты-шаблоны из реестра units
+/// (id; первый — главный), имя и позиция. Хитбоксы/слоты инвентаря
+/// заполняются как при загрузке .dtm (Army::new).
+pub fn default_army_with_registry(
+    template_units: &[usize],
+    army_name: String,
+    pos: (usize, usize),
+    registry: &GameInfo,
+) -> Army {
+    let troops = template_units
+        .iter()
+        .filter(|&&id| registry.units.get(id).is_some())
+        .map(|&id| {
+            SendMut::new(Troop::new(
+                (registry.units[id].clone(), &registry.bonuses).into(),
+            ))
+        })
+        .collect();
+    Army::new(
+        troops,
+        ArmyStats::new(0, 0, army_name),
+        Vec::new(),
+        pos,
+        true,
+        Control::PC,
+        registry,
+    )
+}

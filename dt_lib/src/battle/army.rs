@@ -33,7 +33,7 @@ pub struct ArmyStats {
     pub army_name: String,
 }
 impl ArmyStats {
-    fn new(gold: u64, mana: u64, army_name: String) -> Self {
+    pub fn new(gold: u64, mana: u64, army_name: String) -> Self {
         Self {
             gold,
             mana,
