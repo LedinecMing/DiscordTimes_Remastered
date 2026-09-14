@@ -145,12 +145,24 @@ impl Command for PaintTile {
 }
 
 /// Постановка декорации (index в реестре декора, позиция).
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// В клетке остаётся ОДНА декорация на категорию (категория = первое
+/// слово имени объекта, Tree/GreenHills/Mountains/...): новая декорация
+/// той же категории ЗАМЕНЯЕТ старую (нет слоёв деревьев в клетке);
+/// декорация другой категории соседствует. `same_category` — индексы
+/// декораций той же категории (вычисляет вызывающий по реестру; команда
+/// домена реестра не знает). Заменённая пара сохраняется для undo:
+/// удаление старой и добавление новой откатываются вместе.
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlaceDeco {
     pub pos: Pos,
     pub deco_index: usize,
-    /// Индекс в `map.decomap`, заполняется при apply (для undo).
+    /// Индексы декораций той же категории (заменялись бы в клетке).
+    pub same_category: Vec<usize>,
+    /// Индекс добавленной в `map.decomap`, заполняется при apply.
     placed_at: Option<usize>,
+    /// Заменённая декорация (позиция вставки + значение) для undo.
+    replaced: Option<(usize, dt_lib::map::deco::MapDeco)>,
 }
 
 impl PlaceDeco {
@@ -158,22 +170,37 @@ impl PlaceDeco {
         Self {
             pos,
             deco_index,
+            same_category: Vec::new(),
             placed_at: None,
+            replaced: None,
         }
+    }
+
+    /// Индексы декораций той же категории (замена в клетке).
+    pub fn with_category(mut self, same_category: Vec<usize>) -> Self {
+        self.same_category = same_category;
+        self
     }
 }
 
 impl Command for PlaceDeco {
     fn apply(&mut self, state: &mut EditorState) -> CommandResult {
         let project = state.project_mut();
-        // Не больше одной декорации на клетку: замена — отдельной командой.
+        // Полный дубль (тот же id в клетке) — идемпотентный no-op.
         if project
             .map
             .decomap
             .iter()
-            .any(|d| (d.x, d.y) == (self.pos.0, self.pos.1))
+            .any(|d| (d.x, d.y, d.index) == (self.pos.0, self.pos.1, self.deco_index))
         {
             return CommandResult::Noop;
+        }
+        // Замена существующей декорации той же категории в этой клетке.
+        if let Some(at) = project.map.decomap.iter().position(|d| {
+            (d.x, d.y) == (self.pos.0, self.pos.1)
+                && self.same_category.contains(&d.index)
+        }) {
+            self.replaced = Some((at, project.map.decomap.remove(at)));
         }
         project.map.decomap.push(dt_lib::map::deco::MapDeco::new(
             self.deco_index,
@@ -185,8 +212,15 @@ impl Command for PlaceDeco {
     }
 
     fn undo(&mut self, state: &mut EditorState) {
+        let project = state.project_mut();
         if let Some(at) = self.placed_at.take() {
-            state.project_mut().map.decomap.remove(at);
+            if at < project.map.decomap.len() {
+                project.map.decomap.remove(at);
+            }
+        }
+        if let Some((at, deco)) = self.replaced.take() {
+            let at = at.min(project.map.decomap.len());
+            project.map.decomap.insert(at, deco);
         }
     }
 
@@ -307,6 +341,113 @@ impl Command for PlaceArmy {
 
     fn name(&self) -> &'static str {
         "Place Army"
+    }
+}
+
+/// Перемещение точки событий/фонарика (MapLantern) ПКМ-драгом на канвасе.
+///
+/// Меняет x/y в ОБОИХ источниках проекта (lanterns и map.lanterns —
+/// редактор держит их синхронными); undo возвращает старую клетку.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MoveLantern {
+    /// Индекс в Vec<MapLantern> (project.lanterns и map.lanterns).
+    pub index: usize,
+    pub from: Pos,
+    pub to: Pos,
+}
+
+impl MoveLantern {
+    pub fn new(index: usize, from: Pos, to: Pos) -> Self {
+        Self { index, from, to }
+    }
+}
+
+impl Command for MoveLantern {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        if self.from == self.to {
+            return CommandResult::Noop;
+        }
+        let project = state.project_mut();
+        let Some(lantern) = project.lanterns.get_mut(self.index) else {
+            return CommandResult::Noop;
+        };
+        if (lantern.x, lantern.y) != self.from {
+            return CommandResult::Noop; // индекс протух
+        }
+        lantern.x = self.to.0;
+        lantern.y = self.to.1;
+        if let Some(map_lantern) = project.map.lanterns.get_mut(self.index) {
+            map_lantern.x = self.to.0;
+            map_lantern.y = self.to.1;
+        }
+        CommandResult::Applied
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        let project = state.project_mut();
+        if let Some(lantern) = project.lanterns.get_mut(self.index) {
+            lantern.x = self.from.0;
+            lantern.y = self.from.1;
+        }
+        if let Some(map_lantern) = project.map.lanterns.get_mut(self.index) {
+            map_lantern.x = self.from.0;
+            map_lantern.y = self.from.1;
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Move Lantern"
+    }
+}
+
+/// Изменение радиуса света точки событий/фонарика (MapLantern).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetLanternRadius {
+    /// Индекс в Vec<MapLantern> (project.lanterns и map.lanterns).
+    pub index: usize,
+    pub radius: u8,
+    previous: u8,
+}
+
+impl SetLanternRadius {
+    pub fn new(index: usize, radius: u8) -> Self {
+        Self {
+            index,
+            radius: radius.min(24),
+            previous: 0,
+        }
+    }
+}
+
+impl Command for SetLanternRadius {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        let project = state.project_mut();
+        let Some(lantern) = project.lanterns.get_mut(self.index) else {
+            return CommandResult::Noop;
+        };
+        if lantern.light_radius == self.radius {
+            return CommandResult::Noop;
+        }
+        self.previous = lantern.light_radius;
+        lantern.light_radius = self.radius;
+        if let Some(l) = project.map.lanterns.get_mut(self.index) {
+            l.light_radius = self.radius;
+        }
+        CommandResult::Applied
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        let project = state.project_mut();
+        if let Some(lantern) = project.lanterns.get_mut(self.index) {
+            lantern.light_radius = self.previous;
+        }
+        if let Some(l) = project.map.lanterns.get_mut(self.index) {
+            l.light_radius = self.previous;
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Set Lantern Radius"
     }
 }
 
@@ -551,13 +692,47 @@ mod tests {
     }
 
     #[test]
-    fn place_deco_rejects_occupied_cell() {
+    fn place_deco_same_id_in_cell_is_noop() {
         let mut state = state();
         let mut history = CommandHistory::new();
         history.execute(Box::new(PlaceDeco::new((1, 1), 3)), &mut state);
-        let again = history.execute(Box::new(PlaceDeco::new((1, 1), 4)), &mut state);
+        let again = history.execute(Box::new(PlaceDeco::new((1, 1), 3)), &mut state);
         assert_eq!(again, CommandResult::Noop);
         assert_eq!(state.project().map.decomap.len(), 1);
+    }
+
+    #[test]
+    fn place_deco_replaces_same_category_in_cell() {
+        let mut state = state();
+        let mut history = CommandHistory::new();
+        // Дерево (3) в клетке; новое дерево (4) той же категории —
+        // замена: старое удалено, новое стоит, len = 1.
+        history.execute(Box::new(PlaceDeco::new((1, 1), 3)), &mut state);
+        let res = history.execute(
+            Box::new(PlaceDeco::new((1, 1), 4).with_category(vec![3, 4])),
+            &mut state,
+        );
+        assert_eq!(res, CommandResult::Applied);
+        assert_eq!(state.project().map.decomap.len(), 1);
+        assert_eq!(state.project().map.decomap[0].index, 4);
+
+        // Undo откатывает замену целиком: возвращено исходное дерево.
+        history.undo(&mut state);
+        assert_eq!(state.project().map.decomap.len(), 1);
+        assert_eq!(state.project().map.decomap[0].index, 3);
+    }
+
+    #[test]
+    fn place_deco_other_category_coexists() {
+        let mut state = state();
+        let mut history = CommandHistory::new();
+        // Дерево (3) и холм (7) — разные категории: соседствуют.
+        history.execute(Box::new(PlaceDeco::new((1, 1), 3)), &mut state);
+        history.execute(
+            Box::new(PlaceDeco::new((1, 1), 7).with_category(vec![7])),
+            &mut state,
+        );
+        assert_eq!(state.project().map.decomap.len(), 2);
     }
 
     #[test]
