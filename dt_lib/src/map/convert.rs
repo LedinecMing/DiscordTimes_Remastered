@@ -1102,13 +1102,29 @@ pub fn convert_dtm_map(mut data: MapData, registry: &GameInfo) -> (GameMap, Vec<
         })
         .collect();
 	
-	let mut eventmap: TileMap<Vec<usize>> = TileMap::new([0].repeat(tilemap.size*tilemap.size).iter().map(|_| vec![]));
-	for lantern in data.lanterns {
-		let pos = (lantern.x as usize, lantern.y as usize);
-		if lantern.map_model == 9 {
-			eventmap[pos] = convert_ids(&lantern.events);
-		}
-    }
+	// Точки событий/фонарики — единая структура (MapLantern) из ВСЕХ
+	// лантерн .dtm: map_model 9 — точка локального события (события в
+	// events), прочие (обычно 8) — обычный фонарик, активен с начала
+	// игры. Прежняя схема теряла фонарики: eventmap получал только
+	// события лантерн map_model==9, позиции остальных выбрасывались
+	// (маркеры E2/E4 редактора были пусты).
+	let lanterns: Vec<super::map::MapLantern> = data
+		.lanterns
+		.iter()
+		.map(|lantern| super::map::MapLantern {
+			x: lantern.x as usize,
+			y: lantern.y as usize,
+			id: lantern.id as usize,
+			map_model: lantern.map_model,
+			light_radius: lantern.light_radius,
+			active_from_start: lantern.map_model != 9,
+			events: if lantern.map_model == 9 {
+				convert_ids(&lantern.events)
+			} else {
+				Vec::new()
+			},
+		})
+		.collect();
 
     let time = data.settings.start_time;
     let seed = data.settings.seed as usize;
@@ -1159,7 +1175,7 @@ pub fn convert_dtm_map(mut data: MapData, registry: &GameInfo) -> (GameMap, Vec<
             time: Time::new(time as u64),
             tilemap,
             decomap,
-            eventmap,
+            lanterns,
             relations: FractionsRelations::default(),
             hitmap: TileMap::new((0..(size.0 * size.0)).map(|_| HitboxTile::default())),
             buildings,

@@ -1703,9 +1703,6 @@ pub fn make_map_with_two_armies() -> (GameMap, crate::registry::GameInfo) {
     gamemap.hitmap = crate::map::map::TileMap::new(
         vec![crate::map::map::HitboxTile::default(); size * size].into_iter(),
     );
-    gamemap.eventmap = crate::map::map::TileMap::new(
-        vec![Vec::new(); size * size].into_iter(),
-    );
     let mut player = make_army_from_ids(&registry, &[(20, 0)]);
     player.pos = (1, 1);
     player.active = true;

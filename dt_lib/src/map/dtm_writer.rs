@@ -622,26 +622,21 @@ pub fn gamemap_to_mapdata(mapa: &GameMap, events: &[Event], registry: &GameInfo)
         .collect();
 
     let mut lanterns = Vec::new();
-    for (i, events_at) in mapa.eventmap.inner.iter().enumerate() {
-        if events_at.is_empty() {
-            continue;
-        }
-        if events_at.len() > 32 {
+    for lantern in &mapa.lanterns {
+        if lantern.events.len() > 32 {
             return None;
         }
         let mut ids = [0u8; 32];
-        for (k, id) in events_at.iter().enumerate() {
+        for (k, id) in lantern.events.iter().enumerate() {
             ids[k] = to_u8_id(*id, 1)?;
         }
-        let x = i / size;
-        let y = i % size;
         lanterns.push(LightOrEvent {
-            x: x.min(u16::MAX as usize) as u16,
-            y: y.min(u16::MAX as usize) as u16,
-            id: 0,
-            map_model: 9,
+            x: lantern.x.min(u16::MAX as usize) as u16,
+            y: lantern.y.min(u16::MAX as usize) as u16,
+            id: lantern.id.min(u8::MAX as usize) as u8,
+            map_model: lantern.map_model,
             events: ids,
-            light_radius: 0,
+            light_radius: lantern.light_radius,
             _empty1: [0; 60],
         });
     }
@@ -719,8 +714,7 @@ mod test {
         assert_eq!(a.tilemap.size, b.tilemap.size);
         assert_eq!(a.tilemap.inner, b.tilemap.inner);
         assert_eq!(a.decomap, b.decomap);
-        assert_eq!(a.eventmap.size, b.eventmap.size);
-        assert_eq!(a.eventmap.inner, b.eventmap.inner);
+        assert_eq!(a.lanterns, b.lanterns);
         assert_eq!(a.buildings, b.buildings);
         assert_eq!(a.relations, b.relations);
         assert_eq!(a.pause, b.pause);

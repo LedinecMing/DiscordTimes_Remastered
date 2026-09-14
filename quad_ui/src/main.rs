@@ -1866,7 +1866,7 @@ fn draw_map(
     for i in 0..size {
         for j in 0..size {
 			let pos = (j as usize, i as usize);
-			let events = &game.executor.gamemap.eventmap[pos];
+			let events = game.executor.gamemap.events_at(pos.0, pos.1);
 			if settings.event_render && events.len() > 0 {
 				draw_rectangle(i as f32 * SIZE.0, j as f32 * SIZE.1, SIZE.0, SIZE.1, BLUE)
 			}

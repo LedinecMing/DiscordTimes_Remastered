@@ -305,19 +305,33 @@ impl Executor {
                 }
             };
             if player.execution_queue.is_empty() {
+                // Клетка назначения и её события — ДО мутабельного
+                // заимствования армии (events_at читает &self.gamemap).
+                let step = self.gamemap.armys[player.army].path.first().copied();
+                let (blocked, events) = match step {
+                    Some(pos) => (
+                        self.gamemap.hitmap[pos].army.is_some(),
+                        self.gamemap.events_at(pos.0, pos.1).to_vec(),
+                    ),
+                    None => (false, Vec::new()),
+                };
                 let player_army = &mut self.gamemap.armys[player.army];
-                if let Some(pos) = player_army.path.get(0) {
+                if let Some(pos) = step {
 					// На клетке чужая армия — не двигаемся (ждём освобождения).
-					if self.gamemap.hitmap[*pos].army.is_some() {
+					if blocked {
 						continue;
 					}
-					if player_army.transport && !TILES[self.gamemap.tilemap[*pos]].need_transport() {
+					if player_army.transport && !TILES[self.gamemap.tilemap[pos]].need_transport() {
 						player_army.transport = false;
 					}
-                    player_army.pos = *pos;
-					let events = &self.gamemap.eventmap[*pos];
-					if events.len() > 0 {
-						player.execution_queue.append(&mut events.iter().map(|x| Execute::Execute(DelayedEvent::new(Time::new(0), *x))).collect());
+                    player_army.pos = pos;
+					if !events.is_empty() {
+						player.execution_queue.append(
+							&mut events
+								.iter()
+								.map(|x| Execute::Execute(DelayedEvent::new(Time::new(0), *x)))
+								.collect(),
+						);
 					}
 					player_army.path.remove(0);
                 }

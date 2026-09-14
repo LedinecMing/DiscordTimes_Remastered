@@ -172,6 +172,31 @@ pub struct StartStats {
     #[alias([start_time])]
     pub time: Time,
 }
+
+/// Точка событий/фонарик карты — единая структура, как в оригинале игры
+/// (convert::LightOrEvent): одна сущность «фонарик + опции», а не два
+/// списка. Из гайда старого редактора (old_editor_guide.md §5):
+/// - обычный фонарик (Lamp) — точка без событий;
+/// - точка локального события (map_model==9) — может быть И фонариком,
+///   И содержать локальные события одновременно; чекбокс «активен в
+///   начале игры» делает её обычным фонариком (active_from_start).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
+pub struct MapLantern {
+    pub x: usize,
+    pub y: usize,
+    /// Id точки (LightOrEvent.id).
+    pub id: usize,
+    /// Модель на карте: 9 — точка локального события, прочие (8) —
+    /// обычный фонарик.
+    pub map_model: u8,
+    /// Радиус света (0..=24; валидатор RadiusRangeCheck).
+    pub light_radius: u8,
+    /// Обычный фонарик, активен с начала игры (map_model != 9).
+    pub active_from_start: bool,
+    /// Id локальных событий точки (конвертируются из LightOrEvent.events).
+    pub events: Vec<usize>,
+}
 #[derive(Clone, Debug)]
 #[alkahest(Deserialize, Serialize, SerializeRef, Formula)]
 pub struct GameMap {
@@ -184,7 +209,9 @@ pub struct GameMap {
     //#[unused]
     pub decomap: Vec<MapDeco>,
 	//#[unused]
-    pub eventmap: TileMap<Vec<usize>>,
+    /// Точки событий/фонарики (заменили eventmap — единая структура,
+    /// см. MapLantern; события клетки — events_at(x, y)).
+    pub lanterns: Vec<MapLantern>,
     //#[unused]
     pub hitmap: TileMap<HitboxTile>,
     //#[unused]
@@ -203,7 +230,7 @@ impl Default for GameMap {
             time: Default::default(),
             tilemap: Default::default(),
             decomap: Default::default(),
-            eventmap: Default::default(),
+            lanterns: Vec::new(),
             hitmap: Default::default(),
             buildings: Vec::new(),
             armys: Vec::new(),
@@ -222,6 +249,18 @@ impl GameMap {
             ..Default::default()
         }
     }
+
+    /// События клетки (x, y): события точек в этой клетке (замена
+    /// eventmap[(x, y)] для исполнителя и рендера событий).
+    pub fn events_at(&self, x: usize, y: usize) -> &[usize] {
+        static EMPTY: [usize; 0] = [];
+        self.lanterns
+            .iter()
+            .find(|l| l.x == x && l.y == y)
+            .map(|l| l.events.as_slice())
+            .unwrap_or(&EMPTY)
+    }
+
     pub fn calc_hitboxes(&mut self, objects: &[ObjectInfo]) {
         for (i, _) in &mut self.tilemap.inner.iter().enumerate() {
             self.hitmap.inner[i].need_transport = TILES[self.tilemap.inner[i]].need_transport();
@@ -321,7 +360,6 @@ mod tests {
         let mut m = GameMap::default();
         m.tilemap = TileMap::new(vec![4usize; size * size].into_iter());
         m.hitmap = TileMap::new(vec![HitboxTile::default(); size * size].into_iter());
-        m.eventmap = TileMap::new(vec![Vec::new(); size * size].into_iter());
         m
     }
 
