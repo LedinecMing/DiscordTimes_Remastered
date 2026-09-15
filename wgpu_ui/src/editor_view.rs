@@ -476,7 +476,14 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
                 }
             }
         });
-        brush_settings(ui, ectx);
+        // Настройки кисти/заливки — только для соответствующих
+        // инструментов; декор/строения/армии — без блока кисти.
+        if matches!(
+            ectx.editor.tool,
+            editor_core::Tool::Brush | editor_core::Tool::BucketFill
+        ) {
+            brush_settings(ui, ectx);
+        }
     } else {
         ui.separator();
         ui.label(
