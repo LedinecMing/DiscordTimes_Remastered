@@ -283,6 +283,8 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         });
         // Результаты async-диалогов (открыть/сохранить) — до панелей.
         poll_dialogs(&mut rest);
+        // Отложенные goto-definition открытия событий — до панелей.
+        flush_pending_event_opens(&mut rest);
         egui::Panel::top("editor_top").show(ui, |ui| {
             top_bar(ui, &mut rest, &mut state);
         });
@@ -1387,6 +1389,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                     crate::state::Selection::Army(i) => {
                         ectx.editor.state.project().map.armys[i].pos
                     }
+                    crate::state::Selection::Event(_) => (0, 0),
                     crate::state::Selection::Building(i) => {
                         ectx.editor.state.project().map.buildings[i].pos
                     }
@@ -1409,6 +1412,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                 crate::state::Selection::Lantern(i) => {
                     Box::new(editor_core::command::MoveLantern::new(i, from, to))
                 }
+                crate::state::Selection::Event(_) => return,
                 crate::state::Selection::Building(i) => {
                     Box::new(editor_core::command::MoveBuilding::new(i, from, to))
                 }
@@ -1460,6 +1464,11 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             crate::state::Selection::Army(i) => {
                 let a = &ectx.editor.state.project().map.armys[i];
                 (rect_of(a.pos, 0.), format!("Армия «{}»", a.stats.army_name))
+            }
+            crate::state::Selection::Event(i) => {
+                // Событие не имеет клетки: рамки нет.
+                let _ = i;
+                (egui::Rect::NOTHING, String::new())
             }
             crate::state::Selection::Building(i) => {
                 let b = &ectx.editor.state.project().map.buildings[i];
@@ -1612,6 +1621,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
 fn carried_texture(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<egui::TextureHandle> {
     let carried = ectx.editor.carrying?;
     let asset: String = match carried.kind {
+        crate::state::Selection::Event(_) => return None,
         crate::state::Selection::Lantern(i) => {
             let l = ectx.editor.state.project().lanterns.get(i)?;
             let marker = if !l.events.is_empty() {
@@ -2389,6 +2399,7 @@ impl<'a, 'b> egui_tiles::Behavior<crate::state::Selection> for InfoDockBehavior<
             crate::state::Selection::Lantern(_) => lantern_info(ui, self.ectx, *pane),
             crate::state::Selection::Army(_) => army_info(ui, self.ectx, *pane),
             crate::state::Selection::Building(_) => building_info(ui, self.ectx, *pane),
+            crate::state::Selection::Event(_) => event_info(ui, self.ectx, *pane),
         }
         egui_tiles::UiResponse::None
     }
@@ -2413,6 +2424,7 @@ fn selection_exists(ectx: &EditorCtx, sel: crate::state::Selection) -> bool {
         crate::state::Selection::Lantern(i) => i < project.lanterns.len(),
         crate::state::Selection::Army(i) => i < project.map.armys.len(),
         crate::state::Selection::Building(i) => i < project.map.buildings.len(),
+        crate::state::Selection::Event(i) => i < project.events.len(),
     }
 }
 
@@ -2431,6 +2443,11 @@ fn selection_title(ectx: &EditorCtx, sel: crate::state::Selection) -> String {
             .get(i)
             .map(|a| format!("Армия «{}»", a.stats.army_name))
             .unwrap_or_else(|| "Армия (удалена)".into()),
+        crate::state::Selection::Event(i) => project
+            .events
+            .get(i)
+            .map(|e| format!("Событие: {}", e.name))
+            .unwrap_or_else(|| "Событие".into()),
         crate::state::Selection::Building(i) => project
             .map
             .buildings
@@ -2546,6 +2563,18 @@ fn lantern_info(ui: &mut Ui, ectx: &mut EditorCtx, sel: crate::state::Selection)
             .unwrap_or_else(|| "?".into());
         ui.horizontal(|ui| {
             ui.label(format!("{}. [{}] {}", row + 1, id, name));
+            // goto-definition: открыть инфо-тайл события.
+            let mut dock = LanternDock { index };
+            let mut cur = Some(id);
+            let opts = vec![(id, name.clone())];
+            let r = crate::editor_ui::object_ref::ref_selector(
+                ui,
+                &mut cur,
+                &opts,
+                &mut dock,
+                crate::editor_ui::object_ref::GameRef::Event,
+            );
+            let _ = r;
             if ui.button("✕").clicked() {
                 let editor = &mut ectx.editor;
                 let command = Box::new(
@@ -2559,8 +2588,8 @@ fn lantern_info(ui: &mut Ui, ectx: &mut EditorCtx, sel: crate::state::Selection)
             }
         });
     }
-    // «+ Добавить»: дропдаун СУЩЕСТВУЮЩИХ событий карты (id + имя);
-    // выбор — AddLanternEvent (только ссылка). Пусто — подсказка.
+    // «+ Добавить»: селектор СУЩЕСТВУЮЩИХ событий карты (id + имя)
+    // со встроенным goto-definition; выбор — AddLanternEvent (ссылка).
     let events: Vec<(usize, String)> = ectx
         .editor
         .state
@@ -2577,26 +2606,36 @@ fn lantern_info(ui: &mut Ui, ectx: &mut EditorCtx, sel: crate::state::Selection)
                 .small(),
         );
     } else {
-        let mut pick = usize::MAX;
-        egui::ComboBox::from_id_salt("add_lantern_event")
-            .selected_text("+ Добавить событие")
-            .show_ui(ui, |ui| {
-                for (id, name) in &events {
-                    if ui
-                        .selectable_label(false, format!("[{id}] {name}"))
-                        .clicked()
-                    {
-                        pick = *id;
-                    }
-                }
-            });
-        if pick != usize::MAX {
+        let mut none: Option<usize> = None;
+        let mut dock = LanternDock { index };
+        let r = crate::editor_ui::object_ref::ref_selector(
+            ui,
+            &mut none,
+            &events,
+            &mut dock,
+            crate::editor_ui::object_ref::GameRef::Event,
+        );
+        if let Some(pick) = none {
+            let _ = r;
             let editor = &mut ectx.editor;
             let command =
                 Box::new(editor_core::command::AddLanternEvent::new(index, pick));
             if let CommandResult::Applied = editor.history.execute(command, &mut editor.state) {
                 editor.status = format!("Событие [{pick}] привязано к точке");
             }
+        }
+    }
+}
+
+/// Dock-адаптер точки: «→» в селекторе открывает инфо-тайл события.
+struct LanternDock {
+    index: usize,
+}
+
+impl crate::editor_ui::object_ref::PropertiesDock for LanternDock {
+    fn open(&mut self, r: crate::editor_ui::object_ref::GameRef) {
+        if let crate::editor_ui::object_ref::GameRef::Event(id) = r {
+            crate::editor_view::open_event_info(id);
         }
     }
 }
@@ -2658,4 +2697,78 @@ fn building_info(ui: &mut Ui, ectx: &mut EditorCtx, sel: crate::state::Selection
     };
     ui.label(format!("Владелец: {owner}"));
     ui.label(format!("Тип: {:?}", building.variant));
+}
+
+/// Инфо-панель события карты (read-only просмотр, открыта из селектора).
+fn event_info(ui: &mut Ui, ectx: &mut EditorCtx, sel: crate::state::Selection) {
+    let crate::state::Selection::Event(index) = sel else {
+        return;
+    };
+    let Some(event) = ectx.editor.state.project().events.get(index) else {
+        return;
+    };
+    ui.label(format!("Событие [{}]", index));
+    ui.separator();
+    ui.label(format!("Имя: {}", event.name));
+    ui.label(format!(
+        "Игроки: {}",
+        if event.player.is_empty() {
+            "—".to_string()
+        } else {
+            event.player.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+        }
+    ));
+    ui.label(format!("Локация: {:?}", event.location));
+    if let Some(message) = &event.message {
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .id_salt(("event_message", index))
+            .max_height(160.)
+            .show(ui, |ui| {
+                ui.label(message);
+            });
+    }
+}
+
+/// goto-definition: открыть инфо-тайл события (или поднять существующий).
+pub fn open_event_info(event_index: usize) {
+    // Вставка в дерево через глобальную точку: инфо-дерево живёт в EditorUi,
+    // досягаемом только из кадра egui — отложенный выбор через ресурс.
+    PENDING_EVENT_OPEN.with(|cell| {
+        cell.borrow_mut().push(event_index);
+    });
+}
+
+/// Отложенные открытия событий (thread_local: вставка возможна только
+/// в кадре, когда есть &mut EditorUi).
+thread_local! {
+    static PENDING_EVENT_OPEN: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Применить отложенные открытия событий (вызывать в кадре egui,
+/// когда EditorUi доступен).
+fn flush_pending_event_opens(ectx: &mut EditorCtx) {
+    let pending = PENDING_EVENT_OPEN.with(|cell| cell.borrow_mut().drain(..).collect::<Vec<_>>());
+    for index in pending {
+        let sel = crate::state::Selection::Event(index);
+        if !selection_exists(ectx, sel) {
+            continue;
+        }
+        let tree = ectx.editor.info_tree.get_or_insert_with(|| {
+            egui_tiles::Tree::new_tabs("editor_info_dock", vec![])
+        });
+        let already = tree
+            .tiles
+            .iter()
+            .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(p) if *p == sel));
+        if !already {
+            let pane_id = tree.tiles.insert_pane(sel);
+            if let Some(root) = tree.root() {
+                tree.move_tile_to_container(pane_id, root, usize::MAX, true);
+            } else {
+                tree.tiles.set_visible(pane_id, true);
+            }
+        }
+    }
 }

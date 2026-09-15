@@ -396,6 +396,9 @@ pub enum Selection {
     Building(usize),
     /// Точка событий/фонарик (индекс в lanterns).
     Lantern(usize),
+    /// Событие карты (индекс в project.events) — открыто из селектора
+    /// (goto-definition); инфо-панель read-only просмотр.
+    Event(usize),
 }
 
 /// Объект в режиме переноса (клик-клик ПКМ).

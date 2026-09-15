@@ -8,6 +8,7 @@ pub mod camera;
 pub mod egui_layer;
 
 use egui as egui_crate;
+pub mod editor_ui;
 pub mod editor_view;
 pub mod files;
 pub mod gfx;
