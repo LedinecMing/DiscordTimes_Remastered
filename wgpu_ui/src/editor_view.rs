@@ -301,6 +301,8 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         });
         // Модальное окно размера новой карты (поверх панелей).
         size_dialog_window(ui, &mut rest);
+        // Инфоокно выбранного объекта (интеракт, поверх панелей).
+        info_window(ui, &mut rest);
     });
     state.keep_open
 }
@@ -399,6 +401,8 @@ enum PaletteTab {
     Tool,
     /// Настройки рендера редактора.
     Render,
+    /// Палитра точек событий/фонариков (постановка на карту).
+    Events,
     /// Точка событий/фонарик (выбранная ЛКМ на канвасе).
     Lantern,
 }
@@ -408,6 +412,7 @@ impl PaletteTab {
         match self {
             PaletteTab::Tool => "Палитра",
             PaletteTab::Render => "Рендер",
+            PaletteTab::Events => "События",
             PaletteTab::Lantern => "Точка событий",
         }
     }
@@ -436,13 +441,14 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
         .ctx()
         .data_mut(|d| d.get_temp(egui::Id::new(TAB_STATE)))
         .unwrap_or(0);
-    if ectx.editor.selected_lantern.is_some() {
-        tab = 2; // выбранная точка — показать её вкладку
+    if ectx.editor.selected_lantern.is_some() && tab != 3 {
+        tab = 3; // выбранная точка — показать её вкладку
     }
     ui.horizontal(|ui| {
         for (i, t) in [
             PaletteTab::Tool,
             PaletteTab::Render,
+            PaletteTab::Events,
             PaletteTab::Lantern,
         ]
         .iter()
@@ -453,7 +459,7 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
                 .clicked()
             {
                 tab = i as i32;
-                if i != 2 {
+                if i != 3 {
                     ectx.editor.selected_lantern = None;
                 }
             }
@@ -463,7 +469,8 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
         .data_mut(|d| d.insert_temp(egui::Id::new(TAB_STATE), tab));
     match tab {
         1 => render_settings_tab(ui, ectx),
-        2 => lantern_tab(ui, ectx),
+        2 => events_palette(ui, ectx),
+        3 => lantern_tab(ui, ectx),
         _ => palette_tab(ui, ectx),
     }
     ui.separator();
@@ -542,6 +549,44 @@ fn lantern_tab(ui: &mut Ui, ectx: &mut EditorCtx) {
     }
 }
 
+/// Вкладка «События» палитры: два элемента постановки точек.
+/// «Фонарик» — map_model=8, активен с начала, radius=3 (обычный свет).
+/// «Точка локальных событий» — map_model=9, radius=3 (видна как E4 при
+/// событиях; радиус > 0 по дефолту — новую точку видно на карте).
+/// Выбор → ЛКМ на канвасе ставит (PlaceLantern); дубль в клетке no-op.
+fn events_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
+    ui.heading("Точки событий");
+    let kind = ectx.editor.active_lantern_kind;
+    if ui
+        .selectable_label(kind == Some(true), "Фонарик (свет, активен)")
+        .clicked()
+    {
+        ectx.editor.active_lantern_kind = Some(true);
+    }
+    ui.label(
+        RichText::new("map_model=8, активен с начала, радиус 3")
+            .weak()
+            .small(),
+    );
+    ui.separator();
+    if ui
+        .selectable_label(kind == Some(false), "Точка локальных событий")
+        .clicked()
+    {
+        ectx.editor.active_lantern_kind = Some(false);
+    }
+    ui.label(
+        RichText::new("map_model=9, радиус 3; события — в инфоокне точки")
+            .weak()
+            .small(),
+    );
+    ui.separator();
+    ui.label("Выберите тип и кликните ЛКМ по канвасу.");
+    if ectx.editor.active_lantern_kind.is_none() {
+        ectx.editor.active_lantern_kind = Some(true);
+    }
+}
+
 /// Вкладка «Рендер»: переключатели слоёв канваса и режим наплывов.
 fn render_settings_tab(ui: &mut Ui, ectx: &mut EditorCtx) {
     // Слои RT-запека (buildings/armies/blend) применяются перезапеком:
@@ -582,6 +627,11 @@ fn palette_tab(ui: &mut Ui, ectx: &mut EditorCtx) {
         editor_core::Tool::Deco => objects_palette(ui, ectx, false),
         editor_core::Tool::Building => objects_palette(ui, ectx, true),
         editor_core::Tool::Army => armies_palette(ui, ectx),
+        editor_core::Tool::Interact => {
+            ui.label("Интеракт: ЛКМ — выбрать объект,");
+            ui.label("ПКМ на объекте — перенос (клик-клик или драг),");
+            ui.label("Esc — отмена переноса.");
+        }
     }
 }
 
@@ -1046,70 +1096,139 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             anchor_world[1] + (cam.target[1] - anchor_world[1]) / factor,
         ];
     }
-    // Hit-test точек событий/фонариков (MapLantern): маркер занимает
-    // 1×2 клетки вверх от клетки точки. ЛКМ-клик — выбрать точку (вкладка
-    // «Точка событий»); ПКМ down — начать драг точки (пан отменяется).
-    let lantern_hit = |screen: egui::Pos2| -> Option<usize> {
-        let w = screen_to_world(screen);
-        let tx = (w[0] / SIZE.0).floor();
-        let ty = (w[1] / SIZE.1).floor();
-        if tx < 0. || ty < 0. || tx as usize >= size || ty as usize >= size {
-            return None;
+    // ---------------- Hit-test объектов интеракта ----------------
+    // Хелперы — чистая геометрия + поиск по проекту на месте вызова
+    // (fn, не замыкания: ectx нужен мутабельно позже в кадре).
+    fn object_at(
+        ectx: &EditorCtx,
+        cx: usize,
+        cy: usize,
+    ) -> Option<crate::state::Selection> {
+        let project = ectx.editor.state.project();
+        if let Some(i) = project
+            .lanterns
+            .iter()
+            .position(|l| l.x == cx && (l.y == cy || l.y + 1 == cy))
+        {
+            return Some(crate::state::Selection::Lantern(i));
         }
-        // Клетка точки — та, где низ маркера: маркер стоит на клетке
-        // (x, y) и занимает (y-1..y). Проверяем обе клетки колонки.
-        let (cx, cy) = (tx as usize, ty as usize);
+        if let Some(i) = project
+            .map
+            .armys
+            .iter()
+            .position(|a| a.pos.0 == cx && a.pos.1 == cy)
+        {
+            return Some(crate::state::Selection::Army(i));
+        }
+        // Строение: клетка якоря или спан (якорь — правый-нижний угол,
+        // спан влево-вверх; максимальный спан 8×7 — запас 8).
+        if let Some(i) = project.map.buildings.iter().position(|b| {
+            (b.pos.0 == cx && b.pos.1 == cy)
+                || (b.pos.0 >= cx && b.pos.0 < cx + 8 && b.pos.1 >= cy && b.pos.1 < cy + 8)
+        }) {
+            return Some(crate::state::Selection::Building(i));
+        }
+        None
+    }
+    fn lantern_at(ectx: &EditorCtx, cx: usize, cy: usize) -> Option<usize> {
         ectx.editor
             .state
             .project()
             .lanterns
             .iter()
-            .position(|l| {
-                (l.x == cx && (l.y == cy || l.y + 1 == cy)) || (l.x == cx && l.y == cy)
-            })
+            .position(|l| l.x == cx && (l.y == cy || l.y + 1 == cy))
+    }
+    let cell_at = |screen: egui::Pos2| -> Option<(usize, usize)> {
+        let w = screen_to_world(screen);
+        let tx = (w[0] / SIZE.0).floor();
+        let ty = (w[1] / SIZE.1).floor();
+        (tx >= 0. && ty >= 0. && (tx as usize) < size && (ty as usize) < size)
+            .then(|| (tx as usize, ty as usize))
     };
+    let interact = ectx.editor.tool == editor_core::Tool::Interact;
 
-    // ЛКМ-клик по маркеру: выбрать точку (инструмент не применяется).
-    let mut lantern_clicked = false;
+    // Esc — отмена переноса (клик-клик).
+    if ectx.editor.carrying.is_some() && ectx.input.key_pressed(KeyCode::Escape) {
+        ectx.editor.carrying = None;
+        ectx.editor.status = "Перенос отменён".into();
+    }
+
+    // ЛКМ: интеракт — выбор объекта (рамка + инфоокно); вне интеракта —
+    // выбор точки остаётся (вкладка «Точка событий»), инструмент не применяется.
+    let mut object_clicked = false;
     if response.clicked_by(egui::PointerButton::Primary) {
         if let Some(pos) = response.interact_pointer_pos() {
-            if let Some(idx) = lantern_hit(pos) {
-                ectx.editor.selected_lantern = Some(idx);
-                lantern_clicked = true;
+            let cell = cell_at(pos);
+            let sel = cell.and_then(|(cx, cy)| object_at(ectx, cx, cy));
+            if interact {
+                if let Some(sel) = sel {
+                    ectx.editor.selection = Some(sel);
+                    if let crate::state::Selection::Lantern(i) = sel {
+                        ectx.editor.selected_lantern = Some(i);
+                    }
+                    object_clicked = true;
+                } else {
+                    ectx.editor.selection = None;
+                    ectx.editor.selected_lantern = None;
+                }
+            } else if let Some((cx, cy)) = cell {
+                if let Some(idx) = lantern_at(ectx, cx, cy) {
+                    ectx.editor.selected_lantern = Some(idx);
+                    object_clicked = true;
+                } else {
+                    ectx.editor.selected_lantern = None;
+                }
             } else {
                 ectx.editor.selected_lantern = None;
             }
         }
     }
 
-    // ПКМ: драг точки вместо пана. ПКМ down на маркере — старт драга;
-    // движение тащит точку (визуально — перерисовка маркера на клетке
-    // курсора через временное смещение); ПКМ up — команда MoveLantern.
+    // ПКМ down: интеракт — захват объекта (драг ИЛИ клик-клик carrying);
+    // вне интеракта — прежний драг точки.
     if response.drag_started_by(egui::PointerButton::Secondary) {
         if let Some(pos) = response.interact_pointer_pos() {
-            if let Some(idx) = lantern_hit(pos) {
-                let l = &ectx.editor.state.project().lanterns[idx];
-                let origin = (l.x, l.y);
-                ectx.editor.lantern_drag = Some((idx, origin, origin));
+            let cell = cell_at(pos);
+            let sel = cell.and_then(|(cx, cy)| object_at(ectx, cx, cy));
+            if interact {
+                if let Some(sel) = sel {
+                    let from = match sel {
+                        crate::state::Selection::Lantern(i) => {
+                            let l = &ectx.editor.state.project().lanterns[i];
+                            (l.x, l.y)
+                        }
+                        crate::state::Selection::Army(i) => {
+                            ectx.editor.state.project().map.armys[i].pos
+                        }
+                        crate::state::Selection::Building(i) => {
+                            ectx.editor.state.project().map.buildings[i].pos
+                        }
+                    };
+                    ectx.editor.carrying = Some(crate::state::CarriedObject {
+                        kind: sel,
+                        from,
+                    });
+                    // Драг-точки (неинтерактный путь) не стартует.
+                    ectx.editor.lantern_drag = None;
+                }
+            } else if let Some((cx, cy)) = cell {
+                if let Some(idx) = lantern_at(ectx, cx, cy) {
+                    let l = &ectx.editor.state.project().lanterns[idx];
+                    let origin = (l.x, l.y);
+                    ectx.editor.lantern_drag = Some((idx, origin, origin));
+                }
             }
         }
     }
+
+    // Драг точки (неинтерактный): маркер следует за курсором, up — команда.
     if let Some((idx, from, mut cur)) = ectx.editor.lantern_drag {
-        // Драг активен: текущая клетка курсора — в состоянии драга
-        // (проект НЕ мутируем; маркер рисуется в markers_layer по cur).
         if let Some(pos) = response.interact_pointer_pos() {
-            let w = screen_to_world(pos);
-            let tx = (w[0] / SIZE.0).floor();
-            let ty = (w[1] / SIZE.1).floor();
-            if tx >= 0. && ty >= 0. {
-                cur = (
-                    (tx as usize).min(size - 1),
-                    (ty as usize).min(size - 1),
-                );
+            if let Some(cell) = cell_at(pos) {
+                cur = cell;
             }
         }
         ectx.editor.lantern_drag = Some((idx, from, cur));
-        // Завершение драга: команда с undo (from → текущая клетка).
         if response.drag_stopped_by(egui::PointerButton::Secondary) {
             ectx.editor.lantern_drag = None;
             let editor = &mut ectx.editor;
@@ -1125,9 +1244,123 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         }
     }
 
-    // Пан ПКМ-драгом (если не тащим точку).
+    // Фиксация переноса (клик-клик): ПКМ down при активном carrying.
+    // Драг при зажатой ПКМ тоже доезжает сюда через drag_stopped ниже.
+    if let Some(carried) = ectx.editor.carrying {
+        let fix = |ectx: &mut EditorCtx, to: (usize, usize)| {
+            let from = carried.from;
+            let editor = &mut ectx.editor;
+            let command: Box<dyn editor_core::Command> = match carried.kind {
+                crate::state::Selection::Lantern(i) => {
+                    Box::new(editor_core::command::MoveLantern::new(i, from, to))
+                }
+                crate::state::Selection::Building(i) => {
+                    Box::new(editor_core::command::MoveBuilding::new(i, from, to))
+                }
+                crate::state::Selection::Army(i) => {
+                    Box::new(editor_core::command::MoveArmy::new(i, from, to))
+                }
+            };
+            editor.carrying = None;
+            match editor.history.execute(command, &mut editor.state) {
+                CommandResult::Applied => {
+                    editor.status = format!("Перенос: {:?} → {:?}", from, to);
+                    editor.bake_dirty = true;
+                }
+                CommandResult::Noop => {}
+            }
+        };
+        // Клик-клик: ПКМ нажат в новой клетке (не по тому же объекту).
+        if response.drag_started_by(egui::PointerButton::Secondary) {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if let Some(to) = cell_at(pos) {
+                    if to != carried.from {
+                        fix(ectx, to);
+                    }
+                }
+            }
+        }
+        // Обычный драг: отпустили ПКМ в новой клетке.
+        if response.drag_stopped_by(egui::PointerButton::Secondary) {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if let Some(to) = cell_at(pos) {
+                    fix(ectx, to);
+                }
+            }
+        }
+    }
+
+    // Подсветка выделения интеракта (рамка на канвасе).
+    if let Some(sel) = ectx.editor.selection {
+        let rect_of = |(x, y): (usize, usize), up: f32| -> egui::Rect {
+            let min = world_to_screen([x as f32 * SIZE.0, (y as f32 - up) * SIZE.1]);
+            let max = world_to_screen([(x + 1) as f32 * SIZE.0, (y + 1) as f32 * SIZE.1]);
+            egui::Rect::from_min_max(min, max)
+        };
+        let (rect, label) = match sel {
+            crate::state::Selection::Lantern(i) => {
+                let l = &ectx.editor.state.project().lanterns[i];
+                (rect_of((l.x, l.y), 1.), format!("Точка #{}", l.id))
+            }
+            crate::state::Selection::Army(i) => {
+                let a = &ectx.editor.state.project().map.armys[i];
+                (rect_of(a.pos, 0.), format!("Армия «{}»", a.stats.army_name))
+            }
+            crate::state::Selection::Building(i) => {
+                let b = &ectx.editor.state.project().map.buildings[i];
+                (rect_of(b.pos, 0.), format!("Строение #{}", b.id))
+            }
+        };
+        painter.rect_stroke(rect, 2., Stroke::new(2.5, Color32::LIGHT_GREEN), egui::StrokeKind::Inside);
+        painter.debug_text(
+            rect.left_top() + egui::vec2(2., -14.),
+            egui::Align2::LEFT_BOTTOM,
+            Color32::LIGHT_GREEN,
+            label,
+        );
+    }
+
+    // Ghost переносимого объекта (клик-клик): рамка в клетке курсора.
+    if ectx.editor.carrying.is_some() {
+        if let Some(pos) = response.hover_pos().or(response.interact_pointer_pos()) {
+            if let Some(cell) = cell_at(pos) {
+                let rect = egui::Rect::from_min_max(
+                    world_to_screen([cell.0 as f32 * SIZE.0, cell.1 as f32 * SIZE.1]),
+                    world_to_screen([
+                        (cell.0 + 1) as f32 * SIZE.0,
+                        (cell.1 + 1) as f32 * SIZE.1,
+                    ]),
+                );
+                painter.rect_stroke(
+                    rect,
+                    2.,
+                    Stroke::new(2., Color32::LIGHT_YELLOW),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+    }
+
+    // Пан ПКМ-драгом: отменён при драге точки и переносе объектов.
     if response.dragged_by(egui::PointerButton::Secondary)
         && ectx.editor.lantern_drag.is_none()
+        && !interact
+    {
+        let delta = response.drag_delta();
+        cam.target[0] -= delta.x / zoom;
+        cam.target[1] -= delta.y / zoom;
+    }
+    // В интеракте пан по ПКМ остаётся на пустом месте: если кнопка
+    // зажата дольше одного клика и объекта под курсором нет.
+    if response.dragged_by(egui::PointerButton::Secondary)
+        && interact
+        && ectx.editor.carrying.is_none()
+        && ectx.editor.lantern_drag.is_none()
+        && response
+            .interact_pointer_pos()
+            .and_then(cell_at)
+            .and_then(|(cx, cy)| object_at(ectx, cx, cy))
+            .is_none()
     {
         let delta = response.drag_delta();
         cam.target[0] -= delta.x / zoom;
@@ -1140,7 +1373,8 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     // кривизна внутри него ничтожна). Noop-команды в историю не попадают.
     let mut clicked: Option<(usize, usize)> = None;
     let painting = (response.clicked() || response.dragged_by(egui::PointerButton::Primary))
-        && !lantern_clicked;
+        && !object_clicked
+        && ectx.editor.tool != editor_core::Tool::Interact;
     if painting {
         let pointer = response
             .interact_pointer_pos()
@@ -1346,6 +1580,19 @@ fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
                 ectx.registry,
             )))
         }
+        editor_core::Tool::Interact => None,
+    };
+    // Вкладка «События»: выбранный тип точки (active_lantern_kind)
+    // перекрывает инструмент — ЛКМ ставит фонарик/точку событий
+    // (map_model 8/9, радиус 3 — новую точку видно на карте).
+    let command = match (command, editor.active_lantern_kind) {
+        (_, Some(lamp)) => {
+            let (map_model, active) = if lamp { (8, true) } else { (9, false) };
+            Some(Box::new(
+                editor_core::command::PlaceLantern::new(tile.0, tile.1, map_model, 3, active),
+            ) as Box<dyn editor_core::Command>)
+        }
+        (cmd, None) => cmd,
     };
     let Some(command) = command else {
         editor.status = "Выберите элемент в палитре".into();
@@ -1619,4 +1866,278 @@ fn size_dialog_window(ui: &mut Ui, ectx: &mut EditorCtx) {
     } else if close {
         ectx.editor.size_dialog = None;
     }
+}
+
+// ---------------- Инфоокно «Свойства объекта» (интеракт) ----------------
+
+/// Pane egui_tiles-дерева инфоокна: единственная панель «Свойства».
+/// Дерево — groundwork докинга: панелей станет больше (события, юниты).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InfoPane {
+    Properties,
+}
+
+/// Behavior egui_tiles для инфоокна: рисует содержимое панели.
+struct InfoPaneBehavior;
+
+impl egui_tiles::Behavior<InfoPane> for InfoPaneBehavior {
+    fn pane_ui(
+        &mut self,
+        ui: &mut Ui,
+        _tile_id: egui_tiles::TileId,
+        pane: &mut InfoPane,
+    ) -> egui_tiles::UiResponse {
+        let _ = pane;
+        ui.label("(панель)");
+        egui_tiles::UiResponse::None
+    }
+
+    fn tab_title_for_pane(&mut self, pane: &InfoPane) -> egui::WidgetText {
+        match pane {
+            InfoPane::Properties => "Свойства".into(),
+        }
+    }
+}
+
+/// Инфоокно выбранного объекта (Selection): плавающее egui::Window
+/// «Свойства объекта», внутри egui_tiles-дерево с одним Pane::Properties.
+/// Заголовок окна — имя объекта; содержимое зависит от типа.
+fn info_window(ui: &mut Ui, ectx: &mut EditorCtx) {
+    let Some(sel) = ectx.editor.selection else {
+        return;
+    };
+    // Заголовок и данные снимаем заранее (заёмы внутри Window конфликтуют).
+    let (title, kind) = match sel {
+        crate::state::Selection::Lantern(i) => {
+            let Some(l) = ectx.editor.state.project().lanterns.get(i) else {
+                ectx.editor.selection = None;
+                return;
+            };
+            (
+                format!("Точка событий #{}", l.id),
+                "lantern",
+            )
+        }
+        crate::state::Selection::Army(i) => {
+            let Some(a) = ectx.editor.state.project().map.armys.get(i) else {
+                ectx.editor.selection = None;
+                return;
+            };
+            (format!("Армия «{}»", a.stats.army_name), "army")
+        }
+        crate::state::Selection::Building(i) => {
+            let Some(b) = ectx.editor.state.project().map.buildings.get(i) else {
+                ectx.editor.selection = None;
+                return;
+            };
+            (format!("Строение #{}", b.id), "building")
+        }
+    };
+    let mut open = true;
+    // egui_tiles-дерево с одной панелью «Свойства» — groundwork докинга
+    // (панелей станет больше). Дерево персистится по egui::Id окна.
+    egui::Window::new(title)
+        .default_width(340.)
+        .open(&mut open)
+        .resizable(true)
+        .show(ui.ctx(), |ui| {
+            let tree_id = egui::Id::new("info_window_tree");
+            let mut tree: Option<egui_tiles::Tree<InfoPane>> = ui
+                .ctx()
+                .data_mut(|d| d.get_temp::<egui_tiles::Tree<InfoPane>>(tree_id));
+            let tree = tree.get_or_insert_with(|| {
+                egui_tiles::Tree::new_tabs(
+                    "info_window_tree",
+                    vec![InfoPane::Properties],
+                )
+            });
+            tree.ui(&mut InfoPaneBehavior, ui);
+            // Содержимое панели — под деревом (панель одна, вкладка
+            // «Свойства» уже даёт каркас; контент рисуем напрямую).
+            match kind {
+                "lantern" => lantern_info(ui, ectx, sel),
+                "army" => army_info(ui, ectx, sel),
+                _ => building_info(ui, ectx, sel),
+            }
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(tree_id, tree.clone()));
+        });
+    if !open {
+        ectx.editor.selection = None;
+    }
+}
+
+/// Содержимое инфоокна точки событий: тип, клетка, радиус, чекбокс
+/// активна-с-начала, интерактивный список событий (п.6).
+fn lantern_info(ui: &mut Ui, ectx: &mut EditorCtx, sel: crate::state::Selection) {
+    let crate::state::Selection::Lantern(index) = sel else {
+        return;
+    };
+    let Some(lantern) = ectx.editor.state.project().lanterns.get(index).cloned() else {
+        ectx.editor.selection = None;
+        return;
+    };
+    let kind = if !lantern.events.is_empty() {
+        if lantern.light_radius > 0 {
+            "фонарик с событиями"
+        } else {
+            "точка событий без подсветки"
+        }
+    } else if lantern.active_from_start {
+        "обычный фонарик (активен с начала)"
+    } else {
+        "фонарик"
+    };
+    ui.label(format!("Тип: {kind}"));
+    ui.label(format!("Клетка: ({}, {})", lantern.x, lantern.y));
+    ui.label(format!("map_model: {} (9 = точка событий)", lantern.map_model));
+
+    // Радиус: DragValue 0..=24 через команду SetLanternRadius.
+    let mut radius = lantern.light_radius;
+    ui.horizontal(|ui| {
+        ui.label("Радиус света:");
+        ui.add(egui::DragValue::new(&mut radius).range(0..=24).speed(1.));
+    });
+    if radius != lantern.light_radius {
+        let editor = &mut ectx.editor;
+        let command =
+            Box::new(editor_core::command::SetLanternRadius::new(index, radius));
+        if let CommandResult::Applied = editor.history.execute(command, &mut editor.state) {
+            editor.status = format!("Радиус точки #{}: {radius}", lantern.id);
+        }
+    }
+
+    // Активна с начала: чекбокс (мутация только командой — упрощённо
+    // прямой сеттер отсутствует, правка через Remove+Place не атомарна;
+    // чекбокс показывает состояние, правка — будущая команда).
+    let mut active = lantern.active_from_start;
+    ui.add_enabled(false, egui::Checkbox::new(&mut active, "Активна с начала"));
+
+    // ---------------- Список событий точки (п.6) ----------------
+    ui.separator();
+    ui.label(format!("События ({}):", lantern.events.len()));
+    for row in (0..lantern.events.len()).rev() {
+        let id = lantern.events[row];
+        let name = ectx
+            .editor
+            .state
+            .project()
+            .events
+            .get(id)
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| "?".into());
+        ui.horizontal(|ui| {
+            ui.label(format!("{}. [{}] {}", row + 1, id, name));
+            if ui.button("✕").clicked() {
+                let editor = &mut ectx.editor;
+                let command = Box::new(
+                    editor_core::command::RemoveLanternEvent::new(index, row),
+                );
+                if let CommandResult::Applied =
+                    editor.history.execute(command, &mut editor.state)
+                {
+                    editor.status = format!("Событие [{id}] отвязано от точки");
+                }
+            }
+        });
+    }
+    // «+ Добавить»: дропдаун СУЩЕСТВУЮЩИХ событий карты (id + имя);
+    // выбор — AddLanternEvent (только ссылка). Пусто — подсказка.
+    let events: Vec<(usize, String)> = ectx
+        .editor
+        .state
+        .project()
+        .events
+        .iter()
+        .enumerate()
+        .map(|(id, e)| (id, e.name.clone()))
+        .collect();
+    if events.is_empty() {
+        ui.label(
+            RichText::new("+ Добавить событие: список пуст — создайте события")
+                .weak()
+                .small(),
+        );
+    } else {
+        let mut pick = usize::MAX;
+        egui::ComboBox::from_id_salt("add_lantern_event")
+            .selected_text("+ Добавить событие")
+            .show_ui(ui, |ui| {
+                for (id, name) in &events {
+                    if ui
+                        .selectable_label(false, format!("[{id}] {name}"))
+                        .clicked()
+                    {
+                        pick = *id;
+                    }
+                }
+            });
+        if pick != usize::MAX {
+            let editor = &mut ectx.editor;
+            let command =
+                Box::new(editor_core::command::AddLanternEvent::new(index, pick));
+            if let CommandResult::Applied = editor.history.execute(command, &mut editor.state) {
+                editor.status = format!("Событие [{pick}] привязано к точке");
+            }
+        }
+    }
+}
+
+/// Содержимое инфоокна армии: имя, природа (реестр), active, отряды.
+fn army_info(ui: &mut Ui, ectx: &mut EditorCtx, sel: crate::state::Selection) {
+    let crate::state::Selection::Army(index) = sel else {
+        return;
+    };
+    let Some(army) = ectx.editor.state.project().map.armys.get(index) else {
+        ectx.editor.selection = None;
+        return;
+    };
+    ui.label(format!("Имя: {}", army.stats.army_name));
+    ui.label(format!("Клетка: {:?}", army.pos));
+    let nature = army
+        .troops
+        .get(0)
+        .map(|t| t.get().unit.id)
+        .and_then(|id| ectx.registry.units.get(id))
+        .map(|u| format!("{} (Nature {:?})", u.name, u.unit_type))
+        .unwrap_or_else(|| "нет юнитов".into());
+    ui.label(format!("Глава: {nature}"));
+    ui.label(format!("Активна: {}", army.active));
+    ui.separator();
+    ui.label(format!("Отряды ({}):", army.troops.len()));
+    for (i, troop) in army.troops.iter().enumerate() {
+        let t = troop.get();
+        let info = ectx.registry.units.get(t.unit.id);
+        let name = info.map(|u| u.name.clone()).unwrap_or_else(|| "?".into());
+        ui.label(format!("  {}. {} (hp {})", i + 1, name, t.unit.hp));
+    }
+}
+
+/// Содержимое инфоокна строения: имя/id из реестра, клетка, владелец.
+fn building_info(ui: &mut Ui, ectx: &mut EditorCtx, sel: crate::state::Selection) {
+    let crate::state::Selection::Building(index) = sel else {
+        return;
+    };
+    let Some(building) = ectx.editor.state.project().map.buildings.get(index) else {
+        ectx.editor.selection = None;
+        return;
+    };
+    // Имя спрайта строения: registry.objects по index (ObjectInfo.index).
+    let obj_name = ectx
+        .registry
+        .objects
+        .inner
+        .iter()
+        .find(|o| o.index == building.id)
+        .map(|o| o.name.clone())
+        .unwrap_or_else(|| "?".into());
+    ui.label(format!("Объект: {obj_name} (id {})", building.id));
+    ui.label(format!("Имя: «{}»", building.name));
+    ui.label(format!("Клетка: {:?}", building.pos));
+    let owner = match building.owner {
+        Some(owner) => format!("армия #{owner}"),
+        None => "нет".into(),
+    };
+    ui.label(format!("Владелец: {owner}"));
+    ui.label(format!("Тип: {:?}", building.variant));
 }

@@ -221,6 +221,10 @@ pub struct EditorUi {
     pub building_category: Option<String>,
     /// Фильтр типа армейских шаблонов (None = все).
     pub army_nature: Option<ArmyNature>,
+    /// Выбранный элемент палитры «События»: true — фонарик
+    /// (map_model=8, active, radius=3), false — точка локальных событий
+    /// (map_model=9, inactive, radius=3; видна как E4/E3).
+    pub active_lantern_kind: Option<bool>,
     /// Таймер повтора Ctrl+Z/Y: время последнего повтора (сек),
     /// None — удержание только началось (ждём задержку до первого повтора).
     pub hotkey_repeat_at: Option<f64>,
@@ -229,6 +233,11 @@ pub struct EditorUi {
     /// Выбранная ЛКМ точка событий/фонарик (индекс в lanterns) —
     /// открывает вкладку «Точка событий».
     pub selected_lantern: Option<usize>,
+    /// Выделение интеракта (рамка + инфоокно «Свойства объекта»).
+    pub selection: Option<Selection>,
+    /// Перенос клик-клик: ПКМ на объекте взял, ПКМ в новой клетке положил.
+    /// Ghost следует за курсором без зажатой кнопки; Esc — отмена.
+    pub carrying: Option<CarriedObject>,
     /// Активный ПКМ-драг точки (индекс, исходная клетка, текущая клетка
     /// курсора): маркер рисуется в текущей клетке (без мутации проекта),
     /// ПКМ up завершает командой MoveLantern (from → текущая).
@@ -263,6 +272,25 @@ impl Default for EditorRenderSettings {
             buildings: true,
         }
     }
+}
+
+/// Выделенный объект интеракта (рамка на канвасе + инфоокно).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Selection {
+    /// Армия (индекс в map.armys).
+    Army(usize),
+    /// Строение (индекс в map.buildings).
+    Building(usize),
+    /// Точка событий/фонарик (индекс в lanterns).
+    Lantern(usize),
+}
+
+/// Объект в режиме переноса (клик-клик ПКМ).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CarriedObject {
+    pub kind: Selection,
+    /// Исходная клетка (для команды Move* при фиксации).
+    pub from: (usize, usize),
 }
 
 /// Тип армейского шаблона для палитры (4 базовых фракции старого
@@ -369,7 +397,10 @@ impl Default for EditorUi {
             hotkey_repeat_at: None,
             render_settings: EditorRenderSettings::default(),
             selected_lantern: None,
+            active_lantern_kind: None,
             lantern_drag: None,
+            selection: None,
+            carrying: None,
         }
     }
 }
