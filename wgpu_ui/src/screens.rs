@@ -15,7 +15,8 @@ use crate::state::{
 use crate::ui::{hash, UiCtx, Val};
 use dt_lib::battle::battlefield::BattleInfo;
 use dt_lib::network::room::{
-    PvpRoomSummary, RoomConfig, RoomId, RoomMode, RoomStatus, SpectatorPolicy,
+    ClientRoomMsg, PvpRoomSummary, RoomConfig, RoomId, RoomMode, RoomStatus, RoomView,
+    ServerRoomMsg, SpectatorPolicy,
 };
 use dt_lib::items::item::Item;
 use dt_lib::map::event::{Execute, Message};
@@ -150,6 +151,8 @@ pub fn info(ctx: &mut Ctx) {
     let font_id = ctx.assets.get_font(FONT);
     let input = ctx.input;
     let registry = &*ctx.registry;
+    let pvp_online_flag = pvp_online_connected(ctx);
+    let setup_was_ready = matches!(ctx.widgets.get(&hash("ready")), Some(Val::Bool(true)));
     let menu = &mut ctx.ui.main;
     let mut ui = UiCtx::new(ctx.gfx, ctx.text, input, skin, ctx.widgets);
     ui.window(0., 0., viewport[0], viewport[1], |ui| {
@@ -499,13 +502,19 @@ pub fn pvp_lobby(ctx: &mut Ctx) {
     ctx.gfx
         .begin_pass(Target::Screen, Some(colors::WHITE), &ctx.ui.camera);
     let input = ctx.input;
+    // Онлайн-события до снимка: RoomList/Joined/Left (до borrow menu).
+    let open_only_snapshot = ctx.pvp.open_only;
+    drain_pvp_events(ctx, open_only_snapshot);
     let menu = &mut ctx.ui.main;
     // Снимок комнат до UiCtx (borrow-правила: UiCtx держит &mut gfx/text).
     let (tab, open_only) = (ctx.pvp.lobby_tab, ctx.pvp.open_only);
-    let rooms: Vec<PvpRoomSummary> = ctx
-        .pvp
-        .manager
-        .list()
+    let online = ctx.pvp.net.as_ref().is_some_and(crate::pvp_online::PvpNet::connected);
+    let base_rooms: Vec<PvpRoomSummary> = if online {
+        ctx.pvp.rooms_remote.clone()
+    } else {
+        ctx.pvp.manager.list()
+    };
+    let rooms: Vec<PvpRoomSummary> = base_rooms
         .into_iter()
         .filter(|r| match tab {
             1 => r.mode == RoomMode::Battle,
@@ -558,6 +567,24 @@ pub fn pvp_lobby(ctx: &mut Ctx) {
             if let Some((id, as_spec)) = join {
                 action = Some(PvpLobbyAction::Join(id, as_spec));
             }
+            // Онлайн: адрес + Подключиться/Отключиться.
+            let connected = pvp.net.as_ref().is_some_and(crate::pvp_online::PvpNet::connected);
+            if !connected {
+                ui.label(Some([1200., 20.]), "Сервер:");
+                ui.input_text("pvp_addr", "", &mut pvp.server_addr);
+                if ui.button(Some([1650., 20.]), "Подключиться") {
+                    action = Some(PvpLobbyAction::Connect);
+                }
+            } else {
+                ui.label_colored(
+                    [1200., 20.],
+                    &format!(
+                        "Онлайн: {}",
+                        pvp.net.as_ref().and_then(|n| n.server_name.clone()).unwrap_or_default()
+                    ),
+                    colors::GREEN,
+                );
+            }
             // Ошибка последнего действия.
             if let Some(err) = &pvp.error {
                 ui.label_colored([50., 960.], err, colors::RED);
@@ -583,26 +610,190 @@ pub fn pvp_lobby(ctx: &mut Ctx) {
         }
         Some(PvpLobbyAction::Refresh) => {
             ctx.pvp.error = None;
+            if online {
+                ctx.pvp.net.as_ref().unwrap().send_room(ClientRoomMsg::ListRooms { open_only });
+            }
+        }
+        Some(PvpLobbyAction::Connect) => {
+            let addr = ctx.pvp.server_addr.clone();
+            let nick = ctx.pvp.nick.trim().to_owned();
+            match crate::pvp_online::connect(ctx.rt, &addr, &nick) {
+                Ok(net) => {
+                    ctx.pvp.error = None;
+                    net.send_room(ClientRoomMsg::ListRooms { open_only: false });
+                    ctx.pvp.net = Some(net);
+                }
+                Err(e) => ctx.pvp.error = Some(e),
+            }
         }
         Some(PvpLobbyAction::Join(id, as_spec)) => {
-            let nick = ctx.pvp.nick.trim().to_owned();
-            match ctx.pvp.manager.join(id, &nick, as_spec) {
-                Ok(view) => {
-                    ctx.pvp.error = None;
-                    ctx.pvp.joined = Some((id, view));
-                    ctx.ui.main = Menu::PvpRoom;
+            if online {
+                ctx.pvp.error = None;
+                ctx.pvp
+                    .net
+                    .as_ref()
+                    .unwrap()
+                    .send_room(ClientRoomMsg::JoinRoom { room: id, as_spectator: as_spec });
+            } else {
+                let nick = ctx.pvp.nick.trim().to_owned();
+                match ctx.pvp.manager.join(id, &nick, as_spec) {
+                    Ok(view) => {
+                        ctx.pvp.error = None;
+                        ctx.pvp.joined = Some((id, view));
+                        ctx.ui.main = Menu::PvpRoom;
+                    }
+                    Err(e) => ctx.pvp.error = Some(e.to_string()),
                 }
-                Err(e) => ctx.pvp.error = Some(e.to_string()),
             }
         }
         None => {}
     }
+    // Онлайн-события: RoomList/JoinedRoom/Left/Closed — разбор после рисования.
+    drain_pvp_events(ctx, open_only);
+}
+
+/// Забрать и применить накопленные сетевые события (лобби/комната/бой).
+/// Фаза 1: мутации net (apply_room_msg) со сбором действий; фаза 2 —
+/// применение к ctx (borrow-правила).
+pub fn drain_pvp_events(ctx: &mut Ctx, open_only: bool) {
+    let Some(net) = &mut ctx.pvp.net else {
+        return;
+    };
+    let events = net.drain();
+    // Фаза 1: разбор в (локальные изменения, действия).
+    let mut actions = Vec::new();
+    let mut lost = false;
+    let mut new_rooms: Option<Vec<PvpRoomSummary>> = None;
+    let mut new_history: Option<Vec<dt_lib::network::room::ChatMsg>> = None;
+    let mut new_msgs: Vec<dt_lib::network::room::ChatMsg> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut snapshot: Option<(Vec<dt_lib::battle::army::Army>, dt_lib::battle::battlefield::BattleInfo)> = None;
+    let Some(net) = &mut ctx.pvp.net else {
+        return;
+    };
+    let _ = net;
+    for ev in &events {
+        match ev {
+            crate::pvp_online::PvpEvent::Closed => lost = true,
+            crate::pvp_online::PvpEvent::Room(msg) => {
+                // Мутации net.
+                if let Some(net) = &mut ctx.pvp.net {
+                    if let Some(act) = crate::pvp_online::apply_room_msg(net, msg) {
+                        actions.push(act);
+                    }
+                }
+                match msg {
+                    ServerRoomMsg::RoomList(list) => new_rooms = Some(list.clone()),
+                    ServerRoomMsg::ChatHistory(h) => new_history = Some(h.clone()),
+                    ServerRoomMsg::ChatMsg(m) => new_msgs.push(m.clone()),
+                    ServerRoomMsg::Error { message } => errors.push(message.clone()),
+                    _ => {}
+                }
+            }
+            crate::pvp_online::PvpEvent::Battle((armies, battle)) => {
+                snapshot = Some((armies.clone(), battle.clone()));
+            }
+            crate::pvp_online::PvpEvent::Acceptance(a) => {
+                let v = if *a == [true, true] {
+                    2
+                } else if a[0] || a[1] {
+                    1
+                } else {
+                    0
+                };
+                PVP_ACCEPTANCE.store(v, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+    // Фаза 2: применение.
+    if lost {
+        ctx.pvp.error = Some("Соединение потеряно".into());
+        ctx.pvp.rooms_remote.clear();
+    }
+    if let Some(list) = new_rooms {
+        ctx.pvp.rooms_remote = list;
+    }
+    if let Some(h) = new_history {
+        ctx.pvp.chat = h;
+    }
+    for m in new_msgs {
+        ctx.pvp.chat.push(m);
+        while ctx.pvp.chat.len() > 200 {
+            ctx.pvp.chat.remove(0);
+        }
+    }
+    if let Some(e) = errors.into_iter().next_back() {
+        ctx.pvp.error = Some(e);
+    }
+    if let Some((armies, mut battle)) = snapshot {
+        battle.your_army = ctx.pvp.your_army;
+        ctx.game.executor.gamemap.armys = armies;
+        ctx.game.executor.battle = Some(battle);
+    }
+    for act in actions {
+        match act {
+            crate::pvp_online::Action::EnteredRoom => {
+                ctx.pvp.error = None;
+                ctx.ui.main = Menu::PvpRoom;
+            }
+            crate::pvp_online::Action::LeftRoom => {
+                ctx.ui.main = Menu::PvpLobby;
+            }
+            crate::pvp_online::Action::Started(army) => {
+                ctx.pvp.your_army = Some(army);
+                ctx.pvp.error = None;
+                start_online_pvp_battle(ctx);
+            }
+        }
+    }
+    let _ = open_only;
+}
+
+/// Старт онлайн-боя: экран сетапа, режим Online с нашим conn-адаптером.
+fn start_online_pvp_battle(ctx: &mut Ctx) {
+    let seed = ctx.pvp.net.as_ref().map(|n| n.ini_seed).unwrap_or(0);
+    if ctx.game.executor.gamemap.armys.len() < 2 {
+        ctx.pvp.error = Some("Недостаточно армий для боя".into());
+        return;
+    }
+    let armies = &mut ctx.game.executor.gamemap.armys;
+    let mut battle = BattleInfo::new(armies, 0, 1);
+    battle.coin_flip_initiative(armies, ctx.registry, seed);
+    battle.your_army = ctx.pvp.your_army;
+    ctx.game.executor.battle = Some(battle);
+    ctx.ui.main = Menu::BattleSetup;
+    ctx.widgets.insert(hash("ready"), Val::Bool(false));
 }
 
 enum PvpLobbyAction {
     OpenSetup,
     Refresh,
+    Connect,
     Join(RoomId, bool),
+}
+
+fn pvp_online_connected(ctx: &Ctx) -> bool {
+    ctx.pvp
+        .net
+        .as_ref()
+        .is_some_and(crate::pvp_online::PvpNet::connected)
+}
+
+fn pvp_set_status(ctx: &mut Ctx, status: bool) {
+    ctx.pvp
+        .net
+        .as_ref()
+        .unwrap()
+        .send_battle(dt_client::dt_server::Incoming::Status(status));
+}
+
+/// Оба игрока нажали «Готов» (сервер прислал Acceptance [true, true])?
+/// Кэш последнего известного acceptance хранится в pvp.net пока нет поля —
+/// считываем из последнего события нельзя (drain), поэтому храним флаг тут.
+static PVP_ACCEPTANCE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn pvp_both_ready(ctx: &Ctx) -> bool {
+    PVP_ACCEPTANCE.load(std::sync::atomic::Ordering::Relaxed) == 2
 }
 
 /// Экран создания комнаты (§1.3): форма RoomConfig + валидация on-change.
@@ -732,16 +923,27 @@ pub fn pvp_room_setup(ctx: &mut Ctx) {
     }
     match action {
         Some(Ok(config)) => {
-            let nick = ctx.pvp.nick.trim().to_owned();
-            match ctx.pvp.manager.create(config.clone(), &nick) {
-                Ok(id) => {
-                    ctx.pvp.error = None;
-                    if let Ok(view) = ctx.pvp.manager.view(id) {
-                        ctx.pvp.joined = Some((id, view));
+            if ctx.pvp.net.as_ref().is_some_and(crate::pvp_online::PvpNet::connected) {
+                ctx.pvp.error = None;
+                ctx.pvp
+                    .net
+                    .as_ref()
+                    .unwrap()
+                    .send_room(ClientRoomMsg::CreateRoom(config));
+                // JoinedRoom придёт push-ом; экран переключит drain_pvp_events.
+                ctx.ui.main = Menu::PvpLobby;
+            } else {
+                let nick = ctx.pvp.nick.trim().to_owned();
+                match ctx.pvp.manager.create(config.clone(), &nick) {
+                    Ok(id) => {
+                        ctx.pvp.error = None;
+                        if let Ok(view) = ctx.pvp.manager.view(id) {
+                            ctx.pvp.joined = Some((id, view));
+                        }
+                        ctx.ui.main = Menu::PvpRoom;
                     }
-                    ctx.ui.main = Menu::PvpRoom;
+                    Err(e) => ctx.pvp.error = Some(e.to_string()),
                 }
-                Err(e) => ctx.pvp.error = Some(e.to_string()),
             }
         }
         Some(Err(_)) => *menu = Menu::PvpLobby,
@@ -755,13 +957,41 @@ pub fn pvp_room(ctx: &mut Ctx) {
     ctx.gfx
         .begin_pass(Target::Screen, Some(colors::WHITE), &ctx.ui.camera);
     let input = ctx.input;
+    let online = ctx.pvp.net.as_ref().is_some_and(crate::pvp_online::PvpNet::connected);
+    // Онлайн: события (чат/RoomUpdate/Left) до borrow menu.
+    let open_only_snapshot = ctx.pvp.open_only;
+    if online {
+        drain_pvp_events(ctx, open_only_snapshot);
+    }
     let menu = &mut ctx.ui.main;
-    // Живой снимок комнаты (ник мог измениться, состав — из manager).
-    let snapshot = ctx
+    // Живой снимок комнаты: онлайн — net.view, оффлайн — мок manager.
+    let snapshot: Option<(RoomId, RoomView)> = if online {
+        ctx.pvp
+            .net
+            .as_ref()
+            .and_then(|n| n.view.clone().map(|v| (v.summary.id, v)))
+    } else {
+        ctx.pvp
+            .joined
+            .as_ref()
+            .and_then(|(id, _)| ctx.pvp.manager.view(*id).ok().map(|v| (*id, v)))
+    };
+    let chat: Vec<(String, bool)> = ctx
         .pvp
-        .joined
-        .as_ref()
-        .and_then(|(id, _)| ctx.pvp.manager.view(*id).ok().map(|v| (*id, v)));
+        .chat
+        .iter()
+        .map(|m| {
+            (
+                if m.system {
+                    m.text.clone()
+                } else {
+                    format!("{}: {}", m.from, m.text)
+                },
+                m.system,
+            )
+        })
+        .collect();
+    let mut chat_input = ctx.pvp.chat_input.clone();
     let mut action: Option<PvpRoomAction> = None;
     {
         let mut ui = UiCtx::new(ctx.gfx, ctx.text, input, &ctx.skins.main, ctx.widgets);
@@ -774,7 +1004,13 @@ pub fn pvp_room(ctx: &mut Ctx) {
                 }
                 return;
             };
-            let am_host = view.summary.host.display_name == pvp.nick.trim();
+            let my_name_online = online
+                .then(|| pvp.net.as_ref().and_then(|n| n.server_name.clone()))
+                .flatten();
+            let am_host = match &my_name_online {
+                Some(name) => *name == view.summary.host.display_name,
+                None => view.summary.host.display_name == pvp.nick.trim(),
+            };
             ui.label(Some([50., 30.]), &format!("Комната: {}", view.summary.title));
             ui.label(Some([50., 80.]), &format!("Игроки ({}/{}):", view.summary.players, view.summary.players_max));
             for (i, p) in view.players.iter().enumerate() {
@@ -795,6 +1031,30 @@ pub fn pvp_room(ctx: &mut Ctx) {
             if view.config.coin_flip_initiative {
                 ui.label(Some([50., 400.]), "Монетка +1 инициатива: включена (решится на старте боя)");
             }
+            // Чат (§1.7): последние ~14 строк справа + ввод.
+            {
+                ui.label(Some([1150., 80.]), "Чат:");
+                let shown = chat.len().saturating_sub(14);
+                for (i, (line, _system)) in chat.iter().skip(shown).enumerate() {
+                    ui.label(Some([1150., 110. + i as f32 * 30.]), line);
+                }
+                ui.input_text("pvp_chat", "", &mut chat_input);
+                if ui.button(Some([1780., 920.]), ">") && !chat_input.trim().is_empty() {
+                    action = Some(PvpRoomAction::Chat(chat_input.trim().to_owned()));
+                    chat_input.clear();
+                }
+                // Кик по клику имени игрока (онлайн, хостом).
+                if online && am_host {
+                    for (i, p) in view.players.iter().enumerate() {
+                        if *p == view.summary.host.display_name {
+                            continue;
+                        }
+                        if ui.button(Some([250., 130. + i as f32 * 36.]), "кик") {
+                            action = Some(PvpRoomAction::Kick(p.clone()));
+                        }
+                    }
+                }
+            }
             if let Some(err) = &pvp.error {
                 ui.label_colored([50., 440.], err, colors::RED);
             }
@@ -812,25 +1072,51 @@ pub fn pvp_room(ctx: &mut Ctx) {
             let _ = menu;
         });
     }
+    ctx.pvp.chat_input = chat_input;
     match action {
         Some(PvpRoomAction::Start(id)) => {
-            let nick = ctx.pvp.nick.trim().to_owned();
-            match ctx.pvp.manager.start(id, &nick) {
-                Ok(()) => {
-                    ctx.pvp.error = None;
-                    // Локальный мок: сразу создаём битву с your_army.
-                    start_local_pvp_battle(ctx);
+            if online {
+                ctx.pvp.error = None;
+                ctx.pvp
+                    .net
+                    .as_ref()
+                    .unwrap()
+                    .send_room(ClientRoomMsg::StartBattle);
+            } else {
+                let nick = ctx.pvp.nick.trim().to_owned();
+                match ctx.pvp.manager.start(id, &nick) {
+                    Ok(()) => {
+                        ctx.pvp.error = None;
+                        // Локальный мок: сразу создаём битву с your_army.
+                        start_local_pvp_battle(ctx);
+                    }
+                    Err(e) => ctx.pvp.error = Some(e.to_string()),
                 }
-                Err(e) => ctx.pvp.error = Some(e.to_string()),
             }
         }
         Some(PvpRoomAction::Leave) => {
-            if let Some((id, _)) = ctx.pvp.joined.take() {
+            if online {
+                ctx.pvp.net.as_ref().unwrap().send_room(ClientRoomMsg::LeaveRoom);
+            } else if let Some((id, _)) = ctx.pvp.joined.take() {
                 let nick = ctx.pvp.nick.trim().to_owned();
                 let _ = ctx.pvp.manager.leave(id, &nick);
+                ctx.pvp.error = None;
+                ctx.ui.main = Menu::PvpLobby;
             }
-            ctx.pvp.error = None;
-            ctx.ui.main = Menu::PvpLobby;
+        }
+        Some(PvpRoomAction::Chat(text)) => {
+            ctx.pvp
+                .net
+                .as_ref()
+                .unwrap()
+                .send_room(ClientRoomMsg::Chat { text });
+        }
+        Some(PvpRoomAction::Kick(member)) => {
+            ctx.pvp
+                .net
+                .as_ref()
+                .unwrap()
+                .send_room(ClientRoomMsg::Kick { member });
         }
         None => {}
     }
@@ -839,6 +1125,8 @@ pub fn pvp_room(ctx: &mut Ctx) {
 enum PvpRoomAction {
     Start(RoomId),
     Leave,
+    Chat(String),
+    Kick(String),
 }
 
 /// Локальный мок старта ПВП-боя (без сети): your_army = 0 (мы хост),
@@ -877,13 +1165,23 @@ pub fn battle(ctx: &mut Ctx) {
     let viewport = [crate::ui::UI_W, crate::ui::UI_H];
     ctx.gfx
         .begin_pass(Target::Screen, Some(colors::WHITE), &ctx.ui.camera);
+    // Онлайн-ПВП: применяем входящие снапшоты ДО отрисовки (свежий ход).
+    if ctx.pvp.net.as_ref().is_some_and(crate::pvp_online::PvpNet::connected) {
+        let open_only = ctx.pvp.open_only;
+        drain_pvp_events(ctx, open_only);
+    }
     let winner = draw_battle(ctx, true);
     // Ход ИИ: в сингле любая армия, кроме армии игрока, ходит сама — пауза
     // (этап 6 — AiOpponent на сервере).
     let player_army = ctx.game.executor.players.first().map(|p| p.army);
     let mut ai_pending = false;
+    let pvp_online_battle = ctx
+        .pvp
+        .net
+        .as_ref()
+        .is_some_and(crate::pvp_online::PvpNet::connected);
     if let Some(player_army) = player_army {
-        if !matches!(ctx.game.variant, GameVariant::Online(_)) {
+        if !matches!(ctx.game.variant, GameVariant::Online(_)) && !pvp_online_battle {
             if let Some(battle) = ctx.game.executor.battle.as_ref() {
                 if battle.winner.is_none() {
                     if let Some(active) = battle.active_unit {
@@ -1018,6 +1316,21 @@ pub fn battle_setup(ctx: &mut Ctx) {
     ctx.gfx
         .begin_pass(Target::Screen, Some(colors::WHITE), &ctx.ui.camera);
     let _ = draw_battle(ctx, false);
+    // Онлайн-ПВП: Acceptance/снапшоты до готовности.
+    if ctx.pvp.net.as_ref().is_some_and(crate::pvp_online::PvpNet::connected) {
+        let open_only = ctx.pvp.open_only;
+        drain_pvp_events(ctx, open_only);
+        if pvp_both_ready(ctx) {
+            // Попросить полный снапшот и уйти в бой.
+            ctx.pvp
+                .net
+                .as_ref()
+                .unwrap()
+                .send_battle(dt_client::dt_server::Incoming::GetState);
+            ctx.ui.main = Menu::Battle;
+            return;
+        }
+    }
     if let GameVariant::Online(online) = &mut ctx.game.variant {
         if matches!(online.status, ConnectionStatus::Full(true)) {
             online
@@ -1038,6 +1351,8 @@ pub fn battle_setup(ctx: &mut Ctx) {
     let font_id = ctx.assets.get_font(FONT);
     let input = ctx.input;
     let registry = &*ctx.registry;
+    let pvp_online_flag = pvp_online_connected(ctx);
+    let setup_was_ready = matches!(ctx.widgets.get(&hash("ready")), Some(Val::Bool(true)));
     let units: Vec<(usize, String, TexId)> = ctx
         .registry
         .units
@@ -1236,6 +1551,9 @@ pub fn battle_setup(ctx: &mut Ctx) {
                 online
                     .conn
                     .send_action(dt_client::dt_server::Incoming::Status(!was_ready));
+            } else if pvp_online_flag {
+                // Онлайн-ПВП: флаг в замыкание уже не протянуть (borrow) —
+                // отправка выполняется после окна (pvp_status_pending).
             } else if !was_ready {
                 eprintln!("DBG setup: -> Menu::Battle, calling battle.start()");
                 *menu = Menu::Battle;
@@ -1254,6 +1572,13 @@ pub fn battle_setup(ctx: &mut Ctx) {
             game.variant = GameVariant::Single(Scenario { events: vec![] });
         }
     });
+    // Онлайн-ПВП: готовность уходит после закрытия UiCtx.
+    if pvp_online_flag {
+        let now_ready = matches!(ctx.widgets.get(&hash("ready")), Some(Val::Bool(true)));
+        if now_ready != setup_was_ready {
+            pvp_set_status(ctx, now_ready);
+        }
+    }
 }
 
 // Снапшот-хелперы, безопасные для заимствований внутри замыканий.

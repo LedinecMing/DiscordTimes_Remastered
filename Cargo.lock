@@ -1491,6 +1491,7 @@ dependencies = [
  "dt_lib",
  "futures",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite 0.24.0",
@@ -6332,12 +6333,14 @@ name = "wgpu_ui"
 version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
+ "alkahest",
  "android-activity",
  "ashpd",
  "bytemuck",
  "discord-rich-presence",
  "dt_client",
  "dt_lib",
+ "dt_server",
  "editor-core",
  "editor-validators",
  "egui",
@@ -6351,6 +6354,8 @@ dependencies = [
  "rfd",
  "serde_json",
  "tokio",
+ "tokio-tungstenite 0.24.0",
+ "tungstenite 0.24.0",
  "wgpu 30.0.1",
  "winit",
 ]

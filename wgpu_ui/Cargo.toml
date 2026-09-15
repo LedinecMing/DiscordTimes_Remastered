@@ -12,6 +12,11 @@ dt_client = { path = "../dt_client" }
 ahash = "0.8.11"
 tokio = { version = "*", features = ["sync", "rt", "rt-multi-thread", "process", "macros", "fs", "time"] }
 futures-util = "*"
+tokio-tungstenite = "0.24.0"
+tungstenite = "0.24.0"
+serde_json = "1.0"
+alkahest = { git = "https://github.com/zakarumych/alkahest.git", rev = "99a5b68", features=["derive"] }
+dt_server = { path = "../dt_server" }
 wgpu = "30"
 winit = "0.30"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

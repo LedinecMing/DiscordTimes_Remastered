@@ -14,6 +14,7 @@ pub mod files;
 pub mod gfx;
 pub mod map_view;
 pub mod rich_presence;
+pub mod pvp_online;
 pub mod screens;
 pub mod state;
 pub mod text;
