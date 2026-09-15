@@ -953,11 +953,14 @@ impl Command for SetProperty {
     }
 }
 
-/// Ластик (п.4/5 ТЗ-багфиксов): чистит декорации И строения в клетке
-/// (одна undo-запись; снятые объекты восстанавливаются при undo).
+/// Ластик (п.4/5 ТЗ-багфиксов): чистит декорации И строения в КАЖДОЙ
+/// клетке фигуры кисти (одна undo-запись; снятые объекты
+/// восстанавливаются при undo). Строение стирается, если в кисть попала
+/// его ЯКОРНАЯ клетка (pos — правый-нижний угол спана).
 #[derive(Debug)]
 pub struct EraseAt {
-    pub pos: Pos,
+    /// Клетки фигуры кисти (якорные клетки объектов внутри неё).
+    pub cells: Vec<Pos>,
     /// Снятые декорации: (индекс в decomap, MapDeco).
     taken_decos: Vec<(usize, dt_lib::map::deco::MapDeco)>,
     /// Снятые строения: (индекс в buildings, MapBuildingdata).
@@ -965,9 +968,9 @@ pub struct EraseAt {
 }
 
 impl EraseAt {
-    pub fn new(pos: Pos) -> Self {
+    pub fn new(cells: Vec<Pos>) -> Self {
         Self {
-            pos,
+            cells,
             taken_decos: Vec::new(),
             taken_buildings: Vec::new(),
         }
@@ -976,41 +979,33 @@ impl EraseAt {
 
 impl Command for EraseAt {
     fn apply(&mut self, state: &mut EditorState) -> CommandResult {
-        let (x, y) = self.pos;
+        let cells = std::mem::take(&mut self.cells);
+        self.cells = cells.clone();
+        let cell_set: std::collections::HashSet<(usize, usize)> =
+            cells.iter().copied().collect();
         let project = state.project_mut();
         self.taken_decos.clear();
-        // Декор: все в клетке.
+        self.taken_buildings.clear();
+        // Декор: клетка декора в фигуре кисти.
         let deco_ids: Vec<usize> = project
             .map
             .decomap
             .iter()
             .enumerate()
-            .filter(|(_, d)| d.x == x && d.y == y)
+            .filter(|(_, d)| cell_set.contains(&(d.x, d.y)))
             .map(|(i, _)| i)
             .collect();
         for i in deco_ids.into_iter().rev() {
             let d = project.map.decomap.remove(i);
             self.taken_decos.push((i, d));
         }
-        // Строения: спан уходит влево-вверх от якоря pos (pos —
-        // правый-нижний угол); попадание в клетку — строение целиком.
-        let registry_sizes: Vec<(usize, (u8, u8))> = project
-            .map
-            .buildings
-            .iter()
-            .map(|b| (b.id, (0, 0)))
-            .collect();
-        let _ = registry_sizes;
+        // Строения: якорная клетка в фигуре кисти.
         let build_ids: Vec<usize> = project
             .map
             .buildings
             .iter()
             .enumerate()
-            .filter(|(_, b)| {
-                // Точный спан знает UI (registry); здесь — якорь и клетка
-                // якоря (UI передаёт клетку якоря из object_at).
-                b.pos == (x, y)
-            })
+            .filter(|(_, b)| cell_set.contains(&b.pos))
             .map(|(i, _)| i)
             .collect();
         for i in build_ids.into_iter().rev() {

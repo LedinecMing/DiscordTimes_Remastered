@@ -2324,8 +2324,29 @@ fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
         if cats.contains(&crate::state::PaintCategory::Decos)
             || cats.contains(&crate::state::PaintCategory::Buildings)
         {
+            // Фигура ластика = та же геометрия, что у рисования:
+            // flood-fill для заливки, brush_cells для кисти.
+            let cells = if editor.tool == editor_core::Tool::BucketFill {
+                flood_fill(
+                    editor.state.project(),
+                    tile,
+                    editor.brush.fill_max_range,
+                    editor.brush.fill_max_volume,
+                )
+            } else {
+                let size = editor.state.project().size();
+                brush_cells(editor.brush.shape, editor.brush.size)
+                    .into_iter()
+                    .filter_map(|(dx, dy)| {
+                        let x = tile.0 as i64 + dx as i64;
+                        let y = tile.1 as i64 + dy as i64;
+                        (x >= 0 && y >= 0 && (x as usize) < size && (y as usize) < size)
+                            .then_some((x as usize, y as usize))
+                    })
+                    .collect::<Vec<_>>()
+            };
             match editor.history.execute(
-                Box::new(editor_core::command::EraseAt::new(tile)),
+                Box::new(editor_core::command::EraseAt::new(cells)),
                 &mut editor.state,
             ) {
                 CommandResult::Applied => {
