@@ -386,7 +386,7 @@ impl Room {
         self.players.iter().any(|p| p == name) || self.spectators.iter().any(|p| p == name)
     }
 
-    fn summary(&self) -> PvpRoomSummary {
+    pub fn summary_pub(&self) -> PvpRoomSummary {
         PvpRoomSummary {
             id: self.id,
             title: self.config.title.clone(),
@@ -405,7 +405,7 @@ impl Room {
 
     fn view(&self) -> RoomView {
         RoomView {
-            summary: self.summary(),
+            summary: self.summary_pub(),
             config: self.config.clone(),
             players: self.players.clone(),
             spectators: self.spectators.clone(),
@@ -452,7 +452,7 @@ impl RoomManager {
         let mut ids: Vec<_> = self.rooms.keys().copied().collect();
         ids.sort_unstable();
         ids.into_iter()
-            .filter_map(|id| self.rooms.get(&id).map(Room::summary))
+            .filter_map(|id| self.rooms.get(&id).map(Room::summary_pub))
             .collect()
     }
 
@@ -517,7 +517,7 @@ impl RoomManager {
         } else {
             return Err(RoomError::NotInRoom);
         }
-        Ok(Some(room.summary()))
+        Ok(Some(room.summary_pub()))
     }
 
     /// Кик игрока/наблюдателя хостом.
@@ -541,7 +541,7 @@ impl RoomManager {
         } else {
             return Err(RoomError::NotInRoom);
         }
-        Ok(room.summary())
+        Ok(room.summary_pub())
     }
 
     /// Старт битвы хостом: Lobby -> InGame.
