@@ -1451,7 +1451,11 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         );
     }
 
-    // Ghost переносимого объекта (клик-клик): рамка в клетке курсора.
+    // Ghost переносимого объекта (реалтайм, клик-клик И драг): текстура
+    // объекта (моделька армии / спрайт строения / маркер точки) в клетке
+    // курсора + рамка. Рисуется по ПОСЛЕДНЕЙ известной клетке курсора
+    // каждый кадр — без прыжка при фиксации (команда Move* ставит объект
+    // ровно в ту же клетку).
     if ectx.editor.carrying.is_some() {
         if let Some(pos) = response.hover_pos().or(response.interact_pointer_pos()) {
             if let Some(cell) = cell_at(pos) {
@@ -1462,6 +1466,42 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                         (cell.1 + 1) as f32 * SIZE.1,
                     ]),
                 );
+                // Текстура ghost: тот же спрайт, что рисует запечка.
+                // palette_tex-кэш (egui, с диска); не готова — рамка одна.
+                if let Some(tex) = carried_texture(ui, ectx) {
+                    let tex_size = tex.size_vec2();
+                    // Армии и точки — 2 клетки в высоту (низ на нижней
+                    // грани), строения — во всю клетку-якорь.
+                    let h = match ectx.editor.carrying {
+                        Some(crate::state::CarriedObject {
+                            kind: crate::state::Selection::Building(_),
+                            ..
+                        }) => SIZE.1,
+                        _ => SIZE.1 * 2.,
+                    };
+                    let w = if tex_size.y > 0. {
+                        tex_size.x * (h / tex_size.y)
+                    } else {
+                        SIZE.0
+                    };
+                    let min_world = [
+                        cell.0 as f32 * SIZE.0 + SIZE.0 * 0.5 - w * 0.5,
+                        (cell.1 + 1) as f32 * SIZE.1 - h,
+                    ];
+                    let ghost_rect = egui::Rect::from_min_max(
+                        world_to_screen(min_world),
+                        world_to_screen([
+                            min_world[0] + w,
+                            min_world[1] + h,
+                        ]),
+                    );
+                    painter.image(
+                        tex.id(),
+                        ghost_rect,
+                        egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 180),
+                    );
+                }
                 painter.rect_stroke(
                     rect,
                     2.,
@@ -1540,6 +1580,60 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     }
     ectx.editor.cam = cam;
     clicked
+}
+/// egui-текстура переносимого объекта (ghost): тот же спрайт, что рисует
+/// запечка — моделька армии (Unit_40), спрайт строения (registry.objects
+/// по id), маркер точки (E2/E3/E4 из marker_handles). None — спрайт ещё
+/// не в кэше (ghost рисуется только рамкой).
+fn carried_texture(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<egui::TextureHandle> {
+    let carried = ectx.editor.carrying?;
+    let asset: String = match carried.kind {
+        crate::state::Selection::Lantern(i) => {
+            let l = ectx.editor.state.project().lanterns.get(i)?;
+            let marker = if !l.events.is_empty() {
+                if l.light_radius > 0 {
+                    "E4.png"
+                } else {
+                    "E3.png"
+                }
+            } else {
+                "E2.png"
+            };
+            return ectx.editor.marker_handles.get(marker).cloned();
+        }
+        crate::state::Selection::Army(i) => {
+            let army = ectx.editor.state.project().map.armys.get(i)?;
+            // Моделька по типу первого юнита — как в bake (статичный кадр 40).
+            let unit_type = army
+                .troops
+                .first()
+                .map(|tr| tr.get().unit.get_info(&ectx.registry.units).unit_type)
+                .unwrap_or(dt_lib::units::unit::UnitType::People);
+            let model = match (&army.control, unit_type) {
+                (dt_lib::battle::control::Control::Player(_), _) => "ГГследопыт",
+                (_, dt_lib::units::unit::UnitType::Undead) => "мертвяк",
+                (_, dt_lib::units::unit::UnitType::Rogue) => "разбойник",
+                (_, dt_lib::units::unit::UnitType::Hero
+                | dt_lib::units::unit::UnitType::People) => "феодал",
+                _ => "некромант",
+            };
+            format!("{model}/Unit_40.png")
+        }
+        crate::state::Selection::Building(i) => {
+            let b = ectx.editor.state.project().map.buildings.get(i)?;
+            let obj = ectx
+                .registry
+                .objects
+                .inner
+                .iter()
+                .find(|o| o.index == b.id)?;
+            obj.path.clone()
+        }
+    };
+    let path = format!("assets/{asset}");
+    let ctx = ui.ctx().clone();
+    palette_icon_cache(&ctx, ectx.editor, &asset, &path)?;
+    ectx.editor.palette_tex.get(&asset).cloned()
 }
 
 /// Слой редакторских маркеров поверх канваса (egui painter):
