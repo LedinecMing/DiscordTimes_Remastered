@@ -296,13 +296,23 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
             .show(ui, |ui| {
                 tool_panel(ui, &mut rest);
             });
+        egui::Panel::right("editor_info_dock_panel")
+            .default_size(300.)
+            .min_size(220.)
+            .resizable(true)
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("info_dock_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        info_dock_panel(ui, &mut rest);
+                    });
+            });
         egui::CentralPanel::default().show(ui, |ui| {
             state.actions.click_tile = canvas(ui, &mut rest);
         });
         // Модальное окно размера новой карты (поверх панелей).
         size_dialog_window(ui, &mut rest);
-        // Инфоокно выбранного объекта (интеракт, поверх панелей).
-        info_window(ui, &mut rest);
     });
     state.keep_open
 }
@@ -2326,102 +2336,152 @@ fn size_dialog_window(ui: &mut Ui, ectx: &mut EditorCtx) {
     }
 }
 
-// ---------------- Инфоокно «Свойства объекта» (интеракт) ----------------
-
-/// Pane egui_tiles-дерева инфоокна: единственная панель «Свойства».
-/// Дерево — groundwork докинга: панелей станет больше (события, юниты).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InfoPane {
-    Properties,
+struct InfoDockBehavior<'a, 'b> {
+    ectx: &'a mut EditorCtx<'b>,
+    /// Индексы протухших панелей — снос после прохода дерева.
+    pub stale_drop: Vec<crate::state::Selection>,
 }
 
-/// Behavior egui_tiles для инфоокна: рисует содержимое панели.
-struct InfoPaneBehavior;
+impl<'a, 'b> InfoDockBehavior<'a, 'b> {
+    /// Снос накопленных протухших панелей (вызвать ПОСЛЕ tree.ui).
+    fn drop_stale(&mut self, tree: &mut egui_tiles::Tree<crate::state::Selection>) {
+        for sel in self.stale_drop.drain(..) {
+            let id = tree
+                .tiles
+                .iter()
+                .find(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(p) if *p == sel))
+                .map(|(id, _)| *id);
+            if let Some(id) = id {
+                tree.remove_recursively(id);
+            }
+        }
+    }
+}
 
-impl egui_tiles::Behavior<InfoPane> for InfoPaneBehavior {
+impl<'a, 'b> egui_tiles::Behavior<crate::state::Selection> for InfoDockBehavior<'a, 'b> {
     fn pane_ui(
         &mut self,
         ui: &mut Ui,
-        _tile_id: egui_tiles::TileId,
-        pane: &mut InfoPane,
+        tile_id: egui_tiles::TileId,
+        pane: &mut crate::state::Selection,
     ) -> egui_tiles::UiResponse {
-        let _ = pane;
-        ui.label("(панель)");
+        // Протухший индекс (объект удалён undo/redo) — панель на снос:
+        // мутация дерева во время прохода запрещена, чистим после ui().
+        if !selection_exists(self.ectx, *pane) {
+            self.stale_drop.push(*pane);
+            return egui_tiles::UiResponse::None;
+        }
+        // Pin-галочка: закреплённая панель живёт и без выделения.
+        let pinned = self.ectx.editor.pinned.contains(pane);
+        let mut pin_now = pinned;
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut pin_now, "pin");
+        });
+        if pin_now != pinned {
+            if pin_now {
+                self.ectx.editor.pinned.push(*pane);
+            } else {
+                self.ectx.editor.pinned.retain(|p| p != pane);
+            }
+        }
+        ui.separator();
+        match *pane {
+            crate::state::Selection::Lantern(_) => lantern_info(ui, self.ectx, *pane),
+            crate::state::Selection::Army(_) => army_info(ui, self.ectx, *pane),
+            crate::state::Selection::Building(_) => building_info(ui, self.ectx, *pane),
+        }
         egui_tiles::UiResponse::None
     }
 
-    fn tab_title_for_pane(&mut self, pane: &InfoPane) -> egui::WidgetText {
-        match pane {
-            InfoPane::Properties => "Свойства".into(),
+    fn tab_title_for_pane(&mut self, pane: &crate::state::Selection) -> egui::WidgetText {
+        selection_title(self.ectx, *pane).into()
+    }
+
+    // Контент инфоокна определяет высоту: без вертикального растяжения.
+    fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
+        egui_tiles::SimplificationOptions {
+            all_panes_must_have_tabs: true,
+            ..Default::default()
         }
     }
 }
 
-/// Инфоокно выбранного объекта (Selection): плавающее egui::Window
-/// «Свойства объекта», внутри egui_tiles-дерево с одним Pane::Properties.
-/// Заголовок окна — имя объекта; содержимое зависит от типа.
-fn info_window(ui: &mut Ui, ectx: &mut EditorCtx) {
-    let Some(sel) = ectx.editor.selection else {
-        return;
-    };
-    // Заголовок и данные снимаем заранее (заёмы внутри Window конфликтуют).
-    let (title, kind) = match sel {
-        crate::state::Selection::Lantern(i) => {
-            let Some(l) = ectx.editor.state.project().lanterns.get(i) else {
-                ectx.editor.selection = None;
-                return;
-            };
-            (
-                format!("Точка событий #{}", l.id),
-                "lantern",
-            )
-        }
-        crate::state::Selection::Army(i) => {
-            let Some(a) = ectx.editor.state.project().map.armys.get(i) else {
-                ectx.editor.selection = None;
-                return;
-            };
-            (format!("Армия «{}»", a.stats.army_name), "army")
-        }
-        crate::state::Selection::Building(i) => {
-            let Some(b) = ectx.editor.state.project().map.buildings.get(i) else {
-                ectx.editor.selection = None;
-                return;
-            };
-            (format!("Строение #{}", b.id), "building")
-        }
-    };
-    let mut open = true;
-    // egui_tiles-дерево с одной панелью «Свойства» — groundwork докинга
-    // (панелей станет больше). Дерево персистится по egui::Id окна.
-    egui::Window::new(title)
-        .default_width(340.)
-        .open(&mut open)
-        .resizable(true)
-        .show(ui.ctx(), |ui| {
-            let tree_id = egui::Id::new("info_window_tree");
-            let mut tree: Option<egui_tiles::Tree<InfoPane>> = ui
-                .ctx()
-                .data_mut(|d| d.get_temp::<egui_tiles::Tree<InfoPane>>(tree_id));
-            let tree = tree.get_or_insert_with(|| {
-                egui_tiles::Tree::new_tabs(
-                    "info_window_tree",
-                    vec![InfoPane::Properties],
-                )
-            });
-            tree.ui(&mut InfoPaneBehavior, ui);
-            // Содержимое панели — под деревом (панель одна, вкладка
-            // «Свойства» уже даёт каркас; контент рисуем напрямую).
-            match kind {
-                "lantern" => lantern_info(ui, ectx, sel),
-                "army" => army_info(ui, ectx, sel),
-                _ => building_info(ui, ectx, sel),
-            }
-            ui.ctx()
-                .data_mut(|d| d.insert_temp(tree_id, tree.clone()));
+/// Жив ли объект по индексу (после undo/redo индекс мог протухнуть).
+fn selection_exists(ectx: &EditorCtx, sel: crate::state::Selection) -> bool {
+    let project = ectx.editor.state.project();
+    match sel {
+        crate::state::Selection::Lantern(i) => i < project.lanterns.len(),
+        crate::state::Selection::Army(i) => i < project.map.armys.len(),
+        crate::state::Selection::Building(i) => i < project.map.buildings.len(),
+    }
+}
+
+/// Заголовок таба = имя объекта.
+fn selection_title(ectx: &EditorCtx, sel: crate::state::Selection) -> String {
+    let project = ectx.editor.state.project();
+    match sel {
+        crate::state::Selection::Lantern(i) => project
+            .lanterns
+            .get(i)
+            .map(|l| format!("Точка #{}", l.id))
+            .unwrap_or_else(|| "Точка (удалена)".into()),
+        crate::state::Selection::Army(i) => project
+            .map
+            .armys
+            .get(i)
+            .map(|a| format!("Армия «{}»", a.stats.army_name))
+            .unwrap_or_else(|| "Армия (удалена)".into()),
+        crate::state::Selection::Building(i) => project
+            .map
+            .buildings
+            .get(i)
+            .map(|b| format!("Строение #{}", b.id))
+            .unwrap_or_else(|| "Строение (удалено)".into()),
+    }
+}
+
+/// Правая dock-панель: egui_tiles-дерево инфоокон + pin «по умолчанию».
+/// Панель рисуется всегда при ненулевом дереве; новый выбор (selection)
+/// добавляется в дерево как новая вкладка.
+fn info_dock_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
+    // Новый выбор → новая вкладка в дереве (дубль не добавляем).
+    if let Some(sel) = ectx.editor.selection {
+        let tree = ectx.editor.info_tree.get_or_insert_with(|| {
+            egui_tiles::Tree::new_tabs("editor_info_dock", vec![])
         });
-    if !open {
-        ectx.editor.selection = None;
+        let already = tree.tiles.iter().any(|(_, tile)| {
+            matches!(tile, egui_tiles::Tile::Pane(p) if *p == sel)
+        });
+        if !already {
+            let pane_id = tree.tiles.insert_pane(sel);
+            if let Some(root) = tree.root() {
+                tree.move_tile_to_container(pane_id, root, usize::MAX, true);
+            } else {
+                tree.tiles.set_visible(pane_id, true);
+            }
+        }
+    }
+    // Галочка «закреплять по умолчанию» (пин новых выборов автоматически).
+    ui.horizontal(|ui| {
+        let mut pin = ectx.editor.pin_by_default;
+        ui.checkbox(&mut pin, "Закреплять по умолчанию");
+        ectx.editor.pin_by_default = pin;
+        if ectx.editor.selection.is_some()
+            && ui.button("Открепить всё").clicked()
+        {
+            ectx.editor.pinned.clear();
+        }
+    });
+    ui.separator();
+    if let Some(mut tree) = ectx.editor.info_tree.take() {
+        let mut behavior = InfoDockBehavior {
+            ectx,
+            stale_drop: Vec::new(),
+        };
+        tree.ui(&mut behavior, ui);
+        behavior.drop_stale(&mut tree);
+        // Возвращаем дерево (включая правки pane_ui) обратно в состояние.
+        ectx.editor.info_tree = Some(tree);
     }
 }
 

@@ -241,6 +241,22 @@ pub struct EditorUi {
     pub lantern_drag: Option<(usize, (usize, usize), (usize, usize))>,
     /// Настройки кисти (форма/размер/заливка/мульти-выбор).
     pub brush: BrushConfig,
+    /// Докинг инфоокон (п.6): egui_tiles-дерево в правой панели,
+    /// каждая панель = объект (Selection). None — дерево ещё не создано.
+    pub info_tree: Option<egui_tiles::Tree<Selection>>,
+    /// Закреплять объекты по умолчанию (галочка в интеракте).
+    pub pin_by_default: bool,
+    /// Открытые окна (пин = висит всегда): панель дерева И плавающие
+    /// окна для незакреплённых выборов — флаг «окно открыто».
+    pub pinned: Vec<Selection>,
+}
+
+/// Инфоокно по умолчанию закрыто, закреплённое живёт параллельно.
+impl EditorUi {
+    /// Панель открыта, если объект выбран или закреплён.
+    pub fn is_info_open(&self, sel: &Selection) -> bool {
+        self.selection == Some(*sel) || self.pinned.contains(sel)
+    }
 }
 
 /// Настройки кисти (п.3 ТЗ): форма и размер фигуры под курсором,
@@ -498,6 +514,9 @@ impl Default for EditorUi {
             selection: None,
             carrying: None,
             brush: BrushConfig::default(),
+            info_tree: None,
+            pin_by_default: false,
+            pinned: Vec::new(),
         }
     }
 }
