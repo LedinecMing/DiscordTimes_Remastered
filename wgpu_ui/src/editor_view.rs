@@ -317,14 +317,18 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
             let map_id = match map_id {
                 Some(id) => id,
                 None => {
+                    // Карта попадает в дерево РАЗ при первом кадре и
+                    // становится активной вкладкой только здесь. Раньше
+                    // make_active(map) выполнялся КАЖДЫЙ кадр и гасил
+                    // только что открытую инфо-вкладку (п.1 итерации 2).
                     let id = tree.tiles.insert_pane(crate::state::EditorPane::Map);
                     if let Some(root) = tree.root() {
                         tree.move_tile_to_container(id, root, 0, true);
                     }
+                    tree.make_active(|tid, _| tid == id);
                     id
                 }
             };
-            tree.make_active(|id, _| id == map_id);
             let mut behavior = ScreenTreeBehavior {
                 ectx: &mut rest,
                 click_tile: std::mem::take(&mut state.actions.click_tile),
@@ -430,28 +434,6 @@ fn top_bar(ui: &mut Ui, ectx: &mut EditorCtx, state: &mut ScreenState) {
     });
 }
 
-/// Вкладка панели инструментов. Свойства точки событий — в инфоокне
-/// (интеракт); настройки рендера — поповер в тулбаре.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PaletteTab {
-    /// Палитра активного инструмента (тайлы/декор/строения/армии).
-    Tool,
-    /// Палитра точек событий/фонариков (постановка на карту).
-    Events,
-}
-
-impl PaletteTab {
-    fn label(self) -> &'static str {
-        match self {
-            PaletteTab::Tool => "Палитра",
-            PaletteTab::Events => "События",
-        }
-    }
-}
-
-
-/// Активная вкладка панели (нетабличное состояние кадра — egui id).
-const TAB_STATE: &str = "editor_palette_tab";
 
 /// Панель инструментов слева: сегмент режимов РИСОВАНИЕ/ИНТЕРАКТ,
 /// настройки кисти (в рисовании), вкладки палитры (гриды иконок
@@ -527,25 +509,24 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
     // Внутри интеракта палитра не нужна; вкладки и undo-строка — общие.
     if mode == Mode::Paint {
         ui.separator();
-        let mut tab: i32 = ui
-            .ctx()
-            .data_mut(|d| d.get_temp(egui::Id::new(TAB_STATE)))
-            .unwrap_or(0);
-        ui.horizontal(|ui| {
-            for (i, t) in [PaletteTab::Tool, PaletteTab::Events].iter().enumerate() {
-                if ui
-                    .selectable_label(tab == i as i32, t.label())
-                    .clicked()
-                {
-                    tab = i as i32;
-                }
+        // Единая палитра: сетки всех ВЫБРАННЫХ категорий (п.4 уточн.):
+        // тайлы, декор, строения, точки — без отдельной вкладки «События».
+        let cats = ectx.editor.brush.paint_categories.clone();
+        if cats.is_empty() {
+            ui.label(
+                RichText::new("Выберите слой выше\n(Тайлы/Декор/Строения/Точки)")
+                    .weak()
+                    .small(),
+            );
+        }
+        for cat in cats {
+            match cat {
+                crate::state::PaintCategory::Tiles => tiles_palette(ui, ectx),
+                crate::state::PaintCategory::Decos => objects_palette(ui, ectx, false),
+                crate::state::PaintCategory::Buildings => objects_palette(ui, ectx, true),
+                crate::state::PaintCategory::Lanterns => lanterns_palette(ui, ectx),
             }
-        });
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(egui::Id::new(TAB_STATE), tab));
-        match tab {
-            1 => events_palette(ui, ectx),
-            _ => palette_tab(ui, ectx),
+            ui.separator();
         }
     }
     ui.separator();
@@ -847,39 +828,59 @@ fn multi_pick_label(ectx: &EditorCtx, pick: crate::state::MultiPick) -> String {
 }
 
 
-/// Вкладка «События» палитры: два элемента постановки точек.
-/// «Фонарик» — map_model=8, активен с начала, radius=3 (обычный свет).
-/// «Точка локальных событий» — map_model=9, radius=3 (видна как E4 при
-/// событиях; радиус > 0 по дефолту — новую точку видно на карте).
-/// Выбор → ЛКМ на канвасе ставит (PlaceLantern); дубль в клетке no-op.
-fn events_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
+/// Палитра «Точки» (п.4 уточн.): обычная сетка ячеек asset_browser —
+/// Фонарик и Точка локальных событий; выбор работает через
+/// active_lantern_kind (постановка — PlaceLantern).
+fn lanterns_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
     ui.heading("Точки событий");
-    let kind = ectx.editor.active_lantern_kind;
-    if ui
-        .selectable_label(kind == Some(true), "Фонарик (свет, активен)")
-        .clicked()
-    {
-        ectx.editor.active_lantern_kind = Some(true);
-    }
-    ui.label(
-        RichText::new("map_model=8, активен с начала, радиус 3")
-            .weak()
-            .small(),
-    );
-    ui.separator();
-    if ui
-        .selectable_label(kind == Some(false), "Точка локальных событий")
-        .clicked()
-    {
-        ectx.editor.active_lantern_kind = Some(false);
-    }
-    ui.label(
-        RichText::new("map_model=9, радиус 3; события — в инфоокне точки")
-            .weak()
-            .small(),
-    );
-    ui.separator();
-    ui.label("Выберите тип и кликните ЛКМ по канвасу.");
+    ui.horizontal_wrapped(|ui| {
+        for (kind, name, sub, hint) in [
+            (
+                Some(true),
+                "Фонарик",
+                "активен",
+                "map_model=8, активен с начала, радиус 3",
+            ),
+            (
+                Some(false),
+                "Точка событий",
+                "map_model=9",
+                "радиус 3; события — в инфоокне точки",
+            ),
+        ] {
+            let selected = ectx.editor.active_lantern_kind == kind;
+            let label = format!("{name}\n{sub}");
+            let cell = crate::editor_ui::asset_browser::cell(
+                ui,
+                egui::vec2(72., 80.),
+                &label,
+                selected,
+            );
+            if let Some(tex) = ectx.editor.marker_handles.get(if kind == Some(true) {
+                "E2.png"
+            } else {
+                "E3.png"
+            }) {
+                crate::editor_ui::asset_browser::draw_icon_fit(
+                    ui.painter(),
+                    tex,
+                    crate::editor_ui::asset_browser::icon_rect_of(cell.rect),
+                );
+            }
+            let cell = cell.on_hover_text(hint);
+            if cell.clicked() {
+                ectx.editor.active_lantern_kind = kind;
+            }
+            if selected {
+                ui.painter().rect_stroke(
+                    cell.rect,
+                    3.,
+                    Stroke::new(2., Color32::YELLOW),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+    });
     if ectx.editor.active_lantern_kind.is_none() {
         ectx.editor.active_lantern_kind = Some(true);
     }
@@ -1661,17 +1662,25 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         }
     }
 
-    // ПКМ down: интеракт — захват объекта (драг ИЛИ клик-клик carrying).
+    // ПКМ down: интеракт — захват объекта. ДВА пути:
+    // (а) клик-клик: down на объекте → carrying=Some (приклеен к
+    //     курсору, отпускание НЕ завершает); следующий down в новой
+    //     клетке → фиксация.
+    // (б) драг: зажал на объекте, повёл, отпустил в новой клетке →
+    //     фиксация по drag_stopped.
+    // Приоритет над паном: если down попал в объект — жест считается
+    // захваченным переносом (pan_interact ниже проверяет carry-логику).
     if response.drag_started_by(egui::PointerButton::Secondary) && interact {
         if let Some(pos) = response.interact_pointer_pos() {
             let cell = cell_at(pos);
             let sel = cell.and_then(|(cx, cy)| object_at(ectx, cx, cy));
-            if std::env::var("DT_EGUI_DEBUG").is_ok() {
-                eprintln!(
-                    "[carry] PKM down: pos={pos:?} cell={cell:?} hit={sel:?}"
-                );
+            let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
+            if debug {
+                eprintln!("[carry] PKM down: pos={pos:?} cell={cell:?} hit={sel:?} already_carrying={}", ectx.editor.carrying.is_some());
             }
-            if let Some(sel) = sel {
+            // already_carrying: этот down — «второй клик» клик-клик:
+            // фиксацию делает блок ниже, новую grab не начинаем.
+            if let (Some(sel), false) = (sel, ectx.editor.carrying.is_some()) {
                 let from = match sel {
                     crate::state::Selection::Lantern(i) => {
                         let l = &ectx.editor.state.project().lanterns[i];
@@ -1689,8 +1698,8 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                     kind: sel,
                     from,
                 });
-                if std::env::var("DT_EGUI_DEBUG").is_ok() {
-                    eprintln!("[carry] carrying=Some({sel:?}) from={from:?}");
+                if debug {
+                    eprintln!("[carry] carrying=Some({sel:?}) from={from:?} (приклеен к курсору)");
                 }
             }
         }
@@ -1737,10 +1746,10 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                 }
             }
         };
-        // Клик-клик: ПКМ нажат в новой клетке (не по тому же объекту).
-        // ДЕЛАЕМ и на drag_started (клик-клик), и на drag_stopped (драг):
-        // PKM down на объекте стартует carrying, PKM down в новой клетке
-        // фиксирует; если это был драг — drag_stopped фиксирует.
+        // Кликом-клик ПКМ down в новой клетке (не там, где взяли) —
+        // фиксация. ВАЖНО: тот же down, который только что ВЗЯЛ объект
+        // (grab выше), сюда не попадает — в этом кадре carrying уже
+        // установлен, но from совпадает с клеткой взятия.
         let click_fixed = {
             let mut fixed = false;
             if response.drag_started_by(egui::PointerButton::Secondary) {
@@ -1755,7 +1764,14 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             }
             fixed
         };
-        if !click_fixed && response.drag_stopped_by(egui::PointerButton::Secondary) {
+        // Обычный драг: отпустили ПКМ — фиксируем. Но если это ТОТ ЖЕ
+        // кадр, где произошёл grab (click-click: нажали-отпустили на
+        // объекте, ничего не перетащив) — carrying ЖИВЁТ дальше
+        // (приклеен к курсору), фиксация только следующим down.
+        if !click_fixed
+            && response.drag_stopped_by(egui::PointerButton::Secondary)
+            && !response.drag_started_by(egui::PointerButton::Secondary)
+        {
             if let Some(pos) = response.interact_pointer_pos() {
                 if let Some(to) = cell_at(pos) {
                     fix(ectx, to);
@@ -1763,7 +1779,6 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             }
         }
     }
-
     // 4в: оригинал переносимого объекта СКРЫВАЕТСЯ — запечка в RT общая,
     // поэтому затираем его rect полупрозрачным слоем (полу-призрак на
     // исходном месте, полный ghost следует за курсором).
@@ -2309,8 +2324,29 @@ fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
         if cats.contains(&crate::state::PaintCategory::Decos)
             || cats.contains(&crate::state::PaintCategory::Buildings)
         {
+            // Фигура ластика = та же геометрия, что у рисования:
+            // flood-fill для заливки, brush_cells для кисти.
+            let cells = if editor.tool == editor_core::Tool::BucketFill {
+                flood_fill(
+                    editor.state.project(),
+                    tile,
+                    editor.brush.fill_max_range,
+                    editor.brush.fill_max_volume,
+                )
+            } else {
+                let size = editor.state.project().size();
+                brush_cells(editor.brush.shape, editor.brush.size)
+                    .into_iter()
+                    .filter_map(|(dx, dy)| {
+                        let x = tile.0 as i64 + dx as i64;
+                        let y = tile.1 as i64 + dy as i64;
+                        (x >= 0 && y >= 0 && (x as usize) < size && (y as usize) < size)
+                            .then_some((x as usize, y as usize))
+                    })
+                    .collect::<Vec<_>>()
+            };
             match editor.history.execute(
-                Box::new(editor_core::command::EraseAt::new(tile)),
+                Box::new(editor_core::command::EraseAt::new(cells)),
                 &mut editor.state,
             ) {
                 CommandResult::Applied => {
@@ -3165,9 +3201,23 @@ thread_local! {
     static PENDING_EVENT_OPEN: std::cell::RefCell<Vec<usize>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
+
 /// Открыть/поднять инфо-тайл объекта в screen_tree (п.6): 8а —
 /// непинned заменяют друг друга; дубль — просто активируется.
 fn open_info_pane(ectx: &mut EditorCtx, sel: crate::state::Selection) {
+    let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
+    if debug {
+        eprintln!("[info] open_info_pane: sel={sel:?} exists={}", {
+            // selection_exists читает состояние до вставки.
+            let project = ectx.editor.state.project();
+            match sel {
+                crate::state::Selection::Lantern(i) => i < project.lanterns.len(),
+                crate::state::Selection::Army(i) => i < project.map.armys.len(),
+                crate::state::Selection::Building(i) => i < project.map.buildings.len(),
+                crate::state::Selection::Event(i) => i < project.events.len(),
+            }
+        });
+    }
     if !selection_exists(ectx, sel) {
         return;
     }
