@@ -12,7 +12,7 @@ use crate::camera::{default_camera, Camera};
 use crate::gfx::{colors, Target};
 use crate::state::{EditorUi, Menu, SIZE};
 use crate::Ctx;
-use editor_core::command::{PaintTile, PlaceArmy, PlaceBuilding, PlaceDeco};
+use editor_core::command::{BatchPlace, PaintTile, PlaceArmy, PlaceBuilding, PlaceDeco};
 use editor_core::CommandResult;
 use egui::{
     Align2, Color32, FontId, Frame, Layout, RichText, Sense, Stroke, Ui, Vec2,
@@ -422,42 +422,80 @@ impl PaletteTab {
 /// Активная вкладка панели (нетабличное состояние кадра — egui id).
 const TAB_STATE: &str = "editor_palette_tab";
 
-/// Панель инструментов слева: инструменты, вкладки палитры (гриды иконок
-/// с поиском и фильтрами категорий) и настройки рендера.
+/// Панель инструментов слева: сегмент режимов РИСОВАНИЕ/ИНТЕРАКТ,
+/// настройки кисти (в рисовании), вкладки палитры (гриды иконок
+/// с поиском и фильтрами категорий).
 fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
     ui.heading("Инструменты");
-    let active = ectx.editor.tool;
-    for tool in editor_core::Tool::ALL {
-        if ui
-            .selectable_label(active == tool, tool.label())
-            .clicked()
-        {
-            ectx.editor.tool = tool;
-        }
-    }
-    ui.separator();
-    // Вкладки: палитра активного инструмента и «События» (постановка
-    // точек). Свойства выбранной точки — в инфоокне (интеракт);
-    // настройки рендера — поповер в тулбаре сверху.
-    let mut tab: i32 = ui
-        .ctx()
-        .data_mut(|d| d.get_temp(egui::Id::new(TAB_STATE)))
-        .unwrap_or(0);
+    // Сегмент режима: РИСОВАНИЕ (кисть/заливка/декор/строения/армии)
+    // против ИНТЕРАКТ (выбор/перенос объектов). Внутри рисования —
+    // конкретный инструмент; интеракт — сам инструмент.
+    let mode = if ectx.editor.tool.is_paint() {
+        Mode::Paint
+    } else {
+        Mode::Interact
+    };
     ui.horizontal(|ui| {
-        for (i, t) in [PaletteTab::Tool, PaletteTab::Events].iter().enumerate() {
+        for (m, label) in [(Mode::Paint, "РИСОВАНИЕ"), (Mode::Interact, "ИНТЕРАКТ")] {
             if ui
-                .selectable_label(tab == i as i32, t.label())
+                .selectable_label(ectx.editor.tool.is_paint() == m.is_paint(), label)
                 .clicked()
             {
-                tab = i as i32;
+                ectx.editor.tool = match m {
+                    Mode::Paint => editor_core::Tool::Brush,
+                    Mode::Interact => editor_core::Tool::Interact,
+                };
             }
         }
     });
-    ui.ctx()
-        .data_mut(|d| d.insert_temp(egui::Id::new(TAB_STATE), tab));
-    match tab {
-        1 => events_palette(ui, ectx),
-        _ => palette_tab(ui, ectx),
+    if mode == Mode::Paint {
+        ui.separator();
+        ui.horizontal(|ui| {
+            for tool in [
+                editor_core::Tool::Brush,
+                editor_core::Tool::BucketFill,
+                editor_core::Tool::Deco,
+                editor_core::Tool::Building,
+                editor_core::Tool::Army,
+            ] {
+                let active = ectx.editor.tool == tool;
+                if ui.selectable_label(active, tool.label()).clicked() {
+                    ectx.editor.tool = tool;
+                }
+            }
+        });
+        brush_settings(ui, ectx);
+    } else {
+        ui.separator();
+        ui.label(
+            RichText::new("ЛКМ — выбрать объект (инфоокно),\nПКМ — перенос (клик-клик или драг),\nEsc — отмена переноса.")
+                .weak()
+                .small(),
+        );
+    }
+    // Внутри интеракта палитра не нужна; вкладки и undo-строка — общие.
+    if mode == Mode::Paint {
+        ui.separator();
+        let mut tab: i32 = ui
+            .ctx()
+            .data_mut(|d| d.get_temp(egui::Id::new(TAB_STATE)))
+            .unwrap_or(0);
+        ui.horizontal(|ui| {
+            for (i, t) in [PaletteTab::Tool, PaletteTab::Events].iter().enumerate() {
+                if ui
+                    .selectable_label(tab == i as i32, t.label())
+                    .clicked()
+                {
+                    tab = i as i32;
+                }
+            }
+        });
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new(TAB_STATE), tab));
+        match tab {
+            1 => events_palette(ui, ectx),
+            _ => palette_tab(ui, ectx),
+        }
     }
     ui.separator();
     ui.label(format!(
@@ -465,6 +503,144 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
         ectx.editor.history.undo_len(),
         if ectx.editor.history.can_redo() { "+" } else { "-" },
     ));
+}
+
+/// Режим тулбара: рисование (кисть/заливка/постановка) или интеракт.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Paint,
+    Interact,
+}
+
+impl Mode {
+    fn is_paint(self) -> bool {
+        self == Mode::Paint
+    }
+}
+
+/// Настройки кисти (п.3): форма, размер, заливка, мульти-выбор.
+fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
+    let (shape, size) = {
+        let b = &mut ectx.editor.brush;
+        ui.separator();
+        ui.label("Кисть:");
+        ui.horizontal(|ui| {
+            for s in crate::state::BrushShape::ALL {
+                if ui.selectable_label(b.shape == s, s.label()).clicked() {
+                    b.shape = s;
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Размер:");
+            ui.add(
+                egui::Slider::new(&mut b.size, 1..=16)
+                    .clamping(egui::SliderClamping::Always),
+            );
+        });
+        (b.shape, b.size)
+    };
+    let _ = (shape, size);
+    // Заливка: параметры актуальны только для BucketFill.
+    {
+        let b = &mut ectx.editor.brush;
+        if ectx.editor.tool == editor_core::Tool::BucketFill {
+            ui.horizontal(|ui| {
+                ui.label("Заливка: дальность");
+                ui.add(
+                    egui::DragValue::new(&mut b.fill_max_range)
+                        .range(0..=256)
+                        .speed(1.),
+                );
+                ui.label("(0 = ∞)");
+            });
+            ui.horizontal(|ui| {
+                ui.label("макс. объём");
+                ui.add(
+                    egui::DragValue::new(&mut b.fill_max_volume)
+                        .range(0..=100_000)
+                        .speed(100.),
+                );
+                ui.label("(0 = ∞)");
+            });
+        }
+    }
+    // Мульти-выбор: список активных элементов.
+    ui.separator();
+    let picks = ectx.editor.brush.multi_select.clone();
+    let order = ectx.editor.brush.multi_order;
+    ui.label(format!("Мульти-выбор ({}):", picks.len()));
+    for (i, pick) in picks.iter().enumerate() {
+        let label = multi_pick_label(ectx, *pick);
+        ui.horizontal(|ui| {
+            ui.label(format!("  {}. {}", i + 1, label));
+            if ui.button("✕").clicked() {
+                ectx.editor.brush.multi_select.remove(i);
+            }
+        });
+    }
+    if !picks.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label("Порядок:");
+            for o in crate::state::MultiOrder::ALL {
+                if ui.selectable_label(order == o, o.label()).clicked() {
+                    ectx.editor.brush.multi_order = o;
+                }
+            }
+        });
+        if ui.button("Очистить мульти-выбор").clicked() {
+            ectx.editor.brush.multi_select.clear();
+        }
+    }
+    ui.label(
+        RichText::new(
+            "Галочка в палитре добавляет элемент;\nкогда список непуст — рисует он (случайно/последовательно).",
+        )
+        .weak()
+        .small(),
+    );
+}
+
+/// Человекочитаемая подпись элемента мульти-выбора.
+fn multi_pick_label(ectx: &EditorCtx, pick: crate::state::MultiPick) -> String {
+    match pick {
+        crate::state::MultiPick::Tile(t) => {
+            let name = dt_lib::map::tile::TILES
+                .get(t)
+                .map(|t| t.sprite().trim_end_matches(".png").to_string())
+                .unwrap_or_else(|| "?".into());
+            format!("тайл {} ({})", name, t)
+        }
+        crate::state::MultiPick::Deco(idx) => {
+            let name = ectx
+                .registry
+                .objects
+                .inner
+                .get(idx)
+                .map(|o| o.name.clone())
+                .unwrap_or_else(|| "?".into());
+            format!("декор {} ({})", name, idx)
+        }
+        crate::state::MultiPick::Building(idx) => {
+            let name = ectx
+                .registry
+                .objects
+                .inner
+                .get(idx)
+                .map(|o| o.name.clone())
+                .unwrap_or_else(|| "?".into());
+            format!("строение {} ({})", name, idx)
+        }
+        crate::state::MultiPick::Army(unit_id) => {
+            let name = ectx
+                .registry
+                .units
+                .get(unit_id)
+                .map(|u| u.name.clone())
+                .unwrap_or_else(|| "?".into());
+            format!("армия {} ({})", name, unit_id)
+        }
+    }
 }
 
 
@@ -566,6 +742,18 @@ fn search_field(ui: &mut Ui, ectx: &mut EditorCtx) {
     });
 }
 
+/// Маленький чекбокс «мн.» под ячейкой палитры: Some(true) — добавлен,
+/// Some(false) — убран, None — без изменений.
+fn toggle_multiselect_cell(ui: &mut Ui, on: bool) -> Option<bool> {
+    let mut v = on;
+    let resp = ui.checkbox(&mut v, "мн.");
+    if resp.changed() {
+        Some(v)
+    } else {
+        None
+    }
+}
+
 /// Пропускает ли объект поисковый фильтр (имя или id как подстрока).
 fn matches_search(search: &str, name: &str, id: usize) -> bool {
     let search = search.trim();
@@ -630,9 +818,29 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
                         icons.insert(sprite.to_string(), t);
                         t
                     };
+                    let in_multi = ectx
+                        .editor
+                        .brush
+                        .multi_select
+                        .contains(&crate::state::MultiPick::Tile(tile));
                     let cell = ui
                         .selectable_label(selected, format!("{}\n{}", names[tile], tile))
                         .on_hover_text(format!("{} ({})", names[tile], tile));
+                    let pick = crate::state::MultiPick::Tile(tile);
+                    let toggled = toggle_multiselect_cell(ui, in_multi);
+                    if toggled == Some(true) {
+                        ectx.editor.brush.multi_select.push(pick);
+                    } else if toggled == Some(false) {
+                        if let Some(pos) = ectx
+                            .editor
+                            .brush
+                            .multi_select
+                            .iter()
+                            .position(|p| *p == pick)
+                        {
+                            ectx.editor.brush.multi_select.remove(pos);
+                        }
+                    }
                     if cell.clicked() {
                         ectx.editor.active_tile = tile;
                         ectx.editor.state.set_active_tile(tile);
@@ -783,6 +991,25 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                             egui::Color32::WHITE,
                         );
                     }
+                    let pick = if buildings {
+                        crate::state::MultiPick::Building(idx)
+                    } else {
+                        crate::state::MultiPick::Deco(idx)
+                    };
+                    let in_multi = ectx.editor.brush.multi_select.contains(&pick);
+                    if let Some(t) = toggle_multiselect_cell(ui, in_multi) {
+                        if t {
+                            ectx.editor.brush.multi_select.push(pick);
+                        } else if let Some(pos) = ectx
+                            .editor
+                            .brush
+                            .multi_select
+                            .iter()
+                            .position(|p| *p == pick)
+                        {
+                            ectx.editor.brush.multi_select.remove(pos);
+                        }
+                    }
                     if resp.clicked() {
                         if buildings {
                             ectx.editor.active_building = Some(idx);
@@ -830,6 +1057,21 @@ fn armies_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
             let label = format!("{} — {} ({})", nature.label(), unit.name, unit_id);
             if ui.selectable_label(selected, label).clicked() {
                 ectx.editor.active_army_template = Some(unit_id);
+            }
+            let pick = crate::state::MultiPick::Army(unit_id);
+            let in_multi = ectx.editor.brush.multi_select.contains(&pick);
+            if let Some(t) = toggle_multiselect_cell(ui, in_multi) {
+                if t {
+                    ectx.editor.brush.multi_select.push(pick);
+                } else if let Some(pos) = ectx
+                    .editor
+                    .brush
+                    .multi_select
+                    .iter()
+                    .position(|p| *p == pick)
+                {
+                    ectx.editor.brush.multi_select.remove(pos);
+                }
             }
         });
     }
@@ -964,7 +1206,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             y += grid_step * 4.;
         }
     }
-    // Ховер тайла.
+    // Ховер тайла + превью фигуры кисти (в рисовании, размер > 1).
     let tile_at = |screen: egui::Pos2| -> Option<(usize, usize)> {
         let w = screen_to_world(screen);
         let tx = (w[0] / SIZE.0).floor();
@@ -986,6 +1228,31 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                 egui::StrokeKind::Inside,
             );
             ectx.editor.state.set_cursor(tile);
+            // Превью фигуры: полупрозрачная заливка клеток фигуры кисти.
+            let painting_tool = ectx.editor.tool.is_paint();
+            if painting_tool && ectx.editor.brush.size > 1 {
+                for (dx, dy) in brush_cells(ectx.editor.brush.shape, ectx.editor.brush.size)
+                {
+                    let x = tile.0 as i64 + dx as i64;
+                    let y = tile.1 as i64 + dy as i64;
+                    if x < 0 || y < 0 || x as usize >= size || y as usize >= size {
+                        continue;
+                    }
+                    let a = world_to_screen([
+                        x as f32 * SIZE.0,
+                        y as f32 * SIZE.1,
+                    ]);
+                    let b = world_to_screen([
+                        (x + 1) as f32 * SIZE.0,
+                        (y + 1) as f32 * SIZE.1,
+                    ]);
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(a, b),
+                        0.,
+                        Color32::from_rgba_unmultiplied(255, 255, 0, 40),
+                    );
+                }
+            }
         }
     }
     // Выделенная клетка.
@@ -1385,14 +1652,229 @@ fn building_ownership_color(building: usize) -> [f32; 4] {
     [mix(r), mix(g), mix(b), 1.]
 }
 
+
+/// Клетки фигуры кисти с центром в (0,0) (смещения относительно центра).
+/// Круг — диск dx² + dy² ≤ r²; кольцо — диск r минус диск r-2 (толщина
+/// 2 при чётном, 1 при нечётном); квадрат — (2r-1)²; периметр — рамка
+/// толщиной 1.
+pub fn brush_cells(shape: crate::state::BrushShape, r: u32) -> Vec<(i32, i32)> {
+    let r = r.max(1) as i32;
+    let mut cells = Vec::new();
+    let square_side = 2 * r - 1;
+    match shape {
+        crate::state::BrushShape::Circle => {
+            let rr = r * r;
+            for dy in -(r - 1)..=(r - 1) {
+                for dx in -(r - 1)..=(r - 1) {
+                    if dx * dx + dy * dy <= rr {
+                        cells.push((dx, dy));
+                    }
+                }
+            }
+        }
+        crate::state::BrushShape::Ring => {
+            let outer = r * r;
+            let inner = (r - 2).max(0).pow(2);
+            for dy in -(r - 1)..=(r - 1) {
+                for dx in -(r - 1)..=(r - 1) {
+                    let d2 = dx * dx + dy * dy;
+                    if d2 <= outer && d2 > inner {
+                        cells.push((dx, dy));
+                    }
+                }
+            }
+        }
+        crate::state::BrushShape::Square => {
+            for dy in -(r - 1)..=(r - 1) {
+                for dx in -(r - 1)..=(r - 1) {
+                    cells.push((dx, dy));
+                }
+            }
+        }
+        crate::state::BrushShape::Perimeter => {
+            if r == 1 {
+                cells.push((0, 0));
+            } else {
+                let h = square_side / 2;
+                for dy in -h..=h {
+                    for dx in -h..=h {
+                        if dx == -h || dx == h || dy == -h || dy == h {
+                            cells.push((dx, dy));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    cells
+}
+
+/// Заливка (flood-fill) от стартовой клетки: 4-связность, совпадение
+/// исходного тайла. `range` — 0 = вся связная область, иначе BFS-дистанция
+/// ≤ range. `max_volume` — 0 = без лимита, иначе максимум клеток.
+fn flood_fill(
+    project: &editor_core::MapProject,
+    start: (usize, usize),
+    range: usize,
+    max_volume: usize,
+) -> Vec<(usize, usize)> {
+    let size = project.size();
+    let Some(source) = project.tile(start) else {
+        return Vec::new();
+    };
+    let mut visited = vec![false; size * size];
+    let mut result = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    visited[start.1 * size + start.0] = true;
+    queue.push_back((start, 0usize));
+    while let Some(((x, y), dist)) = queue.pop_front() {
+        if project.tile((x, y)) != Some(source) {
+            continue;
+        }
+        result.push((x, y));
+        if max_volume > 0 && result.len() >= max_volume {
+            break;
+        }
+        if range > 0 && dist >= range {
+            continue;
+        }
+        for (nx, ny) in [
+            (x.wrapping_sub(1), y),
+            (x + 1, y),
+            (x, y.wrapping_sub(1)),
+            (x, y + 1),
+        ] {
+            if nx < size && ny < size {
+                let flat = ny * size + nx;
+                if !visited[flat] {
+                    visited[flat] = true;
+                    queue.push_back(((nx, ny), dist + 1));
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Тайл для клетки при мульти-выборе: Random — детерминированный hash
+/// координат (одна клетка всегда даёт один и тот же элемент), Sequential —
+/// по кругу (порядок выбора в списке). None — мульти-выбор не активен.
+fn multi_pick_tile(
+    editor: &EditorUi,
+    cell: (usize, usize),
+    seq_index: usize,
+) -> Option<usize> {
+    let picks = &editor.brush.multi_select;
+    if picks.is_empty() {
+        return None;
+    }
+    let pick = match editor.brush.multi_order {
+        crate::state::MultiOrder::Random => {
+            let mut h = (cell.0 as u64)
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add((cell.1 as u64).rotate_left(32))
+                .wrapping_add(editor.brush.multi_seed_salt);
+            h ^= h >> 33;
+            h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+            h ^= h >> 33;
+            picks[(h % picks.len() as u64) as usize]
+        }
+        crate::state::MultiOrder::Sequential => picks[seq_index % picks.len()],
+    };
+    match pick {
+        crate::state::MultiPick::Tile(t) => Some(t),
+        _ => None,
+    }
+}
+
 /// Применить активный инструмент: построить команду и выполнить.
 fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
     let editor = &mut ectx.editor;
+    // Мульти-выбор активен: элементы списка применяются к клеткам фигуры
+    // (BatchPlace — одна undo-запись).
+    if !editor.brush.multi_select.is_empty()
+        && matches!(
+            editor.tool,
+            editor_core::Tool::Brush | editor_core::Tool::BucketFill
+        )
+    {
+        let cells = if editor.tool == editor_core::Tool::BucketFill {
+            flood_fill(
+                editor.state.project(),
+                tile,
+                editor.brush.fill_max_range,
+                editor.brush.fill_max_volume,
+            )
+        } else {
+            let size = editor.state.project().size();
+            brush_cells(editor.brush.shape, editor.brush.size)
+                .into_iter()
+                .filter_map(|(dx, dy)| {
+                    let x = tile.0 as i64 + dx as i64;
+                    let y = tile.1 as i64 + dy as i64;
+                    (x >= 0 && y >= 0 && (x as usize) < size && (y as usize) < size)
+                        .then_some((x as usize, y as usize))
+                })
+                .collect::<Vec<_>>()
+        };
+        let edits: Vec<(usize, usize, usize)> = cells
+            .into_iter()
+            .enumerate()
+            .filter_map(|(k, cell)| {
+                multi_pick_tile(editor, cell, k).map(|t| (cell.0, cell.1, t))
+            })
+            .collect();
+        if edits.is_empty() {
+            editor.status = "Мульти-выбор не содержит тайлов".into();
+            return;
+        }
+        let count = edits.len();
+        match editor
+            .history
+            .execute(Box::new(BatchPlace::new(edits)), &mut editor.state)
+        {
+            CommandResult::Applied => {
+                editor.status = format!("Мульти-кисть: {} клеток", count);
+                editor.bake_dirty = true;
+            }
+            CommandResult::Noop => {}
+        }
+        return;
+    }
     let command: Option<Box<dyn editor_core::Command>> = match editor.tool {
-        editor_core::Tool::Brush => Some(Box::new(PaintTile::new(tile, editor.active_tile))),
+        editor_core::Tool::Brush => {
+            // Фигура кисти под курсором: клетки фигуры через BatchPlace.
+            if editor.brush.size <= 1 && editor.brush.shape == crate::state::BrushShape::Square {
+                Some(Box::new(PaintTile::new(tile, editor.active_tile)))
+            } else {
+                let size = editor.state.project().size();
+                let edits: Vec<(usize, usize, usize)> =
+                    brush_cells(editor.brush.shape, editor.brush.size)
+                        .into_iter()
+                        .filter_map(|(dx, dy)| {
+                            let x = tile.0 as i64 + dx as i64;
+                            let y = tile.1 as i64 + dy as i64;
+                            (x >= 0 && y >= 0 && (x as usize) < size && (y as usize) < size)
+                                .then_some((x as usize, y as usize, editor.active_tile))
+                        })
+                        .collect();
+                Some(Box::new(BatchPlace::new(edits)))
+            }
+        }
         editor_core::Tool::BucketFill => {
-            // Примитивно — как кисть (настоящий flood-fill — пункт 3).
-            Some(Box::new(PaintTile::new(tile, editor.active_tile)))
+            // Flood-fill по совпадению тайла (4-связность), дальность и
+            // объём — из настроек кисти (0 = ∞).
+            let cells = flood_fill(
+                editor.state.project(),
+                tile,
+                editor.brush.fill_max_range,
+                editor.brush.fill_max_volume,
+            );
+            let edits: Vec<(usize, usize, usize)> = cells
+                .into_iter()
+                .map(|(x, y)| (x, y, editor.active_tile))
+                .collect();
+            Some(Box::new(BatchPlace::new(edits)))
         }
         editor_core::Tool::Deco => editor.active_deco.and_then(|idx| {
             ectx.registry

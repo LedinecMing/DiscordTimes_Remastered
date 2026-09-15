@@ -239,6 +239,106 @@ pub struct EditorUi {
     /// курсора): маркер рисуется в текущей клетке (без мутации проекта),
     /// ПКМ up завершает командой MoveLantern (from → текущая).
     pub lantern_drag: Option<(usize, (usize, usize), (usize, usize))>,
+    /// Настройки кисти (форма/размер/заливка/мульти-выбор).
+    pub brush: BrushConfig,
+}
+
+/// Настройки кисти (п.3 ТЗ): форма и размер фигуры под курсором,
+/// flood-fill для заливки, мульти-выбор палитры.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrushConfig {
+    /// Форма кисти.
+    pub shape: BrushShape,
+    /// Радиус кисти в клетках (1..=16; 1 = одна клетка).
+    pub size: u32,
+    /// Заливка: максимальный объём за клик (клеток); 0 = без лимита.
+    /// Радиус достижимости: 0 = вся связная область (∞).
+    pub fill_max_volume: usize,
+    pub fill_max_range: usize,
+    /// Мульти-выбор палитры: несколько элементов, применяются случайно
+    /// или последовательно (клетки фигуры под курсором).
+    pub multi_select: Vec<MultiPick>,
+    /// Порядок применения мульти-выбора.
+    pub multi_order: MultiOrder,
+    /// Зерно рандома мульти-выбора: hash координат клетки (детерминизм
+    /// относительно позиции — одно и то же место рисует одно и то же).
+    pub multi_seed_salt: u64,
+}
+
+impl Default for BrushConfig {
+    fn default() -> Self {
+        Self {
+            shape: BrushShape::Square,
+            size: 1,
+            fill_max_volume: 0,
+            fill_max_range: 0,
+            multi_select: Vec::new(),
+            multi_order: MultiOrder::Random,
+            multi_seed_salt: 0,
+        }
+    }
+}
+
+/// Форма кисти: круг (диск), кольцо, квадрат, периметр квадрата.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrushShape {
+    /// Заполненный диск: dx² + dy² ≤ r².
+    Circle,
+    /// Кольцо: внешний радиус = size, толщина 1 клетка.
+    Ring,
+    /// Заполненный квадрат (2r-1)×(2r-1).
+    Square,
+    /// Периметр квадрата (рамка толщиной 1).
+    Perimeter,
+}
+
+impl BrushShape {
+    pub const ALL: [BrushShape; 4] = [
+        BrushShape::Circle,
+        BrushShape::Ring,
+        BrushShape::Square,
+        BrushShape::Perimeter,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            BrushShape::Circle => "Круг",
+            BrushShape::Ring => "Кольцо",
+            BrushShape::Square => "Квадрат",
+            BrushShape::Perimeter => "Периметр",
+        }
+    }
+}
+
+/// Порядок применения мульти-выбора палитры.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiOrder {
+    /// Случайно (зерно = hash координат клетки).
+    Random,
+    /// Последовательно (по кругу).
+    Sequential,
+}
+
+impl MultiOrder {
+    pub const ALL: [MultiOrder; 2] = [MultiOrder::Random, MultiOrder::Sequential];
+    pub fn label(self) -> &'static str {
+        match self {
+            MultiOrder::Random => "Случайно",
+            MultiOrder::Sequential => "Последовательно",
+        }
+    }
+}
+
+/// Выбранный элемент мульти-палитры: элемент инструмента.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiPick {
+    /// Тайл (индекс TILES).
+    Tile(usize),
+    /// Декорация (индекс registry.objects.inner).
+    Deco(usize),
+    /// Строение (индекс registry.objects.inner).
+    Building(usize),
+    /// Армия (id юнита-шаблона).
+    Army(usize),
 }
 
 /// Настройки рендера редактора: слои и режимы вкладки «Рендер».
@@ -397,6 +497,7 @@ impl Default for EditorUi {
             lantern_drag: None,
             selection: None,
             carrying: None,
+            brush: BrushConfig::default(),
         }
     }
 }
