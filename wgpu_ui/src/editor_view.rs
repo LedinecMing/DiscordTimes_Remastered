@@ -1831,8 +1831,10 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                     .find(|o| o.index == b.id)
                     .map(|o| (o.size.0.max(1) as usize, o.size.1.max(1) as usize))
                     .unwrap_or((1, 1));
+                // Хитбокс уходит ВЛЕВО-ВВЕРХ от якоря (pos — правый-нижний
+                // угол): [pos-w+1..pos] × [pos-h+1..pos], как в calc_hitboxes.
                 (
-                    b.pos,
+                    (b.pos.0 + 1 - w, b.pos.1 + 1 - h),
                     (w, h),
                     format!("Строение #{} ({},{})", b.id, b.pos.0, b.pos.1),
                 )
