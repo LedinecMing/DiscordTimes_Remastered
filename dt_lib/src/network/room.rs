@@ -1,8 +1,9 @@
 //! Комнатный ПВП-слой (Этапы 1-2 плана notes/PVP_TECH_PLAN.md):
 //! serde-DTO (RoomConfig/PvpRoomSummary), RoomManager (HashMap<RoomId, Room>),
-//! комнатные сообщения протокола (serde_json внутри транспортных вариантов
-//! ClientMessage::Room/ServerMessage::Room — реальный websocket-транспорт
-//! будет следующим спринтом, обёртки уже стабильны).
+//! Транспорт: ws-кадры Text = serde_json(ClientRoomMsg/ServerRoomMsg);
+//! Binary = alkahest(Incoming/Outcoming) боя. renet (net.rs) — легаси.
+//! Комнатные сообщения (§1.1): serde_json внутри транспортных вариантов
+//! ClientMessage::Room/ServerMessage::Room (ренет-обёртка, легаси).
 
 use crate::{
     battle::army::Army,
@@ -572,6 +573,8 @@ impl RoomManager {
 /// ClientMessage::Room(serde_json) до появления websocket-роутинга комнат.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientRoomMsg {
+    /// Первое сообщение после коннекта: логин сессии.
+    Hello { name: String },
     ListRooms { open_only: bool },
     CreateRoom(RoomConfig),
     JoinRoom { room: RoomId, as_spectator: bool },
@@ -579,11 +582,15 @@ pub enum ClientRoomMsg {
     /// Только хост.
     StartBattle,
     Kick { member: String },
+    /// Чат комнаты (§1.7): «{from}» проставляет сервер.
+    Chat { text: String },
 }
 
 /// Комнатная половина серверного протокола (push в лобби + ответы).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerRoomMsg {
+    /// Ответ на Hello: принятое имя (уникализировано сервером).
+    Welcome { name: String },
     RoomList(Vec<PvpRoomSummary>),
     RoomCreated(RoomId),
     JoinedRoom(RoomView),
@@ -592,10 +599,51 @@ pub enum ServerRoomMsg {
     LeftRoom(Option<PvpRoomSummary>),
     RoomUpdate(PvpRoomSummary),
     RoomClosed(RoomId),
-    /// Старт боя: ваша логическая сторона (0 = army1, 1 = army2).
-    Started { your_army: usize },
+    /// Старт боя: ваша логическая сторона (0 = army1, 1 = army2) + сид
+    /// монетки инициативы (§1.3) — у обоих игроков одинаковый.
+    Started { your_army: usize, ini_seed: u64 },
     Kicked(String),
+    /// История чата при входе в комнату (§1.7, до 200 строк).
+    ChatHistory(Vec<ChatMsg>),
+    /// Сообщение чата комнаты (игроки + зрители).
+    ChatMsg(ChatMsg),
     Error { message: String },
+}
+
+/// Строка чата комнаты (§1.7). at — unix-секунды; system — серым в UI.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatMsg {
+    pub from: String,
+    pub text: String,
+    pub at: u64,
+    pub system: bool,
+}
+
+impl ChatMsg {
+    pub fn user(from: &str, text: &str) -> Self {
+        Self {
+            from: from.to_owned(),
+            text: text.to_owned(),
+            at: now_unix(),
+            system: false,
+        }
+    }
+
+    pub fn system(text: &str) -> Self {
+        Self {
+            from: String::new(),
+            text: text.to_owned(),
+            at: now_unix(),
+            system: true,
+        }
+    }
+}
+
+pub fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 impl crate::network::server::ClientMessage {
@@ -823,10 +871,10 @@ mod tests {
         });
         assert!(matches!(client, ClientMessage::Room(_)));
         // Сервер -> клиент: your_army при старте.
-        let server = ServerMessage::room(&ServerRoomMsg::Started { your_army: 1 });
+        let server = ServerMessage::room(&ServerRoomMsg::Started { your_army: 1, ini_seed: 7 });
         assert_eq!(
             server.as_room(),
-            Some(ServerRoomMsg::Started { your_army: 1 })
+            Some(ServerRoomMsg::Started { your_army: 1, ini_seed: 7 })
         );
         assert_eq!(ServerMessage::ChangeMenu(0).as_room(), None);
         // Список комнат возит DTO целиком.
