@@ -1248,22 +1248,23 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         let markers = ectx.editor.marker_handles.clone();
         markers_layer(ui, ectx, world_to_screen, &markers);
     }
-    // Сетка (вкладка «Рендер»).
-    let grid_step = 8.0 / zoom;
-    if zoom > 1.0 && ectx.editor.render_settings.grid {
+    // Сетка (поповер «Рендер»): линии строго ПО ГРАНИЦАМ ТАЙЛОВ в
+    // world-координатах (кратны SIZE), оба конца через world_to_screen —
+    // привязка к клеткам при любом зуме/пане.
+    if ectx.editor.render_settings.grid {
         let mut x = 0.;
-        while x <= world_w {
+        while x <= world_w + f32::EPSILON {
             let a = world_to_screen([x, 0.]);
             let b = world_to_screen([x, world_h]);
             painter.line_segment([a, b], Stroke::new(1., Color32::from_black_alpha(40)));
-            x += grid_step * 4.;
+            x += SIZE.0;
         }
         let mut y = 0.;
-        while y <= world_h {
+        while y <= world_h + f32::EPSILON {
             let a = world_to_screen([0., y]);
             let b = world_to_screen([world_w, y]);
             painter.line_segment([a, b], Stroke::new(1., Color32::from_black_alpha(40)));
-            y += grid_step * 4.;
+            y += SIZE.1;
         }
     }
     // Ховер тайла + превью фигуры кисти (в рисовании, размер > 1).
