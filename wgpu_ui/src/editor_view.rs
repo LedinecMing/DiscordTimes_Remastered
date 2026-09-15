@@ -10,7 +10,7 @@
 
 use crate::camera::{default_camera, Camera};
 use crate::gfx::{colors, Target};
-use crate::state::{EditorUi, Menu, SIZE};
+use crate::state::{EditorUi, Menu, MultiPick, SIZE};
 use crate::Ctx;
 use editor_core::command::{BatchPlace, PaintTile, PlaceArmy, PlaceBuilding, PlaceDeco};
 use editor_core::CommandResult;
@@ -748,21 +748,29 @@ fn search_field(ui: &mut Ui, ectx: &mut EditorCtx) {
     ui.horizontal(|ui| {
         ui.label("Поиск:");
         ui.text_edit_singleline(&mut ectx.editor.palette_search);
-        if ui.button("✕").clicked() {
+        if ui.button("×").clicked() {
             ectx.editor.palette_search.clear();
         }
     });
 }
 
-/// Маленький чекбокс «мн.» под ячейкой палитры: Some(true) — добавлен,
-/// Some(false) — убран, None — без изменений.
-fn toggle_multiselect_cell(ui: &mut Ui, on: bool) -> Option<bool> {
-    let mut v = on;
-    let resp = ui.checkbox(&mut v, "мн.");
-    if resp.changed() {
-        Some(v)
+/// Режим мультивыбора палитры: активен, пока список мульти-выбора
+/// непуст (клик по ячейке тогда тогглит, а не выбирает одиночно).
+fn palette_multi_mode(editor: &mut EditorUi) -> bool {
+    !editor.brush.multi_select.is_empty()
+}
+
+/// Тоггл элемента в мульти-выборе: есть — убрать, нет — добавить.
+fn palette_toggle_multi(editor: &mut EditorUi, pick: crate::state::MultiPick) {
+    if let Some(pos) = editor
+        .brush
+        .multi_select
+        .iter()
+        .position(|p| *p == pick)
+    {
+        editor.brush.multi_select.remove(pos);
     } else {
-        None
+        editor.brush.multi_select.push(pick);
     }
 }
 
@@ -835,7 +843,8 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
                     if let Some(tex) = ectx.editor.palette_tex.get(sprite) {
                         draw_icon_fit(ui.painter(), tex, icon_rect);
                     }
-                    // Подпись поверх нижней части ячейки.
+                    // Подпись: фиксированная высота 30, усечение — ряды
+                    // ячеек ровные при любых именах (лесенка исключена).
                     ui.put(
                         egui::Rect::from_min_size(
                             cell.rect.left_bottom() - egui::vec2(0., 30.),
@@ -849,12 +858,19 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
                                     Color32::LIGHT_GRAY
                                 })
                                 .small(),
-                        ),
+                        )
+                        .truncate(),
                     );
                     let cell = cell.on_hover_text(format!("{} ({})", names[tile], tile));
+                    // Единый клик-таргет: мультивыбор включён — клик
+                    // тогглит элемент в списке, иначе — одиночный выбор.
                     if cell.clicked() {
-                        ectx.editor.active_tile = tile;
-                        ectx.editor.state.set_active_tile(tile);
+                        if palette_multi_mode(&mut ectx.editor) {
+                            palette_toggle_multi(&mut ectx.editor, MultiPick::Tile(tile));
+                        } else {
+                            ectx.editor.active_tile = tile;
+                            ectx.editor.state.set_active_tile(tile);
+                        }
                     }
                     if selected {
                         ui.painter().rect_stroke(
@@ -992,12 +1008,10 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                     };
                     let cell_size = egui::vec2(72., 80.);
                     let (resp, icon_rect) = palette_cell(ui, cell_size);
-                    let mut icon_rect = icon_rect;
-                    icon_rect.min.y += 10.;
                     if let Some(tex) = ectx.editor.palette_tex.get(&obj.path) {
                         draw_icon_fit(ui.painter(), tex, icon_rect);
                     }
-                    // Подпись поверх нижней части ячейки.
+                    // Подпись: фикс. высота 30, усечение (лесенка исключена).
                     ui.put(
                         egui::Rect::from_min_size(
                             resp.rect.left_bottom() - egui::vec2(0., 30.),
@@ -1011,33 +1025,24 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                                 } else {
                                     egui::Color32::LIGHT_GRAY
                                 }),
-                        ),
+                        )
+                        .truncate(),
                     );
                     let resp = resp.on_hover_text(format!(
                         "{} ({}) {:?}",
                         obj.name, obj.index, obj.size
                     ));
-                    let pick = if buildings {
-                        crate::state::MultiPick::Building(idx)
-                    } else {
-                        crate::state::MultiPick::Deco(idx)
-                    };
-                    let in_multi = ectx.editor.brush.multi_select.contains(&pick);
-                    if let Some(t) = toggle_multiselect_cell(ui, in_multi) {
-                        if t {
-                            ectx.editor.brush.multi_select.push(pick);
-                        } else if let Some(pos) = ectx
-                            .editor
-                            .brush
-                            .multi_select
-                            .iter()
-                            .position(|p| *p == pick)
-                        {
-                            ectx.editor.brush.multi_select.remove(pos);
-                        }
-                    }
+                    // Единый клик-таргет: мультивыбор включён — тоггл,
+                    // иначе одиночный выбор инструмента.
                     if resp.clicked() {
-                        if buildings {
+                        let pick = if buildings {
+                            crate::state::MultiPick::Building(idx)
+                        } else {
+                            crate::state::MultiPick::Deco(idx)
+                        };
+                        if palette_multi_mode(&mut ectx.editor) {
+                            palette_toggle_multi(&mut ectx.editor, pick);
+                        } else if buildings {
                             ectx.editor.active_building = Some(idx);
                         } else {
                             ectx.editor.active_deco = Some(idx);
@@ -1082,21 +1087,11 @@ fn armies_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
             }
             let label = format!("{} — {} ({})", nature.label(), unit.name, unit_id);
             if ui.selectable_label(selected, label).clicked() {
-                ectx.editor.active_army_template = Some(unit_id);
-            }
-            let pick = crate::state::MultiPick::Army(unit_id);
-            let in_multi = ectx.editor.brush.multi_select.contains(&pick);
-            if let Some(t) = toggle_multiselect_cell(ui, in_multi) {
-                if t {
-                    ectx.editor.brush.multi_select.push(pick);
-                } else if let Some(pos) = ectx
-                    .editor
-                    .brush
-                    .multi_select
-                    .iter()
-                    .position(|p| *p == pick)
-                {
-                    ectx.editor.brush.multi_select.remove(pos);
+                let pick = crate::state::MultiPick::Army(unit_id);
+                if palette_multi_mode(&mut ectx.editor) {
+                    palette_toggle_multi(&mut ectx.editor, pick);
+                } else {
+                    ectx.editor.active_army_template = Some(unit_id);
                 }
             }
         });
