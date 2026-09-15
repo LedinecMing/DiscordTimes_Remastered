@@ -1674,6 +1674,9 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             if interact {
                 if let Some(sel) = sel {
                     ectx.editor.selection = Some(sel);
+                    // П.6: инфо-тайл создаётся при ВЫБОРЕ объекта
+                    // (раньше — только для событий через PENDING).
+                    open_info_pane(ectx, sel);
                     object_clicked = true;
                 } else {
                     ectx.editor.selection = None;
@@ -1685,7 +1688,13 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     // ПКМ down: интеракт — захват объекта (драг ИЛИ клик-клик carrying).
     if response.drag_started_by(egui::PointerButton::Secondary) && interact {
         if let Some(pos) = response.interact_pointer_pos() {
-            let sel = cell_at(pos).and_then(|(cx, cy)| object_at(ectx, cx, cy));
+            let cell = cell_at(pos);
+            let sel = cell.and_then(|(cx, cy)| object_at(ectx, cx, cy));
+            if std::env::var("DT_EGUI_DEBUG").is_ok() {
+                eprintln!(
+                    "[carry] PKM down: pos={pos:?} cell={cell:?} hit={sel:?}"
+                );
+            }
             if let Some(sel) = sel {
                 let from = match sel {
                     crate::state::Selection::Lantern(i) => {
@@ -1704,6 +1713,9 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                     kind: sel,
                     from,
                 });
+                if std::env::var("DT_EGUI_DEBUG").is_ok() {
+                    eprintln!("[carry] carrying=Some({sel:?}) from={from:?}");
+                }
             }
         }
     }
@@ -1727,26 +1739,47 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                 }
             };
             editor.carrying = None;
+            let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
+            if debug {
+                eprintln!(
+                    "[carry] drop cell={to:?} cmd={:?} from={from:?}",
+                    command
+                );
+            }
             match editor.history.execute(command, &mut editor.state) {
                 CommandResult::Applied => {
+                    if debug {
+                        eprintln!("[carry] Applied; bake_dirty=true");
+                    }
                     editor.status = format!("Перенос: {:?} → {:?}", from, to);
                     editor.bake_dirty = true;
                 }
-                CommandResult::Noop => {}
-            }
-        };
-        // Клик-клик: ПКМ нажат в новой клетке (не по тому же объекту).
-        if response.drag_started_by(egui::PointerButton::Secondary) {
-            if let Some(pos) = response.interact_pointer_pos() {
-                if let Some(to) = cell_at(pos) {
-                    if to != carried.from {
-                        fix(ectx, to);
+                CommandResult::Noop => {
+                    if debug {
+                        eprintln!("[carry] Noop (позиция не изменилась/протух индекс)");
                     }
                 }
             }
-        }
-        // Обычный драг: отпустили ПКМ в новой клетке.
-        if response.drag_stopped_by(egui::PointerButton::Secondary) {
+        };
+        // Клик-клик: ПКМ нажат в новой клетке (не по тому же объекту).
+        // ДЕЛАЕМ и на drag_started (клик-клик), и на drag_stopped (драг):
+        // PKM down на объекте стартует carrying, PKM down в новой клетке
+        // фиксирует; если это был драг — drag_stopped фиксирует.
+        let click_fixed = {
+            let mut fixed = false;
+            if response.drag_started_by(egui::PointerButton::Secondary) {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    if let Some(to) = cell_at(pos) {
+                        if to != carried.from {
+                            fix(ectx, to);
+                            fixed = true;
+                        }
+                    }
+                }
+            }
+            fixed
+        };
+        if !click_fixed && response.drag_stopped_by(egui::PointerButton::Secondary) {
             if let Some(pos) = response.interact_pointer_pos() {
                 if let Some(to) = cell_at(pos) {
                     fix(ectx, to);
@@ -3118,6 +3151,66 @@ thread_local! {
     static PENDING_EVENT_OPEN: std::cell::RefCell<Vec<usize>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
+/// Открыть/поднять инфо-тайл объекта в screen_tree (п.6): 8а —
+/// непинned заменяют друг друга; дубль — просто активируется.
+fn open_info_pane(ectx: &mut EditorCtx, sel: crate::state::Selection) {
+    if !selection_exists(ectx, sel) {
+        return;
+    }
+    // Pin «по умолчанию» — объект закрепляется при открытии.
+    let will_pin = ectx.editor.pin_by_default && !ectx.editor.pinned.contains(&sel);
+    let tree = ectx.editor.screen_tree.get_or_insert_with(|| {
+        egui_tiles::Tree::new_tabs("editor_screen_tree", vec![])
+    });
+    let already = tree
+        .tiles
+        .iter()
+        .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel));
+    if !already {
+        // Непинned инфо-тайлы замещают друг друга.
+        if !ectx.editor.pinned.contains(&sel) {
+            let stale: Vec<egui_tiles::TileId> = tree
+                .tiles
+                .iter()
+                .filter_map(|(id, tile)| match tile {
+                    egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p))
+                        if !ectx.editor.pinned.contains(p) =>
+                    {
+                        Some(*id)
+                    }
+                    _ => None,
+                })
+                .collect();
+            for id in stale {
+                tree.remove_recursively(id);
+            }
+        }
+        let pane_id = tree
+            .tiles
+            .insert_pane(crate::state::EditorPane::Info(sel));
+        if will_pin {
+            ectx.editor.pinned.push(sel);
+        }
+        if let Some(root) = tree.root() {
+            tree.move_tile_to_container(pane_id, root, usize::MAX, true);
+        }
+    }
+    // Поднять вкладку (даже если панель уже была).
+    let tree = ectx.editor.screen_tree.as_mut().expect("just inserted");
+    let pane_id = tree
+        .tiles
+        .iter()
+        .find(|(_, tile)| {
+            matches!(
+                tile,
+                egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel
+            )
+        })
+        .map(|(id, _)| *id);
+    if let Some(pane_id) = pane_id {
+        tree.make_active(|id, _| id == pane_id);
+    }
+}
 
 /// Применить отложенные открытия событий (вызывать в кадре egui,
 /// когда EditorUi доступен).
@@ -3125,45 +3218,6 @@ fn flush_pending_event_opens(ectx: &mut EditorCtx) {
     let pending = PENDING_EVENT_OPEN.with(|cell| cell.borrow_mut().drain(..).collect::<Vec<_>>());
     for index in pending {
         let sel = crate::state::Selection::Event(index);
-        if !selection_exists(ectx, sel) {
-            continue;
-        }
-        // 8а: непинned инфо-тайлы ЗАМЕНЯЮТ друг друга — при открытии
-        // нового (без пина) старые непинned Info-панели закрываются.
-        let will_pin =
-            ectx.editor.pin_by_default || ectx.editor.selection == Some(sel);
-        let tree = ectx.editor.screen_tree.get_or_insert_with(|| {
-            egui_tiles::Tree::new_tabs("editor_screen_tree", vec![])
-        });
-        let already = tree
-            .tiles
-            .iter()
-            .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel));
-        if !already {
-            if !ectx.editor.pinned.contains(&sel) {
-                let mut stale: Vec<egui_tiles::TileId> = Vec::new();
-                for (id, tile) in tree.tiles.iter() {
-                    if let egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) = tile {
-                        if !ectx.editor.pinned.contains(p) {
-                            stale.push(*id);
-                        }
-                    }
-                }
-                for id in stale {
-                    tree.remove_recursively(id);
-                }
-            }
-            let pane_id = tree
-                .tiles
-                .insert_pane(crate::state::EditorPane::Info(sel));
-            if will_pin {
-                ectx.editor.pinned.push(sel);
-            }
-            if let Some(root) = tree.root() {
-                tree.move_tile_to_container(pane_id, root, usize::MAX, true);
-            } else {
-                tree.tiles.set_visible(pane_id, true);
-            }
-        }
+        open_info_pane(ectx, sel);
     }
 }
