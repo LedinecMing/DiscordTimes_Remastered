@@ -13,7 +13,10 @@
 
 mod battle_room;
 
-use crate::battle_room::{incoming_from_bytes, Incoming, RoomBattle};
+// Реэкспорт протокола боя: dt_client использует dt_server::Incoming/Outcoming.
+pub use battle_room::{Incoming, Outcoming};
+
+use crate::battle_room::{incoming_from_bytes, RoomBattle};
 use axum::{
     extract::{
         ws::{Message as AWsMessage, WebSocket, WebSocketUpgrade},
