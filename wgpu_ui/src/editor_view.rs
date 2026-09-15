@@ -1598,6 +1598,22 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         }
     }
 
+    // 4в: оригинал переносимого объекта СКРЫВАЕТСЯ — запечка в RT общая,
+    // поэтому затираем его rect полупрозрачным слоем (полу-призрак на
+    // исходном месте, полный ghost следует за курсором).
+    if let Some(carried) = ectx.editor.carrying {
+        let (from_x, from_y) = carried.from;
+        let (fw, fh) = carry_footprint(ectx);
+        let hide_rect = egui::Rect::from_min_max(
+            world_to_screen([from_x as f32 * SIZE.0, from_y as f32 * SIZE.1]),
+            world_to_screen([
+                (from_x + fw) as f32 * SIZE.0,
+                (from_y + fh) as f32 * SIZE.1,
+            ]),
+        );
+        painter.rect_filled(hide_rect, 0., Color32::from_black_alpha(160));
+    }
+
     // Подсветка выделения интеракта: рамка по ПОЛНОМУ хитбоксу
     // (армия 1×2, строение — footprint, точка — 1 клетка) + маркер
     // опорной точки (x, y) с подписью координат.
