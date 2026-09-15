@@ -69,14 +69,19 @@ pub enum BlendMode {
     EdgesStrong,
     Rounded,
     RoundedStrong,
+    /// Точная копия оригинального редактора (notes/тайлы): наплыв
+    /// половиной клетки с атласа соседа, линейный градиент альфы
+    /// 68→0 от шва к середине клетки.
+    Original,
 }
 impl BlendMode {
-    pub const ALL: [BlendMode; 5] = [
+    pub const ALL: [BlendMode; 6] = [
         BlendMode::Off,
         BlendMode::Edges,
         BlendMode::EdgesStrong,
         BlendMode::Rounded,
         BlendMode::RoundedStrong,
+        BlendMode::Original,
     ];
     pub fn next(self) -> BlendMode {
         let i = BlendMode::ALL.iter().position(|m| *m == self).unwrap();
@@ -96,6 +101,7 @@ impl BlendMode {
             BlendMode::EdgesStrong => "Strong",
             BlendMode::Rounded => "Rounded",
             BlendMode::RoundedStrong => "Rounded Strong",
+            BlendMode::Original => "Оригинал",
         }
     }
 }
