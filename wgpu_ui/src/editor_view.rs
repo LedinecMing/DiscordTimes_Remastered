@@ -1450,6 +1450,63 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         ectx.editor.status = "Перенос отменён".into();
     }
 
+    // Тултип объекта (п.6 ТЗ-2): ховер ≥ 3 с в интеракте → краткая
+    // инфа; до этого — прогресс-бар у курсора. Копим время сами
+    // (egui-тултипы показываются мгновенно).
+    if interact && response.hovered() {
+        let now = ui.ctx().input(|i| i.time);
+        let hover_cell_now = response
+            .hover_pos()
+            .and_then(cell_at);
+        let same = hover_cell_now == ectx.editor.hover_cell;
+        if !same {
+            ectx.editor.hover_cell = hover_cell_now;
+            ectx.editor.hover_since = Some(now);
+            ectx.editor.hover_sel = hover_cell_now.and_then(|(cx, cy)| object_at(ectx, cx, cy));
+        }
+        if let (Some(since), Some(sel)) = (ectx.editor.hover_since, ectx.editor.hover_sel) {
+            let elapsed = now - since;
+            let frac = ((elapsed / crate::state::TOOLTIP_DELAY) as f32).clamp(0., 1.);
+            if let Some(pointer) = ui.ctx().input(|i| i.pointer.hover_pos()) {
+                if elapsed < crate::state::TOOLTIP_DELAY {
+                    // Индикатор: мини-прогресс-бар рядом с курсором.
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(60., 8.),
+                        Sense::hover(),
+                    );
+                    ui.painter().rect_filled(
+                        rect,
+                        2.,
+                        Color32::from_black_alpha(120),
+                    );
+                    if frac > 0.01 {
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_size(
+                                rect.min,
+                                egui::vec2(rect.width() * frac, rect.height()),
+                            ),
+                            2.,
+                            Color32::LIGHT_GREEN,
+                        );
+                    }
+                } else {
+                    egui::Tooltip::always_open(
+                        ui.ctx().clone(),
+                        ui.layer_id(),
+                        ui.id(),
+                        egui::PopupAnchor::Pointer,
+                    )
+                    .show(|ui| tooltip_info(ui, ectx, sel));
+                }
+            }
+        }
+    } else {
+        ectx.editor.hover_cell = None;
+        ectx.editor.hover_since = None;
+        ectx.editor.hover_sel = None;
+    }
+
+
     // ЛКМ: интеракт — выбор объекта (рамка + инфоокно). Инструмент не
     // применяется по клику на объект.
     let mut object_clicked = false;
@@ -2480,6 +2537,34 @@ fn size_dialog_window(ui: &mut Ui, ectx: &mut EditorCtx) {
         ectx.editor.size_dialog = None;
     }
 }
+/// Краткая инфа объекта для тултипа (имя/тип/координаты/ключевые поля).
+fn tooltip_info(ui: &mut Ui, ectx: &EditorCtx, sel: crate::state::Selection) {
+    let project = ectx.editor.state.project();
+    match sel {
+        crate::state::Selection::Lantern(i) => {
+            if let Some(l) = project.lanterns.get(i) {
+                ui.label(format!("Точка #{}", l.id));
+                ui.label(format!("клетка ({}, {})", l.x, l.y));
+                ui.label(format!("событий: {}, радиус: {}", l.events.len(), l.light_radius));
+            }
+        }
+        crate::state::Selection::Army(i) => {
+            if let Some(a) = project.map.armys.get(i) {
+                ui.label(format!("Армия «{}»", a.stats.army_name));
+                ui.label(format!("клетка {:?}", a.pos));
+                ui.label(format!("отрядов: {}, активна: {}", a.troops.len(), a.active));
+            }
+        }
+        crate::state::Selection::Building(i) => {
+            if let Some(b) = project.map.buildings.get(i) {
+                ui.label(format!("Строение #{} «{}»", b.id, b.name));
+                ui.label(format!("клетка {:?}", b.pos));
+            }
+        }
+        crate::state::Selection::Event(_) => {}
+    }
+}
+
 
 
 

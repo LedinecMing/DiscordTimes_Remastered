@@ -256,7 +256,15 @@ pub struct EditorUi {
     pub pinned: Vec<Selection>,
     /// Фильтр цели интеракта (п.7): что object_at считает целью.
     pub interact_filter: InteractFilter,
+    /// Тултип объекта (п.6 ТЗ-2): клетка, с которой начат ховер, и
+    /// время начала (ctx.time). Показ после 3 с.
+    pub hover_cell: Option<(usize, usize)>,
+    pub hover_since: Option<f64>,
+    pub hover_sel: Option<Selection>,
 }
+
+/// Задержка показа тултипа на объекте карты.
+pub const TOOLTIP_DELAY: f64 = 3.0;
 
 /// Что выбирает ЛКМ/ПКМ в интеракте.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -578,6 +586,9 @@ impl Default for EditorUi {
             pin_by_default: false,
             pinned: Vec::new(),
             interact_filter: InteractFilter::default(),
+            hover_cell: None,
+            hover_since: None,
+            hover_sel: None,
         }
     }
 }
