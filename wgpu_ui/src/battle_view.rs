@@ -257,6 +257,31 @@ pub fn unit_card_battle(
         }
     }
 
+    // §1.8 (3): ховер — «ВАШ»/«ВРАГ» над карточкой (PVP с известным your_army).
+    if let Some(your_army) = battle.your_army {
+        let hover_rect = Rect::new(pos.0, pos.1, CARD_SIZE, CARD_SIZE);
+        let s = ctx.input.screen_size();
+        let m = [
+            ctx.input.mouse[0] * crate::ui::UI_W / s[0],
+            ctx.input.mouse[1] * crate::ui::UI_H / s[1],
+        ];
+        if hover_rect.contains(m) {
+            let my_real = if your_army == 0 { battle.army1 } else { battle.army2 };
+            let label = if army == my_real { "ВАШ" } else { "ВРАГ" };
+            let font_id = ctx.assets.get_font(crate::assets::BENGUIAT);
+            let size = ctx.text.measure(ctx.gfx, label, font_id, 26, 1.);
+            ctx.gfx.draw_rect(
+                pos.0 + (CARD_SIZE - size.width) / 2. - 6.,
+                pos.1 - 34.,
+                size.width + 12.,
+                32.,
+                crate::gfx::rgba(0, 0, 0, 180),
+            );
+            let color = if army == my_real { colors::GREEN } else { colors::RED };
+            ctx.text
+                .draw_text(ctx.gfx, label, pos.0 + (CARD_SIZE - size.width) / 2., pos.1 - 6., font_id, 26, 1., color);
+        }
+    }
     // ПВП your_army (§1.8): цветная рамка-подложка карточки — своя армия
     // зелёная, враг красная; наблюдатель/сингл (None) — без рамки.
     if let Some(your_army) = battle.your_army {
@@ -318,7 +343,28 @@ pub fn unit_card_battle(
 
 /// Порт draw_battle. Возвращает winner.
 pub fn draw_battle(ctx: &mut Ctx, is_battle_active: bool) -> Option<usize> {
-    let is_my_move = if let crate::state::GameVariant::Online(online) = &ctx.game.variant {
+    // Онлайн-ПВП (pvp.net): моя сторона — your_army из Started.
+    let pvp_army = if ctx
+        .pvp
+        .net
+        .as_ref()
+        .is_some_and(crate::pvp_online::PvpNet::connected)
+    {
+        ctx.pvp.your_army
+    } else {
+        None
+    };
+    let is_my_move = if let Some(my) = pvp_army {
+        ctx.game
+            .executor
+            .battle
+            .as_ref()
+            .is_some_and(|battle| {
+                battle
+                    .active_unit
+                    .is_some_and(|active| active.army == my)
+            })
+    } else if let crate::state::GameVariant::Online(online) = &ctx.game.variant {
         ctx.game
             .executor
             .battle
@@ -510,6 +556,15 @@ pub fn draw_battle(ctx: &mut Ctx, is_battle_active: bool) -> Option<usize> {
                 }
             }
         }
+    }
+    // §1.8 (2): плашка «ВЫ — армия N» для PVP.
+    if let Some(my) = pvp_army {
+        let font_id = ctx.assets.get_font(crate::assets::BENGUIAT);
+        let text = format!("ВЫ — армия {}", my + 1);
+        let size = ctx.text.measure(ctx.gfx, &text, font_id, 30, 1.);
+        let x = (1920. - size.width) / 2.;
+        ctx.gfx.draw_rect(x - 14., 6., size.width + 28., 40., crate::gfx::rgba(0, 0, 0, 140));
+        ctx.text.draw_text(ctx.gfx, &text, x, 40., font_id, 30, 1., WHITE);
     }
     // Линейка ходов юнитов (§1.9): портреты + бейдж оставшихся ходов, активный
     // подсвечен рамкой и стрелкой; рамка цвета армии (своя — зелёная при
