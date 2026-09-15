@@ -1443,7 +1443,7 @@ fn markers_layer(
     let marker_rect = |i: usize, j: usize, tex: &egui::TextureHandle| -> egui::Rect {
         let tex_size = tex.size_vec2();
         let (tw, th) = (tex_size.x, tex_size.y);
-        let h = SIZE.1 * 2.;
+        let h = SIZE.1;
         let w = if th > 0. { tw * (h / th) } else { SIZE.0 };
         let min_world = [
             i as f32 * SIZE.0 + SIZE.0 * 0.5 - w * 0.5,
