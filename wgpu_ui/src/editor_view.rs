@@ -274,11 +274,23 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         rt,
     };
     let egui_layer = &mut **egui;
+    /// Телеметрия [infoflow]: сколько раз egui-замыкание выполняется
+    /// за физический кадр (мульти-пасс egui → повторный вход).
+    static PASS_COUNTER: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
     let mut state = ScreenState {
         keep_open: true,
         actions: Actions { click_tile: None },
     };
     egui_layer.run(input, 1.0, |ui| {
+        PASS_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if std::env::var("DT_EGUI_DEBUG").is_ok() {
+            eprintln!(
+                "[infoflow] pass#{}: screen_tree present = {}",
+                PASS_COUNTER.load(std::sync::atomic::Ordering::Relaxed),
+                rest.editor.screen_tree.is_some()
+            );
+        }
         ui.ctx().all_styles_mut(|style| {
             style.visuals.panel_fill = Color32::from_rgb(24, 24, 28);
         });
@@ -1676,9 +1688,12 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             if interact {
                 if let Some(sel) = sel {
                     ectx.editor.selection = Some(sel);
-                    // П.6: инфо-тайл создаётся при ВЫБОРЕ объекта
-                    // (раньше — только для событий через PENDING).
-                    open_info_pane(ectx, sel);
+                    // П.6: инфо-тайл создаётся при ВЫБОРЕ объекта.
+                    // САМА вставка — в начале следующего кадра
+                    // (flush_pending_event_opens): во время tree.ui()
+                    // экранное дерево вынуто из EditorUi, и вставка
+                    // сейчас была бы перезаписана снапшотом дерева.
+                    open_info_pane(sel);
                     object_clicked = true;
                 } else {
                     ectx.editor.selection = None;
@@ -3283,89 +3298,21 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Открыть/поднять инфо-тайл объекта в screen_tree (п.6): 8а —
-/// непинned заменяют друг друга; дубль — просто активируется.
-fn open_info_pane(ectx: &mut EditorCtx, sel: crate::state::Selection) {
-    let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
-    if debug {
-        eprintln!("[infoflow] (2) open_info_pane entered: sel={sel:?}");
-    }
-    if !selection_exists(ectx, sel) {
-        if debug {
-            eprintln!("[infoflow] (2a) SEL DEAD — выход (объект удалён?)");
-        }
-        return;
-    }
-    // Pin «по умолчанию» — объект закрепляется при открытии.
-    let will_pin = ectx.editor.pin_by_default && !ectx.editor.pinned.contains(&sel);
-    let tree = ectx.editor.screen_tree.get_or_insert_with(|| {
-        if debug {
-            eprintln!("[infoflow] (2b) screen_tree was None — СОЗДАЁТСЯ здесь (дерево могло быть потеряно!)");
-        }
-        egui_tiles::Tree::new_tabs("editor_screen_tree", vec![])
+/// ЗАЯВКА на открытие инфо-тайла. НЕ вставляет тайл сразу: во время
+/// tree.ui() экранное дерево ВЫНУТО из EditorUi (take) и живёт локально
+/// в CentralPanel; запись в ectx.editor.screen_tree здесь же была бы
+/// ПЕРЕЗАПИСАНА в конце прохода (`= Some(tree)`), т.е. инфо-тайл терялся.
+/// Заявки копятся в PENDING_INFO_OPEN и применяются в НАЧАЛЕ следующего
+/// кадра (flush_pending_event_opens), когда дерево на месте.
+fn open_info_pane(sel: crate::state::Selection) {
+    PENDING_INFO_OPEN.with(|cell| {
+        cell.borrow_mut().push(sel);
     });
-    let already = tree
-        .tiles
-        .iter()
-        .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel));
-    if debug {
-        eprintln!("[infoflow] (3) tree: root={:?} already_in_tree={already} pinned={}", tree.root().is_some(), ectx.editor.pinned.contains(&sel));
-    }
-    if !already {
-        // Непинned инфо-тайлы замещают друг друга.
-        if !ectx.editor.pinned.contains(&sel) {
-            let stale: Vec<egui_tiles::TileId> = tree
-                .tiles
-                .iter()
-                .filter_map(|(id, tile)| match tile {
-                    egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p))
-                        if !ectx.editor.pinned.contains(p) =>
-                    {
-                        Some(*id)
-                    }
-                    _ => None,
-                })
-                .collect();
-            for id in stale {
-                tree.remove_recursively(id);
-            }
-        }
-        let pane_id = tree
-            .tiles
-            .insert_pane(crate::state::EditorPane::Info(sel));
-        if will_pin {
-            ectx.editor.pinned.push(sel);
-        }
-        if let Some(root) = tree.root() {
-            tree.move_tile_to_container(pane_id, root, usize::MAX, true);
-            if debug {
-                eprintln!("[infoflow] (4) inserted pane {pane_id:?} → root; root={root:?}");
-            }
-        } else if debug {
-            eprintln!("[infoflow] (4!) NO ROOT — тайл висит без контейнера, GC его СОБЁТ!");
-        }
-    }
-    // Поднять вкладку (даже если панель уже была).
-    let tree = ectx.editor.screen_tree.as_mut().expect("just inserted");
-    let pane_id = tree
-        .tiles
-        .iter()
-        .find(|(_, tile)| {
-            matches!(
-                tile,
-                egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel
-            )
-        })
-        .map(|(id, _)| *id);
-    if let Some(pane_id) = pane_id {
-        let activated = tree.make_active(|id, _| id == pane_id);
-        if debug {
-            eprintln!("[infoflow] (5) make_active({pane_id:?}) → {activated}");
-        }
-    }
-    if debug {
-        dump_tree("[infoflow] (6)", tree);
-    }
+}
+
+thread_local! {
+    static PENDING_INFO_OPEN: std::cell::RefCell<Vec<crate::state::Selection>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Дамп структуры дерева (для [infoflow]-телеметрии).
@@ -3408,12 +3355,96 @@ fn dump_tree(prefix: &str, tree: &egui_tiles::Tree<crate::state::EditorPane>) {
     eprintln!("{prefix} tree dump:\n{out}");
 }
 
-/// Применить отложенные открытия событий (вызывать в кадре egui,
-/// когда EditorUi доступен).
+/// Применить отложенные открытия (интеракт-клики + goto-definition).
+/// Вызывается в НАЧАЛЕ кадра, когда screen_tree ещё НЕ вынут (take
+/// происходит позже, в CentralPanel) — вставка/активация доезжают.
 fn flush_pending_event_opens(ectx: &mut EditorCtx) {
-    let pending = PENDING_EVENT_OPEN.with(|cell| cell.borrow_mut().drain(..).collect::<Vec<_>>());
-    for index in pending {
-        let sel = crate::state::Selection::Event(index);
-        open_info_pane(ectx, sel);
+    let mut pending: Vec<crate::state::Selection> = PENDING_INFO_OPEN
+        .with(|cell| cell.borrow_mut().drain(..).collect());
+    pending.extend(
+        PENDING_EVENT_OPEN
+            .with(|cell| cell.borrow_mut().drain(..).collect::<Vec<_>>())
+            .into_iter()
+            .map(crate::state::Selection::Event),
+    );
+    if pending.is_empty() {
+        return;
+    }
+    let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
+    for sel in pending {
+        if !selection_exists(ectx, sel) {
+            if debug {
+                eprintln!("[infoflow] flush: {sel:?} — объект мёртв, пропущен");
+            }
+            continue;
+        }
+        // Pin «по умолчанию».
+        let will_pin =
+            ectx.editor.pin_by_default && !ectx.editor.pinned.contains(&sel);
+        let tree = ectx.editor.screen_tree.get_or_insert_with(|| {
+            if debug {
+                eprintln!("[infoflow] flush: screen_tree was None (первый кадр) — создаю");
+            }
+            egui_tiles::Tree::new_tabs("editor_screen_tree", vec![])
+        });
+        let already = tree
+            .tiles
+            .iter()
+            .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel));
+        if !already {
+            // 8а: непинned инфо-тайлы замещают друг друга.
+            if !ectx.editor.pinned.contains(&sel) {
+                let stale: Vec<egui_tiles::TileId> = tree
+                    .tiles
+                    .iter()
+                    .filter_map(|(id, tile)| match tile {
+                        egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p))
+                            if !ectx.editor.pinned.contains(p) =>
+                        {
+                            Some(*id)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                for id in stale {
+                    tree.remove_recursively(id);
+                }
+            }
+            let pane_id = tree
+                .tiles
+                .insert_pane(crate::state::EditorPane::Info(sel));
+            if will_pin {
+                ectx.editor.pinned.push(sel);
+            }
+            if let Some(root) = tree.root() {
+                tree.move_tile_to_container(pane_id, root, usize::MAX, true);
+            } else if debug {
+                eprintln!("[infoflow] flush: НЕТ КОРНЯ — тайл будет собран GC!");
+            }
+        }
+        // Поднять вкладку.
+        if let Some(tree) = ectx.editor.screen_tree.as_mut() {
+            let pane_id = tree
+                .tiles
+                .iter()
+                .find(|(_, tile)| {
+                    matches!(
+                        tile,
+                        egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel
+                    )
+                })
+                .map(|(id, _)| *id);
+            if let Some(pane_id) = pane_id {
+                let activated = tree.make_active(|id, _| id == pane_id);
+                if debug {
+                    eprintln!("[infoflow] flush: {sel:?} inserted/raised (active={activated})");
+                }
+            }
+            if debug {
+                dump_tree("[infoflow] flush", tree);
+            }
+        }
+        // Выбор объекта тоже поднимаем (рамка на канвасе).
+        ectx.editor.selection = Some(sel);
     }
 }
