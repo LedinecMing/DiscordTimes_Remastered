@@ -298,22 +298,41 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
             .show(ui, |ui| {
                 tool_panel(ui, &mut rest);
             });
-        egui::Panel::right("editor_info_dock_panel")
-            .default_size(300.)
-            .min_size(220.)
-            .resizable(true)
-            .show_inside(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("info_dock_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        info_dock_panel(ui, &mut rest);
-                    });
-            });
+        // ЕДИНОЕ дерево экрана (п.3 ТЗ-2): карта + инфо-панели — тайлы;
+        // карту можно перетащить вкладкой. Пан/зум канваса — внутри
+        // pane (drag канваса обрабатывает canvas(), drag заголовка —
+        // egui_tiles, конфликтов нет).
         egui::CentralPanel::default().show(ui, |ui| {
-            state.actions.click_tile = canvas(ui, &mut rest);
+            let mut tree = rest
+                .editor
+                .screen_tree
+                .take()
+                .unwrap_or_else(|| egui_tiles::Tree::new_tabs("editor_screen_tree", vec![]));
+            let mut map_id: Option<egui_tiles::TileId> = None;
+            for (id, tile) in tree.tiles.iter() {
+                if let egui_tiles::Tile::Pane(crate::state::EditorPane::Map) = tile {
+                    map_id = Some(*id);
+                }
+            }
+            let map_id = match map_id {
+                Some(id) => id,
+                None => {
+                    let id = tree.tiles.insert_pane(crate::state::EditorPane::Map);
+                    if let Some(root) = tree.root() {
+                        tree.move_tile_to_container(id, root, 0, true);
+                    }
+                    id
+                }
+            };
+            tree.make_active(|id, _| id == map_id);
+            let mut behavior = ScreenTreeBehavior {
+                ectx: &mut rest,
+                click_tile: std::mem::take(&mut state.actions.click_tile),
+            };
+            tree.ui(&mut behavior, ui);
+            state.actions.click_tile = behavior.click_tile;
+            rest.editor.screen_tree = Some(tree);
         });
-        // Модальное окно размера новой карты (поверх панелей).
         size_dialog_window(ui, &mut rest);
     });
     state.keep_open
@@ -2348,78 +2367,76 @@ fn size_dialog_window(ui: &mut Ui, ectx: &mut EditorCtx) {
     }
 }
 
-struct InfoDockBehavior<'a, 'b> {
+
+
+/// Behavior единого дерева экрана: Map (канвас) и Info (инфоокна).
+struct ScreenTreeBehavior<'a, 'b> {
     ectx: &'a mut EditorCtx<'b>,
-    /// Индексы протухших панелей — снос после прохода дерева.
-    pub stale_drop: Vec<crate::state::Selection>,
+    click_tile: Option<(usize, usize)>,
 }
 
-impl<'a, 'b> InfoDockBehavior<'a, 'b> {
-    /// Снос накопленных протухших панелей (вызвать ПОСЛЕ tree.ui).
-    fn drop_stale(&mut self, tree: &mut egui_tiles::Tree<crate::state::Selection>) {
-        for sel in self.stale_drop.drain(..) {
-            let id = tree
-                .tiles
-                .iter()
-                .find(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(p) if *p == sel))
-                .map(|(id, _)| *id);
-            if let Some(id) = id {
-                tree.remove_recursively(id);
-            }
-        }
-    }
-}
-
-impl<'a, 'b> egui_tiles::Behavior<crate::state::Selection> for InfoDockBehavior<'a, 'b> {
+impl<'a, 'b> egui_tiles::Behavior<crate::state::EditorPane> for ScreenTreeBehavior<'a, 'b> {
     fn pane_ui(
         &mut self,
         ui: &mut Ui,
-        tile_id: egui_tiles::TileId,
-        pane: &mut crate::state::Selection,
+        _tile_id: egui_tiles::TileId,
+        pane: &mut crate::state::EditorPane,
     ) -> egui_tiles::UiResponse {
-        // Протухший индекс (объект удалён undo/redo) — панель на снос:
-        // мутация дерева во время прохода запрещена, чистим после ui().
-        if !selection_exists(self.ectx, *pane) {
-            self.stale_drop.push(*pane);
-            return egui_tiles::UiResponse::None;
-        }
-        // Pin-галочка: закреплённая панель живёт и без выделения.
-        let pinned = self.ectx.editor.pinned.contains(pane);
-        let mut pin_now = pinned;
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut pin_now, "pin");
-        });
-        if pin_now != pinned {
-            if pin_now {
-                self.ectx.editor.pinned.push(*pane);
-            } else {
-                self.ectx.editor.pinned.retain(|p| p != pane);
+        match pane {
+            crate::state::EditorPane::Map => {
+                self.click_tile = canvas(ui, self.ectx);
             }
-        }
-        ui.separator();
-        match *pane {
-            crate::state::Selection::Lantern(_) => lantern_info(ui, self.ectx, *pane),
-            crate::state::Selection::Army(_) => army_info(ui, self.ectx, *pane),
-            crate::state::Selection::Building(_) => building_info(ui, self.ectx, *pane),
-            crate::state::Selection::Event(_) => event_info(ui, self.ectx, *pane),
+            crate::state::EditorPane::Info(sel) => {
+                if !selection_exists(self.ectx, *sel) {
+                    return egui_tiles::UiResponse::None;
+                }
+                let pinned = self.ectx.editor.pinned.contains(sel);
+                let mut pin_now = pinned;
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut pin_now, "pin");
+                });
+                if pin_now != pinned {
+                    if pin_now {
+                        self.ectx.editor.pinned.push(*sel);
+                    } else {
+                        self.ectx.editor.pinned.retain(|p| p != sel);
+                    }
+                }
+                ui.separator();
+                match *sel {
+                    crate::state::Selection::Lantern(_) => {
+                        lantern_info(ui, self.ectx, *sel)
+                    }
+                    crate::state::Selection::Army(_) => army_info(ui, self.ectx, *sel),
+                    crate::state::Selection::Building(_) => {
+                        building_info(ui, self.ectx, *sel)
+                    }
+                    crate::state::Selection::Event(_) => event_info(ui, self.ectx, *sel),
+                }
+            }
         }
         egui_tiles::UiResponse::None
     }
 
-    fn tab_title_for_pane(&mut self, pane: &crate::state::Selection) -> egui::WidgetText {
-        selection_title(self.ectx, *pane).into()
+    fn tab_title_for_pane(
+        &mut self,
+        pane: &crate::state::EditorPane,
+    ) -> egui::WidgetText {
+        match pane {
+            crate::state::EditorPane::Map => "Карта".into(),
+            crate::state::EditorPane::Info(sel) => selection_title(self.ectx, *sel).into(),
+        }
     }
 
-    // Контент инфоокна определяет высоту: без вертикального растяжения.
     fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
         egui_tiles::SimplificationOptions {
             all_panes_must_have_tabs: true,
+            prune_single_child_tabs: false,
             ..Default::default()
         }
     }
 }
 
-/// Жив ли объект по индексу (после undo/redo индекс мог протухнуть).
 fn selection_exists(ectx: &EditorCtx, sel: crate::state::Selection) -> bool {
     let project = ectx.editor.state.project();
     match sel {
@@ -2459,50 +2476,6 @@ fn selection_title(ectx: &EditorCtx, sel: crate::state::Selection) -> String {
     }
 }
 
-/// Правая dock-панель: egui_tiles-дерево инфоокон + pin «по умолчанию».
-/// Панель рисуется всегда при ненулевом дереве; новый выбор (selection)
-/// добавляется в дерево как новая вкладка.
-fn info_dock_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
-    // Новый выбор → новая вкладка в дереве (дубль не добавляем).
-    if let Some(sel) = ectx.editor.selection {
-        let tree = ectx.editor.info_tree.get_or_insert_with(|| {
-            egui_tiles::Tree::new_tabs("editor_info_dock", vec![])
-        });
-        let already = tree.tiles.iter().any(|(_, tile)| {
-            matches!(tile, egui_tiles::Tile::Pane(p) if *p == sel)
-        });
-        if !already {
-            let pane_id = tree.tiles.insert_pane(sel);
-            if let Some(root) = tree.root() {
-                tree.move_tile_to_container(pane_id, root, usize::MAX, true);
-            } else {
-                tree.tiles.set_visible(pane_id, true);
-            }
-        }
-    }
-    // Галочка «закреплять по умолчанию» (пин новых выборов автоматически).
-    ui.horizontal(|ui| {
-        let mut pin = ectx.editor.pin_by_default;
-        ui.checkbox(&mut pin, "Закреплять по умолчанию");
-        ectx.editor.pin_by_default = pin;
-        if ectx.editor.selection.is_some()
-            && ui.button("Открепить всё").clicked()
-        {
-            ectx.editor.pinned.clear();
-        }
-    });
-    ui.separator();
-    if let Some(mut tree) = ectx.editor.info_tree.take() {
-        let mut behavior = InfoDockBehavior {
-            ectx,
-            stale_drop: Vec::new(),
-        };
-        tree.ui(&mut behavior, ui);
-        behavior.drop_stale(&mut tree);
-        // Возвращаем дерево (включая правки pane_ui) обратно в состояние.
-        ectx.editor.info_tree = Some(tree);
-    }
-}
 
 /// Содержимое инфоокна точки событий: тип, клетка, радиус, чекбокс
 /// активна-с-начала, интерактивный список событий (п.6).
@@ -2757,15 +2730,17 @@ fn flush_pending_event_opens(ectx: &mut EditorCtx) {
         if !selection_exists(ectx, sel) {
             continue;
         }
-        let tree = ectx.editor.info_tree.get_or_insert_with(|| {
-            egui_tiles::Tree::new_tabs("editor_info_dock", vec![])
+        let tree = ectx.editor.screen_tree.get_or_insert_with(|| {
+            egui_tiles::Tree::new_tabs("editor_screen_tree", vec![])
         });
         let already = tree
             .tiles
             .iter()
-            .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(p) if *p == sel));
+            .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel));
         if !already {
-            let pane_id = tree.tiles.insert_pane(sel);
+            let pane_id = tree
+                .tiles
+                .insert_pane(crate::state::EditorPane::Info(sel));
             if let Some(root) = tree.root() {
                 tree.move_tile_to_container(pane_id, root, usize::MAX, true);
             } else {
