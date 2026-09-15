@@ -648,13 +648,12 @@ pub struct RenderTextures {
     pub decos: TexId,
 }
 
-/// Состояние ПВП-лобби (Этапы 1-2: локальный мок RoomManager; реальный
-/// websocket-транспорт комнат — следующий спринт).
-#[derive(Debug)]
+/// Состояние ПВП-лобби: мок RoomManager оффлайн; online — сервер через
+/// PvpNet (см. pvp_online), список комнат приходит push-ом RoomList.
 pub struct PvpState {
     /// Локальный ник игрока (аккаунты — фаза 4).
     pub nick: String,
-    /// Локальный реестр комнат (мок сервера).
+    /// Локальный реестр комнат (мок сервера, оффлайн-режим).
     pub manager: RoomManager,
     /// Таб-фильтр лобби: 0 = все, 1 = битвы, 2 = карты.
     pub lobby_tab: usize,
@@ -662,10 +661,21 @@ pub struct PvpState {
     pub open_only: bool,
     /// Черновик конфига комнаты на экране создания.
     pub setup_draft: RoomConfig,
-    /// Комната, в которой находимся (id), и вид.
+    /// Комната, в которой находимся (id), и вид (оффлайн-мок).
     pub joined: Option<(RoomId, RoomView)>,
     /// Последняя ошибка для отображения (сбрасывается при следующем действии).
     pub error: Option<String>,
+    /// Онлайн-слой (None до «Подключиться»).
+    pub net: Option<crate::pvp_online::PvpNet>,
+    /// Адрес сервера (поле ввода лобби).
+    pub server_addr: String,
+    /// Кэш последнего RoomList push (онлайн-таблица).
+    pub rooms_remote: Vec<dt_lib::network::room::PvpRoomSummary>,
+    /// Чат комнаты: история + черновик ввода.
+    pub chat: Vec<dt_lib::network::room::ChatMsg>,
+    pub chat_input: String,
+    /// Ваша армия в бою (из Started, §1.8).
+    pub your_army: Option<usize>,
 }
 
 impl Default for PvpState {
@@ -678,6 +688,12 @@ impl Default for PvpState {
             setup_draft: RoomConfig::default(),
             joined: None,
             error: None,
+            net: None,
+            server_addr: "127.0.0.1:3000".into(),
+            rooms_remote: Vec::new(),
+            chat: Vec::new(),
+            chat_input: String::new(),
+            your_army: None,
         }
     }
 }

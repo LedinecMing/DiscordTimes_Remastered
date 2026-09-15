@@ -472,6 +472,20 @@ pub fn draw_battle(ctx: &mut Ctx, is_battle_active: bool) -> Option<usize> {
                                 army: army_id,
                             },
                         ));
+                    } else if ctx
+                        .pvp
+                        .net
+                        .as_ref()
+                        .is_some_and(crate::pvp_online::PvpNet::connected)
+                    {
+                        // Онлайн-ПВП: Action проксируется серверу (Binary).
+                        // Локально не применяем — сервер пришлёт снапшот.
+                        ctx.pvp.net.as_ref().unwrap().send_battle(
+                            dt_client::dt_server::Incoming::Action(BattleUnitPos {
+                                pos: unit_pos,
+                                army: army_id,
+                            }),
+                        );
                     } else {
                         let battle = ctx.game.executor.battle.as_mut().unwrap();
                         let armies = &mut ctx.game.executor.gamemap.armys;
