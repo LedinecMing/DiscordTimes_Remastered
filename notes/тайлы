@@ -1,0 +1,119 @@
+// ===  АВТОТАЙЛИНГ===
+    // 68 (26%) — математический идеал, при котором шов между тайлами становится таким, как вам нужно.
+    const uint8_t BLEND_ALPHA = 68; 
+
+    for (int y = 0; y < VIEW_ROWS; ++y) {
+        for (int x = 0; x < VIEW_COLS; ++x) {
+            int tx = cam_x + x, ty = cam_y + y;
+            if (loaded_map.is_loaded && tx >= 0 && tx < map_w && ty >= 0 && ty < map_h) {
+                uint8_t t_id = loaded_map.surface_tiles[(size_t)ty * map_w + tx];
+                ImVec2 p_min(grid_start.x + x * cell_w, grid_start.y + y * cell_h);
+                ImVec2 p_max(grid_start.x + (x + 1) * cell_w, grid_start.y + (y + 1) * cell_h);
+                // Индексы кусочка в атласе 8x11 
+                int col_idx = ((tx + 1) % 8 + 8) % 8;
+                int row_idx = ((ty + 1) % 11 + 11) % 11;
+                float base_u = (col_idx * 32.0f) / 256.0f; 
+                float base_v = (row_idx * 22.0f) / 242.0f;
+                
+                float u_step = 32.0f / 256.0f;
+                float v_step = 22.0f / 242.0f;
+
+                // 1. Опрашиваем всех 4 прямых соседей (любой отличающийся тайл дает наплыв)
+                struct OverlayEdge { uint8_t id; int dir; }; // 0=Top, 1=Bottom, 2=Left, 3=Right
+                std::vector<OverlayEdge> edges;
+
+                auto check_edge = [&](int nx, int ny, int dir) {
+                    if (nx >= 0 && nx < map_w && ny >= 0 && ny < map_h) {
+                        uint8_t n_id = loaded_map.surface_tiles[(size_t)ny * map_w + nx];
+                        if (n_id != t_id && n_id < 16) {
+                            edges.push_back({ n_id, dir });
+                        }
+                    }
+                };
+
+                check_edge(tx, ty - 1, 0); // Верх
+                check_edge(tx, ty + 1, 1); // Низ
+                check_edge(tx - 1, ty, 2); // Лево
+                check_edge(tx + 1, ty, 3); // Право
+
+                if (!edges.empty()) {
+                    // Сортировка по ID: чтобы порядок слоев был детерминированным
+                    std::sort(edges.begin(), edges.end(), [](const OverlayEdge& a, const OverlayEdge& b) {
+                        return a.id < b.id;
+                    });
+
+                    // Наплыв идет ровно до середины ячейки (11px по Y, 16px по X)
+                    float half_h = cell_h * 0.5f;
+                    float half_w = cell_w * 0.5f;
+                    float uv_half_v = v_step * 0.5f;
+                    float uv_half_u = u_step * 0.5f;
+
+                    for (const auto& edge : edges) {
+                        if (!tex_manager || !tex_manager->terrain_textures[edge.id]) continue;
+                        ImTextureID tex = (ImTextureID)(intptr_t)tex_manager->terrain_textures[edge.id];
+
+                        if (edge.dir == 0) { // Верхний наплыв
+                            ImVec2 p1 = p_min;
+                            ImVec2 p2 = ImVec2(p_max.x, p_min.y);
+                            ImVec2 p3 = ImVec2(p_max.x, p_min.y + half_h);
+                            ImVec2 p4 = ImVec2(p_min.x, p_min.y + half_h);
+
+                            ImVec2 uv1(base_u, base_v);
+                            ImVec2 uv2(base_u + u_step, base_v);
+                            ImVec2 uv3(base_u + u_step, base_v + uv_half_v);
+                            ImVec2 uv4(base_u, base_v + uv_half_v);
+
+                            DrawGradientQuad(draw_list, tex, p1, p2, p3, p4, uv1, uv2, uv3, uv4,
+                                IM_COL32(255, 255, 255, BLEND_ALPHA), IM_COL32(255, 255, 255, BLEND_ALPHA),
+                                IM_COL32(255, 255, 255, 0),           IM_COL32(255, 255, 255, 0));
+                        }
+                        else if (edge.dir == 1) { // Нижний наплыв
+                            ImVec2 p1 = ImVec2(p_min.x, p_max.y - half_h);
+                            ImVec2 p2 = ImVec2(p_max.x, p_max.y - half_h);
+                            ImVec2 p3 = p_max;
+                            ImVec2 p4 = ImVec2(p_min.x, p_max.y);
+
+                            ImVec2 uv1(base_u, base_v + v_step - uv_half_v);
+                            ImVec2 uv2(base_u + u_step, base_v + v_step - uv_half_v);
+                            ImVec2 uv3(base_u + u_step, base_v + v_step);
+                            ImVec2 uv4(base_u, base_v + v_step);
+
+                            DrawGradientQuad(draw_list, tex, p1, p2, p3, p4, uv1, uv2, uv3, uv4,
+                                IM_COL32(255, 255, 255, 0),           IM_COL32(255, 255, 255, 0),
+                                IM_COL32(255, 255, 255, BLEND_ALPHA), IM_COL32(255, 255, 255, BLEND_ALPHA));
+                        }
+                        else if (edge.dir == 2) { // Левый наплыв
+                            ImVec2 p1 = p_min;
+                            ImVec2 p2 = ImVec2(p_min.x + half_w, p_min.y);
+                            ImVec2 p3 = ImVec2(p_min.x + half_w, p_max.y);
+                            ImVec2 p4 = ImVec2(p_min.x, p_max.y);
+
+                            ImVec2 uv1(base_u, base_v);
+                            ImVec2 uv2(base_u + uv_half_u, base_v);
+                            ImVec2 uv3(base_u + uv_half_u, base_v + v_step);
+                            ImVec2 uv4(base_u, base_v + v_step);
+
+                            DrawGradientQuad(draw_list, tex, p1, p2, p3, p4, uv1, uv2, uv3, uv4,
+                                IM_COL32(255, 255, 255, BLEND_ALPHA), IM_COL32(255, 255, 255, 0),
+                                IM_COL32(255, 255, 255, 0),           IM_COL32(255, 255, 255, BLEND_ALPHA));
+                        }
+                        else if (edge.dir == 3) { // Правый наплыв
+                            ImVec2 p1 = ImVec2(p_max.x - half_w, p_min.y);
+                            ImVec2 p2 = ImVec2(p_max.x, p_min.y);
+                            ImVec2 p3 = p_max;
+                            ImVec2 p4 = ImVec2(p_max.x - half_w, p_max.y);
+
+                            ImVec2 uv1(base_u + u_step - uv_half_u, base_v);
+                            ImVec2 uv2(base_u + u_step, base_v);
+                            ImVec2 uv3(base_u + u_step, base_v + v_step);
+                            ImVec2 uv4(base_u + u_step - uv_half_u, base_v + v_step);
+
+                            DrawGradientQuad(draw_list, tex, p1, p2, p3, p4, uv1, uv2, uv3, uv4,
+                                IM_COL32(255, 255, 255, 0),           IM_COL32(255, 255, 255, BLEND_ALPHA),
+                                IM_COL32(255, 255, 255, BLEND_ALPHA), IM_COL32(255, 255, 255, 0));
+                        }
+                    }
+                }
+            }
+        }
+    }
