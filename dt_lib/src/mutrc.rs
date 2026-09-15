@@ -47,17 +47,11 @@ impl<T: Formula + Serialize<T> + Clone> Serialize<Self> for SendMut<T> {
         let formula = with_formula(|s: &T| match s {
             _ => s,
         });
-        formula.write_field(inner_t, sizes, buffer, true)
+        // Не exact: точный размер знает только фактическая запись.
+        formula.write_field(inner_t, sizes, buffer, false)
     }
     fn size_hint(&self) -> Option<Sizes> {
-        if let Some(sizes) = formula_fast_sizes::<Self>() {
-            return Some(sizes);
-        }
-        let formula = with_formula(|s: &T| match s {
-            _ => s,
-        });
-        let inner_t = formula.size_hint(&*self.inner.lock().unwrap(), true)?;
-        Some(inner_t)
+        None // точный подсчёт в slow-пути (formula_fast_sizes неточен)
     }
 }
 impl<T: Formula + Serialize<T> + Clone> SerializeRef<Self> for SendMut<T> {
@@ -69,17 +63,10 @@ impl<T: Formula + Serialize<T> + Clone> SerializeRef<Self> for SendMut<T> {
         let formula = with_formula(|s: &T| match s {
             _ => s,
         });
-        formula.write_field(inner_t, sizes, buffer, true)
+        formula.write_field(inner_t, sizes, buffer, false)
     }
     fn size_hint(&self) -> Option<Sizes> {
-        if let Some(sizes) = formula_fast_sizes::<Self>() {
-            return Some(sizes);
-        }
-        let formula = with_formula(|s: &T| match s {
-            _ => s,
-        });
-        let inner_t = formula.size_hint(&*self.inner.lock().unwrap(), true)?;
-        Some(inner_t)
+        None // точный подсчёт в slow-пути (formula_fast_sizes неточен)
     }
 }
 impl<T> SendMut<T>

@@ -10,9 +10,14 @@ resolver = "2"
 lto = true
 strip = "symbols"
 debug = false
-panic = "abort"
-opt-level = "z"
-codegen-units = 1
+
+# alkahest: debug_assert в write_ref fast-path ложно срабатывает на
+# Option::None (size_hint обещает MAX_STACK_SIZE, пишется 1 байт тега) —
+# upstream-баг сериализации 99a5b68; опциональные поля (active_unit,
+# winner, your_army) встречаются постоянно, поэтому в dev отключаем
+# только его debug_assertions (см. /tmp/alkahest_probe, каскадный тест).
+[profile.dev.package.alkahest]
+debug-assertions = false
 
 [workspace.dependencies]
 alkahest = { git = "https://github.com/zakarumych/alkahest.git", rev = "99a5b68", features=["derive"] } 

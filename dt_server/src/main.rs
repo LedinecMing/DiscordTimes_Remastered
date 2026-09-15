@@ -176,9 +176,17 @@ async fn handle_socket(socket: WebSocket, state: AppState, name_hint: String) {
 /// RoomBattle и рассылает армии (Outcoming::Battle) всей комнате.
 async fn on_room_msg(state: &AppState, socket_id: SocketId, msg: ClientRoomMsg) -> Vec<Outgoing> {
     let start_room = matches!(msg, ClientRoomMsg::StartBattle);
+    println!("[dbg] on_room_msg socket #{socket_id} msg={msg:?} start_room={start_room}");
     let mut outputs = {
         let mut hub = state.hub.lock().await;
-        hub.handle(socket_id, msg)
+        let outputs = hub.handle(socket_id, msg);
+        if start_room {
+            println!("[dbg] hub outputs for start: {} items", outputs.len());
+            for o in &outputs {
+                println!("[dbg]   to={:?} msg={:?}", o.to, o.msg);
+            }
+        }
+        outputs
     };
     if !start_room {
         return outputs;
