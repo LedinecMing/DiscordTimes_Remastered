@@ -1513,33 +1513,22 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     if ectx.editor.carrying.is_some() {
         if let Some(pos) = response.hover_pos().or(response.interact_pointer_pos()) {
             if let Some(cell) = cell_at(pos) {
-                let rect = egui::Rect::from_min_max(
-                    world_to_screen([cell.0 as f32 * SIZE.0, cell.1 as f32 * SIZE.1]),
-                    world_to_screen([
-                        (cell.0 + 1) as f32 * SIZE.0,
-                        (cell.1 + 1) as f32 * SIZE.1,
-                    ]),
-                );
+                // Размер ghost = реальный footprint объекта:
+                // армия 1×2 клетки (низ в клетке), строение — его
+                // полный спан (obj.size), точка — 1 клетка.
+                let (foot_w, foot_h) = carry_footprint(ectx);
                 // Текстура ghost: тот же спрайт, что рисует запечка.
                 // palette_tex-кэш (egui, с диска); не готова — рамка одна.
                 if let Some(tex) = carried_texture(ui, ectx) {
                     let tex_size = tex.size_vec2();
-                    // Армии и точки — 2 клетки в высоту (низ на нижней
-                    // грани), строения — во всю клетку-якорь.
-                    let h = match ectx.editor.carrying {
-                        Some(crate::state::CarriedObject {
-                            kind: crate::state::Selection::Building(_),
-                            ..
-                        }) => SIZE.1,
-                        _ => SIZE.1 * 2.,
-                    };
+                    let h = foot_h as f32 * SIZE.1;
                     let w = if tex_size.y > 0. {
                         tex_size.x * (h / tex_size.y)
                     } else {
-                        SIZE.0
+                        foot_w as f32 * SIZE.0
                     };
                     let min_world = [
-                        cell.0 as f32 * SIZE.0 + SIZE.0 * 0.5 - w * 0.5,
+                        cell.0 as f32 * SIZE.0 + foot_w as f32 * SIZE.0 * 0.5 - w * 0.5,
                         (cell.1 + 1) as f32 * SIZE.1 - h,
                     ];
                     let ghost_rect = egui::Rect::from_min_max(
@@ -1553,9 +1542,17 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                         tex.id(),
                         ghost_rect,
                         egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 180),
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 200),
                     );
                 }
+                // Рамка по footprint (не 1 клетка).
+                let rect = egui::Rect::from_min_max(
+                    world_to_screen([cell.0 as f32 * SIZE.0, (cell.1 + 1 - foot_h) as f32 * SIZE.1]),
+                    world_to_screen([
+                        (cell.0 + foot_w) as f32 * SIZE.0,
+                        (cell.1 + 1) as f32 * SIZE.1,
+                    ]),
+                );
                 painter.rect_stroke(
                     rect,
                     2.,
@@ -1569,6 +1566,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     // Пан ПКМ-драгом: отменён при драге точки и переносе объектов.
     if response.dragged_by(egui::PointerButton::Secondary)
         && ectx.editor.lantern_drag.is_none()
+        && ectx.editor.carrying.is_none() // 4а: перенос приоритетнее пана
         && !interact
     {
         let delta = response.drag_delta();
@@ -1689,6 +1687,33 @@ fn carried_texture(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<egui::TextureHan
     let ctx = ui.ctx().clone();
     palette_icon_cache(&ctx, ectx.editor, &asset, &path)?;
     ectx.editor.palette_tex.get(&asset).cloned()
+}
+/// Footprint переносимого объекта в клетках (w, h): армия 1×2
+/// (низ в опорной клетке, как в запечке), строение — реальный спан
+/// (якорь-правый-низ, спан влево-вверх, как hit-test), точка — 1×1.
+fn carry_footprint(ectx: &EditorCtx) -> (usize, usize) {
+    let Some(carried) = ectx.editor.carrying else {
+        return (1, 1);
+    };
+    match carried.kind {
+        crate::state::Selection::Lantern(_) => (1, 1),
+        crate::state::Selection::Army(_) => (1, 2),
+        crate::state::Selection::Building(i) => {
+            let project = ectx.editor.state.project();
+            match project.map.buildings.get(i) {
+                Some(b) => ectx
+                    .registry
+                    .objects
+                    .inner
+                    .iter()
+                    .find(|o| o.index == b.id)
+                    .map(|o| (o.size.0.max(1) as usize, o.size.1.max(1) as usize))
+                    .unwrap_or((1, 1)),
+                None => (1, 1),
+            }
+        }
+        crate::state::Selection::Event(_) => (1, 1),
+    }
 }
 
 /// Слой редакторских маркеров поверх канваса (egui painter):
