@@ -384,6 +384,11 @@ fn top_bar(ui: &mut Ui, ectx: &mut EditorCtx, state: &mut ScreenState) {
                 .count();
             ectx.editor.status = format!("Lint: {errors} ошибок");
         }
+        // «Рендер»: поповер с настройками слоёв канваса.
+        let render_resp = ui.button("Рендер");
+        egui::Popup::from_toggle_button_response(&render_resp)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| render_settings_popup(ui, ectx));
         ui.separator();
         if ui.button("← Меню").clicked() {
             *keep_open = false;
@@ -394,29 +399,25 @@ fn top_bar(ui: &mut Ui, ectx: &mut EditorCtx, state: &mut ScreenState) {
     });
 }
 
-/// Вкладка панели инструментов (палитра по типу элемента + настройки).
+/// Вкладка панели инструментов. Свойства точки событий — в инфоокне
+/// (интеракт); настройки рендера — поповер в тулбаре.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PaletteTab {
     /// Палитра активного инструмента (тайлы/декор/строения/армии).
     Tool,
-    /// Настройки рендера редактора.
-    Render,
     /// Палитра точек событий/фонариков (постановка на карту).
     Events,
-    /// Точка событий/фонарик (выбранная ЛКМ на канвасе).
-    Lantern,
 }
 
 impl PaletteTab {
     fn label(self) -> &'static str {
         match self {
             PaletteTab::Tool => "Палитра",
-            PaletteTab::Render => "Рендер",
             PaletteTab::Events => "События",
-            PaletteTab::Lantern => "Точка событий",
         }
     }
 }
+
 
 /// Активная вкладка панели (нетабличное состояние кадра — egui id).
 const TAB_STATE: &str = "editor_palette_tab";
@@ -435,42 +436,27 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
         }
     }
     ui.separator();
-    // Вкладки: палитра активного инструмента / настройки рендера /
-    // точка событий (открывается автоматически по ЛКМ на маркере).
+    // Вкладки: палитра активного инструмента и «События» (постановка
+    // точек). Свойства выбранной точки — в инфоокне (интеракт);
+    // настройки рендера — поповер в тулбаре сверху.
     let mut tab: i32 = ui
         .ctx()
         .data_mut(|d| d.get_temp(egui::Id::new(TAB_STATE)))
         .unwrap_or(0);
-    if ectx.editor.selected_lantern.is_some() && tab != 3 {
-        tab = 3; // выбранная точка — показать её вкладку
-    }
     ui.horizontal(|ui| {
-        for (i, t) in [
-            PaletteTab::Tool,
-            PaletteTab::Render,
-            PaletteTab::Events,
-            PaletteTab::Lantern,
-        ]
-        .iter()
-        .enumerate()
-        {
+        for (i, t) in [PaletteTab::Tool, PaletteTab::Events].iter().enumerate() {
             if ui
                 .selectable_label(tab == i as i32, t.label())
                 .clicked()
             {
                 tab = i as i32;
-                if i != 3 {
-                    ectx.editor.selected_lantern = None;
-                }
             }
         }
     });
     ui.ctx()
         .data_mut(|d| d.insert_temp(egui::Id::new(TAB_STATE), tab));
     match tab {
-        1 => render_settings_tab(ui, ectx),
-        2 => events_palette(ui, ectx),
-        3 => lantern_tab(ui, ectx),
+        1 => events_palette(ui, ectx),
         _ => palette_tab(ui, ectx),
     }
     ui.separator();
@@ -481,73 +467,6 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
     ));
 }
 
-/// Вкладка «Точка событий»: свойства выбранной ЛКМ точки (MapLantern).
-/// Read-просмотр + правка радиуса (DragValue) и координат.
-fn lantern_tab(ui: &mut Ui, ectx: &mut EditorCtx) {
-    let Some(index) = ectx.editor.selected_lantern else {
-        ui.label("Кликните ЛКМ по маркеру точки на канвасе.");
-        return;
-    };
-    let Some(lantern) = ectx.editor.state.project().lanterns.get(index).cloned() else {
-        ectx.editor.selected_lantern = None;
-        return;
-    };
-    let kind = if !lantern.events.is_empty() {
-        if lantern.light_radius > 0 {
-            "фонарик с событиями"
-        } else {
-            "точка событий без подсветки"
-        }
-    } else if lantern.active_from_start {
-        "обычный фонарик (активен с начала)"
-    } else {
-        "фонарик"
-    };
-    ui.label(format!("Точка #{} — {}", lantern.id, kind));
-    ui.separator();
-    ui.label(format!("Клетка: ({}, {})", lantern.x, lantern.y));
-    let mut radius = lantern.light_radius;
-    ui.horizontal(|ui| {
-        ui.label("Радиус света:");
-        ui.add(egui::DragValue::new(&mut radius).range(0..=24).speed(1.));
-    });
-    if radius != lantern.light_radius {
-        let editor = &mut ectx.editor;
-        let command = Box::new(
-            editor_core::command::SetLanternRadius::new(index, radius),
-        );
-        match editor.history.execute(command, &mut editor.state) {
-            CommandResult::Applied => {
-                editor.status = format!("Радиус точки #{}: {radius}", lantern.id);
-            }
-            CommandResult::Noop => {}
-        }
-    }
-    ui.separator();
-    ui.label(format!("map_model: {} (9 = точка событий)", lantern.map_model));
-    ui.label(format!("Активен с начала: {}", lantern.active_from_start));
-    ui.separator();
-    ui.label(format!("События ({}):", lantern.events.len()));
-    if lantern.events.is_empty() {
-        ui.label(RichText::new("нет").weak());
-    } else {
-        for (i, id) in lantern.events.iter().enumerate() {
-            let name = ectx
-                .editor
-                .state
-                .project()
-                .events
-                .get(*id)
-                .map(|e| e.name.clone())
-                .unwrap_or_else(|| "?".into());
-            ui.label(format!("  {}. [{}] {}", i + 1, id, name));
-        }
-    }
-    ui.separator();
-    if ui.button("Закрыть").clicked() {
-        ectx.editor.selected_lantern = None;
-    }
-}
 
 /// Вкладка «События» палитры: два элемента постановки точек.
 /// «Фонарик» — map_model=8, активен с начала, radius=3 (обычный свет).
@@ -587,8 +506,8 @@ fn events_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
     }
 }
 
-/// Вкладка «Рендер»: переключатели слоёв канваса и режим наплывов.
-fn render_settings_tab(ui: &mut Ui, ectx: &mut EditorCtx) {
+/// Поповер «Рендер» тулбара: переключатели слоёв канваса и наплывы.
+fn render_settings_popup(ui: &mut Ui, ectx: &mut EditorCtx) {
     // Слои RT-запека (buildings/armies/blend) применяются перезапеком:
     // любое изменение — bake_dirty, на следующем кадре карта перезапечётся
     // (egui-слои markers/grid/ownership живут в canvas и перезапека не
@@ -1131,14 +1050,6 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         }
         None
     }
-    fn lantern_at(ectx: &EditorCtx, cx: usize, cy: usize) -> Option<usize> {
-        ectx.editor
-            .state
-            .project()
-            .lanterns
-            .iter()
-            .position(|l| l.x == cx && l.y == cy)
-    }
     let cell_at = |screen: egui::Pos2| -> Option<(usize, usize)> {
         let w = screen_to_world(screen);
         let tx = (w[0] / SIZE.0).floor();
@@ -1154,8 +1065,8 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         ectx.editor.status = "Перенос отменён".into();
     }
 
-    // ЛКМ: интеракт — выбор объекта (рамка + инфоокно); вне интеракта —
-    // выбор точки остаётся (вкладка «Точка событий»), инструмент не применяется.
+    // ЛКМ: интеракт — выбор объекта (рамка + инфоокно). Инструмент не
+    // применяется по клику на объект.
     let mut object_clicked = false;
     if response.clicked_by(egui::PointerButton::Primary) {
         if let Some(pos) = response.interact_pointer_pos() {
@@ -1164,83 +1075,35 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             if interact {
                 if let Some(sel) = sel {
                     ectx.editor.selection = Some(sel);
-                    if let crate::state::Selection::Lantern(i) = sel {
-                        ectx.editor.selected_lantern = Some(i);
-                    }
                     object_clicked = true;
                 } else {
                     ectx.editor.selection = None;
-                    ectx.editor.selected_lantern = None;
-                }
-            } else if let Some((cx, cy)) = cell {
-                if let Some(idx) = lantern_at(ectx, cx, cy) {
-                    ectx.editor.selected_lantern = Some(idx);
-                    object_clicked = true;
-                } else {
-                    ectx.editor.selected_lantern = None;
-                }
-            } else {
-                ectx.editor.selected_lantern = None;
-            }
-        }
-    }
-
-    // ПКМ down: интеракт — захват объекта (драг ИЛИ клик-клик carrying);
-    // вне интеракта — прежний драг точки.
-    if response.drag_started_by(egui::PointerButton::Secondary) {
-        if let Some(pos) = response.interact_pointer_pos() {
-            let cell = cell_at(pos);
-            let sel = cell.and_then(|(cx, cy)| object_at(ectx, cx, cy));
-            if interact {
-                if let Some(sel) = sel {
-                    let from = match sel {
-                        crate::state::Selection::Lantern(i) => {
-                            let l = &ectx.editor.state.project().lanterns[i];
-                            (l.x, l.y)
-                        }
-                        crate::state::Selection::Army(i) => {
-                            ectx.editor.state.project().map.armys[i].pos
-                        }
-                        crate::state::Selection::Building(i) => {
-                            ectx.editor.state.project().map.buildings[i].pos
-                        }
-                    };
-                    ectx.editor.carrying = Some(crate::state::CarriedObject {
-                        kind: sel,
-                        from,
-                    });
-                    // Драг-точки (неинтерактный путь) не стартует.
-                    ectx.editor.lantern_drag = None;
-                }
-            } else if let Some((cx, cy)) = cell {
-                if let Some(idx) = lantern_at(ectx, cx, cy) {
-                    let l = &ectx.editor.state.project().lanterns[idx];
-                    let origin = (l.x, l.y);
-                    ectx.editor.lantern_drag = Some((idx, origin, origin));
                 }
             }
         }
     }
 
-    // Драг точки (неинтерактный): маркер следует за курсором, up — команда.
-    if let Some((idx, from, mut cur)) = ectx.editor.lantern_drag {
+    // ПКМ down: интеракт — захват объекта (драг ИЛИ клик-клик carrying).
+    if response.drag_started_by(egui::PointerButton::Secondary) && interact {
         if let Some(pos) = response.interact_pointer_pos() {
-            if let Some(cell) = cell_at(pos) {
-                cur = cell;
-            }
-        }
-        ectx.editor.lantern_drag = Some((idx, from, cur));
-        if response.drag_stopped_by(egui::PointerButton::Secondary) {
-            ectx.editor.lantern_drag = None;
-            let editor = &mut ectx.editor;
-            let command =
-                Box::new(editor_core::command::MoveLantern::new(idx, from, cur));
-            match editor.history.execute(command, &mut editor.state) {
-                CommandResult::Applied => {
-                    editor.status = format!("Точка: {:?} → {:?}", from, cur);
-                    editor.bake_dirty = true;
-                }
-                CommandResult::Noop => {}
+            let sel = cell_at(pos).and_then(|(cx, cy)| object_at(ectx, cx, cy));
+            if let Some(sel) = sel {
+                let from = match sel {
+                    crate::state::Selection::Lantern(i) => {
+                        let l = &ectx.editor.state.project().lanterns[i];
+                        (l.x, l.y)
+                    }
+                    crate::state::Selection::Army(i) => {
+                        ectx.editor.state.project().map.armys[i].pos
+                    }
+                    crate::state::Selection::Building(i) => {
+                        ectx.editor.state.project().map.buildings[i].pos
+                    }
+                };
+                ectx.editor.carrying = Some(crate::state::CarriedObject {
+                    kind: sel,
+                    from,
+                });
             }
         }
     }

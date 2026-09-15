@@ -228,11 +228,8 @@ pub struct EditorUi {
     /// Таймер повтора Ctrl+Z/Y: время последнего повтора (сек),
     /// None — удержание только началось (ждём задержку до первого повтора).
     pub hotkey_repeat_at: Option<f64>,
-    /// Настройки рендера редактора (вкладка «Рендер»).
+    /// Настройки рендера редактора (поповер «Рендер» в тулбаре).
     pub render_settings: EditorRenderSettings,
-    /// Выбранная ЛКМ точка событий/фонарик (индекс в lanterns) —
-    /// открывает вкладку «Точка событий».
-    pub selected_lantern: Option<usize>,
     /// Выделение интеракта (рамка + инфоокно «Свойства объекта»).
     pub selection: Option<Selection>,
     /// Перенос клик-клик: ПКМ на объекте взял, ПКМ в новой клетке положил.
@@ -396,7 +393,6 @@ impl Default for EditorUi {
             palette_tex: std::collections::HashMap::new(),
             hotkey_repeat_at: None,
             render_settings: EditorRenderSettings::default(),
-            selected_lantern: None,
             active_lantern_kind: None,
             lantern_drag: None,
             selection: None,
