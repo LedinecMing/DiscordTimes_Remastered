@@ -342,6 +342,9 @@ pub struct BrushConfig {
     /// Мульти-выбор палитры: несколько элементов, применяются случайно
     /// или последовательно (клетки фигуры под курсором).
     pub multi_select: Vec<MultiPick>,
+    /// Режим мультивыбора палитры: клик по ячейке тогглит элемент
+    /// (не снимая остальные), рисует список мульти-выбора.
+    pub multi_mode: bool,
     /// Порядок применения мульти-выбора.
     pub multi_order: MultiOrder,
     /// Зерно рандома мульти-выбора: hash координат клетки (детерминизм
@@ -357,6 +360,7 @@ impl Default for BrushConfig {
             fill_max_volume: 0,
             fill_max_range: 0,
             multi_select: Vec::new(),
+            multi_mode: false,
             multi_order: MultiOrder::Random,
             multi_seed_salt: 0,
         }

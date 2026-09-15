@@ -666,12 +666,15 @@ fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
             });
         }
     }
-    // Мульти-выбор: список активных элементов + «выбрать всё».
+    // Мульти-выбор: галочка режима + список активных элементов.
     ui.separator();
     ui.horizontal(|ui| {
         let picks = ectx.editor.brush.multi_select.clone();
         let order = ectx.editor.brush.multi_order;
-        ui.label(format!("Мульти-выбор ({}):", picks.len()));
+        let mut mm = ectx.editor.brush.multi_mode;
+        ui.checkbox(&mut mm, "Multi");
+        ectx.editor.brush.multi_mode = mm;
+        ui.label(format!("({})", picks.len()));
         // «Выбрать всё»: все элементы активной палитры (тайлы — все
         // TILES; декор/строения — весь фильтрованный список; армии —
         // все 4 шаблона).
@@ -922,10 +925,10 @@ fn search_field(ui: &mut Ui, ectx: &mut EditorCtx) {
     });
 }
 
-/// Режим мультивыбора палитры: активен, пока список мульти-выбора
-/// непуст (клик по ячейке тогда тогглит, а не выбирает одиночно).
+/// Режим мультивыбора палитры: включается галочкой «Multi» в настройках
+/// кисти; в этом режиме клик по ячейке тогглит элемент в списке.
 fn palette_multi_mode(editor: &mut EditorUi) -> bool {
-    !editor.brush.multi_select.is_empty()
+    editor.brush.multi_mode
 }
 
 /// Тоггл элемента в мульти-выборе: есть — убрать, нет — добавить.
