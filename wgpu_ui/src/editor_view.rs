@@ -317,14 +317,18 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
             let map_id = match map_id {
                 Some(id) => id,
                 None => {
+                    // Карта попадает в дерево РАЗ при первом кадре и
+                    // становится активной вкладкой только здесь. Раньше
+                    // make_active(map) выполнялся КАЖДЫЙ кадр и гасил
+                    // только что открытую инфо-вкладку (п.1 итерации 2).
                     let id = tree.tiles.insert_pane(crate::state::EditorPane::Map);
                     if let Some(root) = tree.root() {
                         tree.move_tile_to_container(id, root, 0, true);
                     }
+                    tree.make_active(|tid, _| tid == id);
                     id
                 }
             };
-            tree.make_active(|id, _| id == map_id);
             let mut behavior = ScreenTreeBehavior {
                 ectx: &mut rest,
                 click_tile: std::mem::take(&mut state.actions.click_tile),
@@ -1661,17 +1665,25 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         }
     }
 
-    // ПКМ down: интеракт — захват объекта (драг ИЛИ клик-клик carrying).
+    // ПКМ down: интеракт — захват объекта. ДВА пути:
+    // (а) клик-клик: down на объекте → carrying=Some (приклеен к
+    //     курсору, отпускание НЕ завершает); следующий down в новой
+    //     клетке → фиксация.
+    // (б) драг: зажал на объекте, повёл, отпустил в новой клетке →
+    //     фиксация по drag_stopped.
+    // Приоритет над паном: если down попал в объект — жест считается
+    // захваченным переносом (pan_interact ниже проверяет carry-логику).
     if response.drag_started_by(egui::PointerButton::Secondary) && interact {
         if let Some(pos) = response.interact_pointer_pos() {
             let cell = cell_at(pos);
             let sel = cell.and_then(|(cx, cy)| object_at(ectx, cx, cy));
-            if std::env::var("DT_EGUI_DEBUG").is_ok() {
-                eprintln!(
-                    "[carry] PKM down: pos={pos:?} cell={cell:?} hit={sel:?}"
-                );
+            let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
+            if debug {
+                eprintln!("[carry] PKM down: pos={pos:?} cell={cell:?} hit={sel:?} already_carrying={}", ectx.editor.carrying.is_some());
             }
-            if let Some(sel) = sel {
+            // already_carrying: этот down — «второй клик» клик-клик:
+            // фиксацию делает блок ниже, новую grab не начинаем.
+            if let (Some(sel), false) = (sel, ectx.editor.carrying.is_some()) {
                 let from = match sel {
                     crate::state::Selection::Lantern(i) => {
                         let l = &ectx.editor.state.project().lanterns[i];
@@ -1689,8 +1701,8 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                     kind: sel,
                     from,
                 });
-                if std::env::var("DT_EGUI_DEBUG").is_ok() {
-                    eprintln!("[carry] carrying=Some({sel:?}) from={from:?}");
+                if debug {
+                    eprintln!("[carry] carrying=Some({sel:?}) from={from:?} (приклеен к курсору)");
                 }
             }
         }
@@ -1737,10 +1749,10 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                 }
             }
         };
-        // Клик-клик: ПКМ нажат в новой клетке (не по тому же объекту).
-        // ДЕЛАЕМ и на drag_started (клик-клик), и на drag_stopped (драг):
-        // PKM down на объекте стартует carrying, PKM down в новой клетке
-        // фиксирует; если это был драг — drag_stopped фиксирует.
+        // Кликом-клик ПКМ down в новой клетке (не там, где взяли) —
+        // фиксация. ВАЖНО: тот же down, который только что ВЗЯЛ объект
+        // (grab выше), сюда не попадает — в этом кадре carrying уже
+        // установлен, но from совпадает с клеткой взятия.
         let click_fixed = {
             let mut fixed = false;
             if response.drag_started_by(egui::PointerButton::Secondary) {
@@ -1755,7 +1767,14 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             }
             fixed
         };
-        if !click_fixed && response.drag_stopped_by(egui::PointerButton::Secondary) {
+        // Обычный драг: отпустили ПКМ — фиксируем. Но если это ТОТ ЖЕ
+        // кадр, где произошёл grab (click-click: нажали-отпустили на
+        // объекте, ничего не перетащив) — carrying ЖИВЁТ дальше
+        // (приклеен к курсору), фиксация только следующим down.
+        if !click_fixed
+            && response.drag_stopped_by(egui::PointerButton::Secondary)
+            && !response.drag_started_by(egui::PointerButton::Secondary)
+        {
             if let Some(pos) = response.interact_pointer_pos() {
                 if let Some(to) = cell_at(pos) {
                     fix(ectx, to);
@@ -1763,7 +1782,6 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             }
         }
     }
-
     // 4в: оригинал переносимого объекта СКРЫВАЕТСЯ — запечка в RT общая,
     // поэтому затираем его rect полупрозрачным слоем (полу-призрак на
     // исходном месте, полный ghost следует за курсором).
@@ -3165,9 +3183,23 @@ thread_local! {
     static PENDING_EVENT_OPEN: std::cell::RefCell<Vec<usize>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
+
 /// Открыть/поднять инфо-тайл объекта в screen_tree (п.6): 8а —
 /// непинned заменяют друг друга; дубль — просто активируется.
 fn open_info_pane(ectx: &mut EditorCtx, sel: crate::state::Selection) {
+    let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
+    if debug {
+        eprintln!("[info] open_info_pane: sel={sel:?} exists={}", {
+            // selection_exists читает состояние до вставки.
+            let project = ectx.editor.state.project();
+            match sel {
+                crate::state::Selection::Lantern(i) => i < project.lanterns.len(),
+                crate::state::Selection::Army(i) => i < project.map.armys.len(),
+                crate::state::Selection::Building(i) => i < project.map.buildings.len(),
+                crate::state::Selection::Event(i) => i < project.events.len(),
+            }
+        });
+    }
     if !selection_exists(ectx, sel) {
         return;
     }
