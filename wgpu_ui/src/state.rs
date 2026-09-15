@@ -413,19 +413,23 @@ pub enum PaintCategory {
     Decos,
     /// Строения.
     Buildings,
+    /// Точки событий/фонарики (постановка как обычный слой).
+    Lanterns,
 }
 
 impl PaintCategory {
-    pub const ALL: [PaintCategory; 3] = [
+    pub const ALL: [PaintCategory; 4] = [
         PaintCategory::Tiles,
         PaintCategory::Decos,
         PaintCategory::Buildings,
+        PaintCategory::Lanterns,
     ];
     pub fn label(self) -> &'static str {
         match self {
             PaintCategory::Tiles => "Тайлы",
             PaintCategory::Decos => "Декор",
             PaintCategory::Buildings => "Строения",
+            PaintCategory::Lanterns => "Точки",
         }
     }
 }
