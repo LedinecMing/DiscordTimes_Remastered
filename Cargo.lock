@@ -1491,6 +1491,7 @@ dependencies = [
  "dt_lib",
  "futures",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite 0.24.0",
