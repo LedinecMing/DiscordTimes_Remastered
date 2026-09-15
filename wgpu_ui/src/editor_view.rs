@@ -1108,7 +1108,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         if let Some(i) = project
             .lanterns
             .iter()
-            .position(|l| l.x == cx && (l.y == cy || l.y + 1 == cy))
+            .position(|l| l.x == cx && l.y == cy)
         {
             return Some(crate::state::Selection::Lantern(i));
         }
@@ -1136,7 +1136,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             .project()
             .lanterns
             .iter()
-            .position(|l| l.x == cx && (l.y == cy || l.y + 1 == cy))
+            .position(|l| l.x == cx && l.y == cy)
     }
     let cell_at = |screen: egui::Pos2| -> Option<(usize, usize)> {
         let w = screen_to_world(screen);
