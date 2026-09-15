@@ -451,6 +451,311 @@ impl Command for SetLanternRadius {
     }
 }
 
+/// Постановка точки событий/фонарика (MapLantern) инструментом палитры.
+///
+/// Дубли в клетке запрещены (как декорации): существующая точка в (x, y)
+/// — no-op. Точка добавляется в ОБОИХ источника (project.lanterns и
+/// map.lanterns — редактор держит их синхронными).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceLantern {
+    pub x: usize,
+    pub y: usize,
+    pub map_model: u8,
+    pub radius: u8,
+    pub active: bool,
+    placed_at: Option<usize>,
+}
+
+impl PlaceLantern {
+    pub fn new(x: usize, y: usize, map_model: u8, radius: u8, active: bool) -> Self {
+        Self {
+            x,
+            y,
+            map_model,
+            radius,
+            active,
+            placed_at: None,
+        }
+    }
+}
+
+impl Command for PlaceLantern {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        let project = state.project_mut();
+        // Одна точка на клетку.
+        if project.lanterns.iter().any(|l| l.x == self.x && l.y == self.y) {
+            return CommandResult::Noop;
+        }
+        let lantern = dt_lib::map::map::MapLantern {
+            x: self.x,
+            y: self.y,
+            id: project.lanterns.len(),
+            map_model: self.map_model,
+            light_radius: self.radius,
+            active_from_start: self.active,
+            events: Vec::new(),
+        };
+        project.lanterns.push(lantern.clone());
+        project.map.lanterns.push(lantern);
+        self.placed_at = Some(project.lanterns.len() - 1);
+        CommandResult::Applied
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        let project = state.project_mut();
+        if let Some(at) = self.placed_at.take() {
+            if at < project.lanterns.len() {
+                project.lanterns.remove(at);
+            }
+            if at < project.map.lanterns.len() {
+                project.map.lanterns.remove(at);
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Place Lantern"
+    }
+}
+
+/// Удаление точки событий/фонарика (снятая точка хранится для undo).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoveLantern {
+    /// Индекс в project.lanterns / map.lanterns.
+    pub index: usize,
+    /// Снятая точка (восстанавливается undo).
+    taken: Option<dt_lib::map::map::MapLantern>,
+}
+
+impl RemoveLantern {
+    pub fn new(index: usize) -> Self {
+        Self { index, taken: None }
+    }
+}
+
+impl Command for RemoveLantern {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        let project = state.project_mut();
+        if self.index >= project.lanterns.len() {
+            return CommandResult::Noop;
+        }
+        self.taken = Some(project.lanterns.remove(self.index));
+        project.map.lanterns.remove(self.index);
+        CommandResult::Applied
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        let project = state.project_mut();
+        if let Some(lantern) = self.taken.take() {
+            let at = self.index.min(project.lanterns.len());
+            project.lanterns.insert(at, lantern.clone());
+            let at = self.index.min(project.map.lanterns.len());
+            project.map.lanterns.insert(at, lantern);
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Remove Lantern"
+    }
+}
+
+/// Привязка события к точке: ссылка event_id в lantern.events
+/// (индексный доступ по lantern_index; определение события не трогаем).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddLanternEvent {
+    pub lantern_index: usize,
+    pub event_id: usize,
+    added_at: Option<usize>,
+}
+
+impl AddLanternEvent {
+    pub fn new(lantern_index: usize, event_id: usize) -> Self {
+        Self {
+            lantern_index,
+            event_id,
+            added_at: None,
+        }
+    }
+}
+
+impl Command for AddLanternEvent {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        let project = state.project_mut();
+        let Some(lantern) = project.lanterns.get_mut(self.lantern_index) else {
+            return CommandResult::Noop;
+        };
+        if lantern.events.contains(&self.event_id) {
+            return CommandResult::Noop;
+        }
+        lantern.events.push(self.event_id);
+        self.added_at = Some(lantern.events.len() - 1);
+        if let Some(l) = project.map.lanterns.get_mut(self.lantern_index) {
+            l.events.push(self.event_id);
+        }
+        CommandResult::Applied
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        let project = state.project_mut();
+        if let Some(at) = self.added_at.take() {
+            if let Some(lantern) = project.lanterns.get_mut(self.lantern_index) {
+                if at < lantern.events.len() {
+                    lantern.events.remove(at);
+                }
+            }
+            if let Some(l) = project.map.lanterns.get_mut(self.lantern_index) {
+                if at < l.events.len() {
+                    l.events.remove(at);
+                }
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Add Lantern Event"
+    }
+}
+
+/// Отвязка события от точки: удаляется ТОЛЬКО ссылка (index в
+/// lantern.events); определение события остаётся в project.events —
+/// на него могут ссылаться другие точки.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoveLanternEvent {
+    pub lantern_index: usize,
+    /// Позиция в lantern.events (не id события).
+    pub index: usize,
+    removed_id: Option<usize>,
+}
+
+impl RemoveLanternEvent {
+    pub fn new(lantern_index: usize, index: usize) -> Self {
+        Self {
+            lantern_index,
+            index,
+            removed_id: None,
+        }
+    }
+}
+
+impl Command for RemoveLanternEvent {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        let project = state.project_mut();
+        let Some(lantern) = project.lanterns.get_mut(self.lantern_index) else {
+            return CommandResult::Noop;
+        };
+        if self.index >= lantern.events.len() {
+            return CommandResult::Noop;
+        }
+        self.removed_id = Some(lantern.events.remove(self.index));
+        if let Some(l) = project.map.lanterns.get_mut(self.lantern_index) {
+            if self.index < l.events.len() {
+                l.events.remove(self.index);
+            }
+        }
+        CommandResult::Applied
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        let project = state.project_mut();
+        if let Some(id) = self.removed_id.take() {
+            if let Some(lantern) = project.lanterns.get_mut(self.lantern_index) {
+                let at = self.index.min(lantern.events.len());
+                lantern.events.insert(at, id);
+            }
+            if let Some(l) = project.map.lanterns.get_mut(self.lantern_index) {
+                let at = self.index.min(l.events.len());
+                l.events.insert(at, id);
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Remove Lantern Event"
+    }
+}
+
+/// Перенос строения (клик-клик/драг переносом в интеракте).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MoveBuilding {
+    pub index: usize,
+    pub from: Pos,
+    pub to: Pos,
+}
+
+impl MoveBuilding {
+    pub fn new(index: usize, from: Pos, to: Pos) -> Self {
+        Self { index, from, to }
+    }
+}
+
+impl Command for MoveBuilding {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        if self.from == self.to {
+            return CommandResult::Noop;
+        }
+        let project = state.project_mut();
+        let Some(building) = project.map.buildings.get_mut(self.index) else {
+            return CommandResult::Noop;
+        };
+        if building.pos != self.from {
+            return CommandResult::Noop;
+        }
+        building.pos = self.to;
+        CommandResult::Applied
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        if let Some(building) = state.project_mut().map.buildings.get_mut(self.index) {
+            building.pos = self.from;
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Move Building"
+    }
+}
+
+/// Перенос армии (клик-клик/драг переносом в интеракте).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MoveArmy {
+    pub index: usize,
+    pub from: Pos,
+    pub to: Pos,
+}
+
+impl MoveArmy {
+    pub fn new(index: usize, from: Pos, to: Pos) -> Self {
+        Self { index, from, to }
+    }
+}
+
+impl Command for MoveArmy {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        if self.from == self.to {
+            return CommandResult::Noop;
+        }
+        let project = state.project_mut();
+        let Some(army) = project.map.armys.get_mut(self.index) else {
+            return CommandResult::Noop;
+        };
+        if army.pos != self.from {
+            return CommandResult::Noop;
+        }
+        army.pos = self.to;
+        CommandResult::Applied
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        if let Some(army) = state.project_mut().map.armys.get_mut(self.index) {
+            army.pos = self.from;
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Move Army"
+    }
+}
+
 /// Изменение размера квадратной карты (якорь — левый верхний угол).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResizeMap {
@@ -744,6 +1049,87 @@ mod tests {
         assert!(history.can_redo());
         history.execute(Box::new(PaintTile::new((0, 0), 2)), &mut state);
         assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn place_remove_lantern_roundtrip() {
+        let mut state = state();
+        let mut history = CommandHistory::new();
+        history.execute(
+            Box::new(PlaceLantern::new(2, 3, 9, 3, false)),
+            &mut state,
+        );
+        assert_eq!(state.project().lanterns.len(), 1);
+        assert_eq!(state.project().map.lanterns.len(), 1);
+        assert_eq!(state.project().lanterns[0].map_model, 9);
+        assert!(!state.project().lanterns[0].active_from_start);
+
+        // Дубль в клетке — no-op.
+        let dup = history.execute(
+            Box::new(PlaceLantern::new(2, 3, 8, 3, true)),
+            &mut state,
+        );
+        assert_eq!(dup, CommandResult::Noop);
+
+        history.undo(&mut state);
+        assert!(state.project().lanterns.is_empty());
+        assert!(state.project().map.lanterns.is_empty());
+
+        // RemoveLantern с undo.
+        history.redo(&mut state);
+        history.execute(Box::new(RemoveLantern::new(0)), &mut state);
+        assert!(state.project().lanterns.is_empty());
+        history.undo(&mut state);
+        assert_eq!(state.project().lanterns.len(), 1);
+    }
+
+    #[test]
+    fn lantern_events_add_remove_undo() {
+        let mut state = state();
+        let mut history = CommandHistory::new();
+        history.execute(
+            Box::new(PlaceLantern::new(0, 0, 9, 3, false)),
+            &mut state,
+        );
+        history.execute(Box::new(AddLanternEvent::new(0, 5)), &mut state);
+        history.execute(Box::new(AddLanternEvent::new(0, 9)), &mut state);
+        assert_eq!(state.project().lanterns[0].events, vec![5, 9]);
+        assert_eq!(state.project().map.lanterns[0].events, vec![5, 9]);
+
+        // Дубль ссылки — no-op.
+        let dup = history.execute(Box::new(AddLanternEvent::new(0, 5)), &mut state);
+        assert_eq!(dup, CommandResult::Noop);
+
+        // Удаление ссылки (только ссылка, id остаётся в undo-данных).
+        history.execute(Box::new(RemoveLanternEvent::new(0, 0)), &mut state);
+        assert_eq!(state.project().lanterns[0].events, vec![9]);
+        history.undo(&mut state);
+        assert_eq!(state.project().lanterns[0].events, vec![5, 9]);
+        history.undo(&mut state); // undo AddLanternEvent(9)
+        history.undo(&mut state); // undo AddLanternEvent(5)
+        assert!(state.project().lanterns[0].events.is_empty());
+    }
+
+    #[test]
+    fn move_building_and_army_roundtrip() {
+        let mut state = state();
+        let mut history = CommandHistory::new();
+        history.execute(Box::new(PlaceBuilding::new((1, 1), 2)), &mut state);
+        history.execute(Box::new(PlaceArmy::new((2, 2), "A")), &mut state);
+
+        history.execute(Box::new(MoveBuilding::new(0, (1, 1), (5, 5))), &mut state);
+        assert_eq!(state.project().map.buildings[0].pos, (5, 5));
+        history.undo(&mut state);
+        assert_eq!(state.project().map.buildings[0].pos, (1, 1));
+
+        history.execute(Box::new(MoveArmy::new(0, (2, 2), (3, 3))), &mut state);
+        assert_eq!(state.project().map.armys[0].pos, (3, 3));
+        history.undo(&mut state);
+        assert_eq!(state.project().map.armys[0].pos, (2, 2));
+
+        // Тот же from/to — no-op.
+        let noop = history.execute(Box::new(MoveArmy::new(0, (2, 2), (2, 2))), &mut state);
+        assert_eq!(noop, CommandResult::Noop);
     }
 
     #[test]
