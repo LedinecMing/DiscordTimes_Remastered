@@ -621,6 +621,27 @@ impl Mode {
 
 /// Настройки кисти (п.3): форма, размер, заливка, мульти-выбор.
 fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
+    // Категории рисования (п.4): несколько одновременно; «Ластик» (п.5)
+    // переключает кисть на чистку выбранных категорий.
+    ui.separator();
+    ui.label("Слои:");
+    ui.horizontal(|ui| {
+        for cat in crate::state::PaintCategory::ALL {
+            let on = ectx.editor.brush.paint_categories.contains(&cat);
+            if ui.selectable_label(on, cat.label()).clicked() {
+                if on {
+                    ectx.editor.brush.paint_categories.retain(|c| *c != cat);
+                } else {
+                    ectx.editor.brush.paint_categories.push(cat);
+                }
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        let mut erase = ectx.editor.brush.erase_mode;
+        ui.checkbox(&mut erase, "Ластик (чистить слои)");
+        ectx.editor.brush.erase_mode = erase;
+    });
     let (shape, size) = {
         let b = &mut ectx.editor.brush;
         ui.separator();
@@ -641,7 +662,6 @@ fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
         });
         (b.shape, b.size)
     };
-    let _ = (shape, size);
     // Заливка: параметры актуальны только для BucketFill.
     {
         let b = &mut ectx.editor.brush;
@@ -666,12 +686,15 @@ fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
             });
         }
     }
-    // Мульти-выбор: список активных элементов + «выбрать всё».
+    // Мульти-выбор: галочка режима + список активных элементов.
     ui.separator();
     ui.horizontal(|ui| {
         let picks = ectx.editor.brush.multi_select.clone();
         let order = ectx.editor.brush.multi_order;
-        ui.label(format!("Мульти-выбор ({}):", picks.len()));
+        let mut mm = ectx.editor.brush.multi_mode;
+        ui.checkbox(&mut mm, "Multi");
+        ectx.editor.brush.multi_mode = mm;
+        ui.label(format!("({})", picks.len()));
         // «Выбрать всё»: все элементы активной палитры (тайлы — все
         // TILES; декор/строения — весь фильтрованный список; армии —
         // все 4 шаблона).
@@ -922,10 +945,10 @@ fn search_field(ui: &mut Ui, ectx: &mut EditorCtx) {
     });
 }
 
-/// Режим мультивыбора палитры: активен, пока список мульти-выбора
-/// непуст (клик по ячейке тогда тогглит, а не выбирает одиночно).
+/// Режим мультивыбора палитры: включается галочкой «Multi» в настройках
+/// кисти; в этом режиме клик по ячейке тогглит элемент в списке.
 fn palette_multi_mode(editor: &mut EditorUi) -> bool {
-    !editor.brush.multi_select.is_empty()
+    editor.brush.multi_mode
 }
 
 /// Тоггл элемента в мульти-выборе: есть — убрать, нет — добавить.
@@ -1005,30 +1028,20 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
                     }
                     let selected = ectx.editor.active_tile == tile;
                     let sprite = dt_lib::map::tile::TILES[tile].sprite();
-                    let cell_size = egui::vec2(72., 80.);
-                    let (cell, icon_rect) = palette_cell(ui, cell_size);
-                    // Иконка по ячейке (aspect-fit, верх ячейки).
-                    if let Some(tex) = ectx.editor.palette_tex.get(sprite) {
-                        draw_icon_fit(ui.painter(), tex, icon_rect);
-                    }
-                    // Подпись: фиксированная высота 30, усечение — ряды
-                    // ячеек ровные при любых именах (лесенка исключена).
-                    ui.put(
-                        egui::Rect::from_min_size(
-                            cell.rect.left_bottom() - egui::vec2(0., 30.),
-                            egui::vec2(cell_size.x, 30.),
-                        ),
-                        egui::Label::new(
-                            RichText::new(format!("{}\n{}", names[tile], tile))
-                                .color(if selected {
-                                    Color32::YELLOW
-                                } else {
-                                    Color32::LIGHT_GRAY
-                                })
-                                .small(),
-                        )
-                        .truncate(),
+                    let label = format!("{}\n{}", names[tile], tile);
+                    let cell = crate::editor_ui::asset_browser::cell(
+                        ui,
+                        egui::vec2(72., 80.),
+                        &label,
+                        selected,
                     );
+                    if let Some(tex) = ectx.editor.palette_tex.get(sprite) {
+                        crate::editor_ui::asset_browser::draw_icon_fit(
+                            ui.painter(),
+                            tex,
+                            crate::editor_ui::asset_browser::icon_rect_of(cell.rect),
+                        );
+                    }
                     let cell = cell.on_hover_text(format!("{} ({})", names[tile], tile));
                     // Единый клик-таргет: мультивыбор включён — клик
                     // тогглит элемент в списке, иначе — одиночный выбор.
@@ -1053,35 +1066,6 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
         });
 }
 
-/// Ячейка палитры фиксированного размера: возвращает реакцию всей ячейки
-/// и прямоугольник иконки (верх ячейки, минус подпись).
-fn palette_cell(ui: &mut Ui, cell_size: egui::Vec2) -> (egui::Response, egui::Rect) {
-    let (rect, resp) = ui.allocate_exact_size(cell_size, Sense::click());
-    let icon_rect = egui::Rect::from_min_size(
-        rect.left_top() + egui::vec2(4., 4.),
-        egui::vec2(cell_size.x - 8., cell_size.y - 34.),
-    );
-    (resp, icon_rect)
-}
-
-/// Рисует текстуру aspect-fit в прямоугольнике (центрирование).
-fn draw_icon_fit(painter: &egui::Painter, tex: &egui::TextureHandle, rect: egui::Rect) {
-    let [tw, th] = tex.size();
-    let (tw, th) = (tw as f32, th as f32);
-    if tw <= 0. || th <= 0. {
-        return;
-    }
-    let scale = (rect.width() / tw).min(rect.height() / th);
-    let (w, h) = (tw * scale, th * scale);
-    let min = rect.center() - egui::vec2(w * 0.5, h * 0.5);
-    let icon_rect = egui::Rect::from_min_size(min, egui::vec2(w, h));
-    painter.image(
-        tex.id(),
-        icon_rect,
-        egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-        Color32::WHITE,
-    );
-}
 /// Грид декораций (buildings=false) или строений (buildings=true):
 /// иконки registry.objects по obj_type, поиск + фильтр категории.
 fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
@@ -1205,28 +1189,20 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                     } else {
                         ectx.editor.active_deco == Some(idx)
                     };
-                    let cell_size = egui::vec2(72., 80.);
-                    let (resp, icon_rect) = palette_cell(ui, cell_size);
-                    if let Some(tex) = ectx.editor.palette_tex.get(&obj.path) {
-                        draw_icon_fit(ui.painter(), tex, icon_rect);
-                    }
-                    // Подпись: фикс. высота 30, усечение (лесенка исключена).
-                    ui.put(
-                        egui::Rect::from_min_size(
-                            resp.rect.left_bottom() - egui::vec2(0., 30.),
-                            egui::vec2(cell_size.x, 30.),
-                        ),
-                        egui::Label::new(
-                            egui::RichText::new(format!("{}\n({})", obj.name, obj.index))
-                                .small()
-                                .color(if selected {
-                                    egui::Color32::YELLOW
-                                } else {
-                                    egui::Color32::LIGHT_GRAY
-                                }),
-                        )
-                        .truncate(),
+                    let label = format!("{}\n({})", obj.name, obj.index);
+                    let resp = crate::editor_ui::asset_browser::cell(
+                        ui,
+                        egui::vec2(72., 80.),
+                        &label,
+                        selected,
                     );
+                    if let Some(tex) = ectx.editor.palette_tex.get(&obj.path) {
+                        crate::editor_ui::asset_browser::draw_icon_fit(
+                            ui.painter(),
+                            tex,
+                            crate::editor_ui::asset_browser::icon_rect_of(resp.rect),
+                        );
+                    }
                     let resp = resp.on_hover_text(format!(
                         "{} ({}) {:?}",
                         obj.name, obj.index, obj.size
@@ -1674,6 +1650,9 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             if interact {
                 if let Some(sel) = sel {
                     ectx.editor.selection = Some(sel);
+                    // П.6: инфо-тайл создаётся при ВЫБОРЕ объекта
+                    // (раньше — только для событий через PENDING).
+                    open_info_pane(ectx, sel);
                     object_clicked = true;
                 } else {
                     ectx.editor.selection = None;
@@ -1685,7 +1664,13 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     // ПКМ down: интеракт — захват объекта (драг ИЛИ клик-клик carrying).
     if response.drag_started_by(egui::PointerButton::Secondary) && interact {
         if let Some(pos) = response.interact_pointer_pos() {
-            let sel = cell_at(pos).and_then(|(cx, cy)| object_at(ectx, cx, cy));
+            let cell = cell_at(pos);
+            let sel = cell.and_then(|(cx, cy)| object_at(ectx, cx, cy));
+            if std::env::var("DT_EGUI_DEBUG").is_ok() {
+                eprintln!(
+                    "[carry] PKM down: pos={pos:?} cell={cell:?} hit={sel:?}"
+                );
+            }
             if let Some(sel) = sel {
                 let from = match sel {
                     crate::state::Selection::Lantern(i) => {
@@ -1704,6 +1689,9 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                     kind: sel,
                     from,
                 });
+                if std::env::var("DT_EGUI_DEBUG").is_ok() {
+                    eprintln!("[carry] carrying=Some({sel:?}) from={from:?}");
+                }
             }
         }
     }
@@ -1727,26 +1715,47 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                 }
             };
             editor.carrying = None;
+            let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
+            if debug {
+                eprintln!(
+                    "[carry] drop cell={to:?} cmd={:?} from={from:?}",
+                    command
+                );
+            }
             match editor.history.execute(command, &mut editor.state) {
                 CommandResult::Applied => {
+                    if debug {
+                        eprintln!("[carry] Applied; bake_dirty=true");
+                    }
                     editor.status = format!("Перенос: {:?} → {:?}", from, to);
                     editor.bake_dirty = true;
                 }
-                CommandResult::Noop => {}
-            }
-        };
-        // Клик-клик: ПКМ нажат в новой клетке (не по тому же объекту).
-        if response.drag_started_by(egui::PointerButton::Secondary) {
-            if let Some(pos) = response.interact_pointer_pos() {
-                if let Some(to) = cell_at(pos) {
-                    if to != carried.from {
-                        fix(ectx, to);
+                CommandResult::Noop => {
+                    if debug {
+                        eprintln!("[carry] Noop (позиция не изменилась/протух индекс)");
                     }
                 }
             }
-        }
-        // Обычный драг: отпустили ПКМ в новой клетке.
-        if response.drag_stopped_by(egui::PointerButton::Secondary) {
+        };
+        // Клик-клик: ПКМ нажат в новой клетке (не по тому же объекту).
+        // ДЕЛАЕМ и на drag_started (клик-клик), и на drag_stopped (драг):
+        // PKM down на объекте стартует carrying, PKM down в новой клетке
+        // фиксирует; если это был драг — drag_stopped фиксирует.
+        let click_fixed = {
+            let mut fixed = false;
+            if response.drag_started_by(egui::PointerButton::Secondary) {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    if let Some(to) = cell_at(pos) {
+                        if to != carried.from {
+                            fix(ectx, to);
+                            fixed = true;
+                        }
+                    }
+                }
+            }
+            fixed
+        };
+        if !click_fixed && response.drag_stopped_by(egui::PointerButton::Secondary) {
             if let Some(pos) = response.interact_pointer_pos() {
                 if let Some(to) = cell_at(pos) {
                     fix(ectx, to);
@@ -1798,8 +1807,10 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                     .find(|o| o.index == b.id)
                     .map(|o| (o.size.0.max(1) as usize, o.size.1.max(1) as usize))
                     .unwrap_or((1, 1));
+                // Хитбокс уходит ВЛЕВО-ВВЕРХ от якоря (pos — правый-нижний
+                // угол): [pos-w+1..pos] × [pos-h+1..pos], как в calc_hitboxes.
                 (
-                    b.pos,
+                    (b.pos.0 + 1 - w, b.pos.1 + 1 - h),
                     (w, h),
                     format!("Строение #{} ({},{})", b.id, b.pos.0, b.pos.1),
                 )
@@ -2283,6 +2294,42 @@ fn multi_pick_tile(
 /// Применить активный инструмент: построить команду и выполнить.
 fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
     let editor = &mut ectx.editor;
+    // Ластик (п.5): кисть/заливка чистят выбранные категории. Тайл —
+    // сброс в базовый (id 0) той же кистью; декор/строение — EraseAt.
+    if editor.brush.erase_mode
+        && matches!(
+            editor.tool,
+            editor_core::Tool::Brush | editor_core::Tool::BucketFill
+        )
+    {
+        let cats = editor.brush.paint_categories.clone();
+        if cats.contains(&crate::state::PaintCategory::Tiles) {
+            editor.active_tile = 0;
+        }
+        if cats.contains(&crate::state::PaintCategory::Decos)
+            || cats.contains(&crate::state::PaintCategory::Buildings)
+        {
+            match editor.history.execute(
+                Box::new(editor_core::command::EraseAt::new(tile)),
+                &mut editor.state,
+            ) {
+                CommandResult::Applied => {
+                    editor.status = "Ластик: объект удалён".into();
+                    editor.bake_dirty = true;
+                }
+                CommandResult::Noop => {}
+            }
+        }
+        if cats.contains(&crate::state::PaintCategory::Tiles) {
+            // Тайл-ластик идёт обычным путём ниже (PaintTile/BatchPlace
+            // в базовый тайл) — выходим, чтобы не задвоить команду.
+            if !editor.brush.multi_select.is_empty() {
+                return;
+            }
+        } else {
+            return;
+        }
+    }
     // Мульти-выбор активен: элементы списка применяются к клеткам фигуры
     // (BatchPlace — одна undo-запись).
     if !editor.brush.multi_select.is_empty()
@@ -3118,6 +3165,66 @@ thread_local! {
     static PENDING_EVENT_OPEN: std::cell::RefCell<Vec<usize>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
+/// Открыть/поднять инфо-тайл объекта в screen_tree (п.6): 8а —
+/// непинned заменяют друг друга; дубль — просто активируется.
+fn open_info_pane(ectx: &mut EditorCtx, sel: crate::state::Selection) {
+    if !selection_exists(ectx, sel) {
+        return;
+    }
+    // Pin «по умолчанию» — объект закрепляется при открытии.
+    let will_pin = ectx.editor.pin_by_default && !ectx.editor.pinned.contains(&sel);
+    let tree = ectx.editor.screen_tree.get_or_insert_with(|| {
+        egui_tiles::Tree::new_tabs("editor_screen_tree", vec![])
+    });
+    let already = tree
+        .tiles
+        .iter()
+        .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel));
+    if !already {
+        // Непинned инфо-тайлы замещают друг друга.
+        if !ectx.editor.pinned.contains(&sel) {
+            let stale: Vec<egui_tiles::TileId> = tree
+                .tiles
+                .iter()
+                .filter_map(|(id, tile)| match tile {
+                    egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p))
+                        if !ectx.editor.pinned.contains(p) =>
+                    {
+                        Some(*id)
+                    }
+                    _ => None,
+                })
+                .collect();
+            for id in stale {
+                tree.remove_recursively(id);
+            }
+        }
+        let pane_id = tree
+            .tiles
+            .insert_pane(crate::state::EditorPane::Info(sel));
+        if will_pin {
+            ectx.editor.pinned.push(sel);
+        }
+        if let Some(root) = tree.root() {
+            tree.move_tile_to_container(pane_id, root, usize::MAX, true);
+        }
+    }
+    // Поднять вкладку (даже если панель уже была).
+    let tree = ectx.editor.screen_tree.as_mut().expect("just inserted");
+    let pane_id = tree
+        .tiles
+        .iter()
+        .find(|(_, tile)| {
+            matches!(
+                tile,
+                egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel
+            )
+        })
+        .map(|(id, _)| *id);
+    if let Some(pane_id) = pane_id {
+        tree.make_active(|id, _| id == pane_id);
+    }
+}
 
 /// Применить отложенные открытия событий (вызывать в кадре egui,
 /// когда EditorUi доступен).
@@ -3125,45 +3232,6 @@ fn flush_pending_event_opens(ectx: &mut EditorCtx) {
     let pending = PENDING_EVENT_OPEN.with(|cell| cell.borrow_mut().drain(..).collect::<Vec<_>>());
     for index in pending {
         let sel = crate::state::Selection::Event(index);
-        if !selection_exists(ectx, sel) {
-            continue;
-        }
-        // 8а: непинned инфо-тайлы ЗАМЕНЯЮТ друг друга — при открытии
-        // нового (без пина) старые непинned Info-панели закрываются.
-        let will_pin =
-            ectx.editor.pin_by_default || ectx.editor.selection == Some(sel);
-        let tree = ectx.editor.screen_tree.get_or_insert_with(|| {
-            egui_tiles::Tree::new_tabs("editor_screen_tree", vec![])
-        });
-        let already = tree
-            .tiles
-            .iter()
-            .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel));
-        if !already {
-            if !ectx.editor.pinned.contains(&sel) {
-                let mut stale: Vec<egui_tiles::TileId> = Vec::new();
-                for (id, tile) in tree.tiles.iter() {
-                    if let egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) = tile {
-                        if !ectx.editor.pinned.contains(p) {
-                            stale.push(*id);
-                        }
-                    }
-                }
-                for id in stale {
-                    tree.remove_recursively(id);
-                }
-            }
-            let pane_id = tree
-                .tiles
-                .insert_pane(crate::state::EditorPane::Info(sel));
-            if will_pin {
-                ectx.editor.pinned.push(sel);
-            }
-            if let Some(root) = tree.root() {
-                tree.move_tile_to_container(pane_id, root, usize::MAX, true);
-            } else {
-                tree.tiles.set_visible(pane_id, true);
-            }
-        }
+        open_info_pane(ectx, sel);
     }
 }

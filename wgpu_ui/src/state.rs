@@ -342,6 +342,14 @@ pub struct BrushConfig {
     /// Мульти-выбор палитры: несколько элементов, применяются случайно
     /// или последовательно (клетки фигуры под курсором).
     pub multi_select: Vec<MultiPick>,
+    /// Режим мультивыбора палитры: клик по ячейке тогглит элемент
+    /// (не снимая остальные), рисует список мульти-выбора.
+    pub multi_mode: bool,
+    /// Категории рисования (п.4): несколько одновременно — мазок
+    /// применяет все (тайл + декор + строение в клетку).
+    pub paint_categories: Vec<PaintCategory>,
+    /// Режим «Ластик» (п.5): кисть/заливка ЧИСТЯТ выбранные категории.
+    pub erase_mode: bool,
     /// Порядок применения мульти-выбора.
     pub multi_order: MultiOrder,
     /// Зерно рандома мульти-выбора: hash координат клетки (детерминизм
@@ -356,6 +364,9 @@ impl Default for BrushConfig {
             size: 1,
             fill_max_volume: 0,
             fill_max_range: 0,
+            multi_mode: false,
+            paint_categories: vec![PaintCategory::Tiles],
+            erase_mode: false,
             multi_select: Vec::new(),
             multi_order: MultiOrder::Random,
             multi_seed_salt: 0,
@@ -389,6 +400,32 @@ impl BrushShape {
             BrushShape::Ring => "Кольцо",
             BrushShape::Square => "Квадрат",
             BrushShape::Perimeter => "Периметр",
+        }
+    }
+}
+
+/// Категория рисования (п.4): может быть выбрано несколько одновременно.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintCategory {
+    /// Тайлы (кисть).
+    Tiles,
+    /// Декорации.
+    Decos,
+    /// Строения.
+    Buildings,
+}
+
+impl PaintCategory {
+    pub const ALL: [PaintCategory; 3] = [
+        PaintCategory::Tiles,
+        PaintCategory::Decos,
+        PaintCategory::Buildings,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            PaintCategory::Tiles => "Тайлы",
+            PaintCategory::Decos => "Декор",
+            PaintCategory::Buildings => "Строения",
         }
     }
 }
