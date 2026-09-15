@@ -209,6 +209,140 @@ fn make_quad_overlay(pattern: &[u8], corner: usize, bw: f32, bh: f32, a: f32) ->
 /// текстур. Оверлей-текстуры кэшируются в gfx.overlay_cache ПЕРСИСТЕНТНО:
 /// на пару тайлов 32×22-текстура создаётся один раз за сессию (локальный
 /// кэш = до ~2000 текстур на каждый перезапек + утечка в gfx.textures).
+// ---------------- Режим «Оригинал» (notes/тайлы, точная копия) ----------------
+//
+// Атлас тайла 256×242 = сетка 8×11 кусочков 32×22. Клетка (tx,ty) берёт
+// кусочек по СВОЕЙ координате (периодический паттерн):
+//   col_idx = ((tx+1)%8+8)%8; row_idx = ((ty+1)%11+11)%11
+// Наплыв соседа: срез ТОЙ ЖЕ ориентации с атласа соседа, но ПОЛОВИНА
+// кусочка (верх/низ — полвысоты, лево/право — полуширины), альфа —
+// линейный градиент от шва BLEND_ALPHA=68 к 0 на середине клетки.
+// Цвет + градиент в одну CPU-текстуру (эквивалент вертексной
+// интерполяции DrawGradientQuad: оба линейны).
+
+/// Линейная альфа (u8) по прогрессу 0..1 от шва: 68 → 0.
+fn original_alpha(t: f32) -> u8 {
+    (68. * (1. - t)).round().clamp(0., 255.) as u8
+}
+
+/// Оверлей «Оригинал» для клетки (tx,ty) и стороны: RGBA 32×22 (но
+/// непусто только в половине клетки), цвет — кусок атласа СОСЕДА с
+/// соответствующим сдвигом половины кусочка, альфа — линейный градиент.
+/// side: 0=верх (верхняя половина, альфа 68 сверху), 1=низ (нижняя
+/// половина, альфа 68 снизу), 2=лево (левая половина, 68 слева),
+/// 3=право (правая половина, 68 справа).
+fn make_original_overlay(
+    neighbor_atlas: &image::RgbaImage,
+    tx: usize,
+    ty: usize,
+    side: usize,
+) -> Vec<u8> {
+    let (w, h) = (SIZE.0 as usize, SIZE.1 as usize); // 32×22
+    let mut bytes = vec![0u8; w * h * 4];
+    // Кусочек СОСЕДА по координате ТЕКУЩЕЙ клетки (как в оригинале:
+    // uv считаются от координаты клетки, куда наплывает сосед).
+    let col_idx = ((tx + 1) % 8 + 8) % 8;
+    let row_idx = ((ty + 1) % 11 + 11) % 11;
+    let atlas = neighbor_atlas.as_raw();
+    let sw = neighbor_atlas.width() as usize; // 256
+    let sh = neighbor_atlas.height() as usize; // 242
+    let half_h = h / 2; // 11
+    let half_w = w / 2; // 16
+    for py in 0..h {
+        for px in 0..w {
+            // Принадлежность клетки половине стороны.
+            let (t, inside) = match side {
+                0 => (py as f32 / half_h as f32, py < half_h),
+                1 => (
+                    (h - 1 - py) as f32 / half_h as f32,
+                    py >= h - half_h,
+                ),
+                2 => (px as f32 / half_w as f32, px < half_w),
+                _ => (
+                    (w - 1 - px) as f32 / half_w as f32,
+                    px >= w - half_w,
+                ),
+            };
+            if !inside {
+                continue;
+            }
+            // Пиксель кусочка атласа соседа: срез той же ориентации,
+            // но полкубка (верх/низ/лево/право — по стороне).
+            let (local_x, local_y) = match side {
+                0 => (px, py), // верхняя половина кусочка
+                1 => (px, py - (h - half_h)), // нижняя половина
+                2 => (px, py), // левая половина по X
+                _ => (px - (w - half_w), py), // правая половина по X
+            };
+            let ax = (col_idx * 32 + local_x) * sw / 256;
+            let ay = (row_idx * 22 + local_y) * sh / 242;
+            let src = (ay * sw + ax) * 4;
+            let dst = (py * w + px) * 4;
+            bytes[dst..dst + 3].copy_from_slice(&atlas[src..src + 3]);
+            bytes[dst + 3] = original_alpha(t.clamp(0., 1.));
+        }
+    }
+    bytes
+}
+
+/// Наплывы в стиле оригинала. Возвращает число использованных клеток-
+/// оверлеев. Кэш: (neighbor_id, side, tx mod 8, ty mod 11) — периодика
+/// атласа делает ключ полным.
+pub fn draw_original_overlays(
+    gfx: &mut Gfx,
+    tilemap: &TileMap<usize>,
+    tile_pixels: &[image::RgbaImage],
+) -> usize {
+    let size = tilemap.size;
+    let mut draws: Vec<(TexId, f32, f32)> = Vec::new();
+    for i in 0..size {
+        for j in 0..size {
+            let t_id = tilemap[(j, i)];
+            let (cx, cy) = (i as f32 * SIZE.0, j as f32 * SIZE.1);
+            // 4 прямых соседа; наплыв любого отличающегося (id<16 —
+            // легальный terrain). Сортировка по id соседа — детерминизм.
+            let mut edges: Vec<(usize, usize)> = Vec::new(); // (n_id, dir)
+            let mut check = |ni: isize, nj: isize, dir: usize| {
+                if ni >= 0 && nj >= 0 && (ni as usize) < size && (nj as usize) < size {
+                    let n_id = tilemap[(nj as usize, ni as usize)];
+                    if n_id != t_id && n_id < 16 {
+                        edges.push((n_id, dir));
+                    }
+                }
+            };
+            check(i as isize, j as isize - 1, 0); // верх
+            check(i as isize, j as isize + 1, 1); // низ
+            check(i as isize - 1, j as isize, 2); // лево
+            check(i as isize + 1, j as isize, 3); // право
+            edges.sort_unstable_by_key(|e| e.0);
+            for (n_id, dir) in edges {
+                // Кэш-ключ: сосед, сторона, периодика атласа клетки.
+                let key = (
+                    n_id * 4 + dir,
+                    (i + 1) % 8,
+                    11 * 8 + (j + 1) % 11, // 88..98: ряд атласа, иная ветка ключей
+                );
+                let tex = if let Some(&t) = gfx.overlay_cache.get(&key) {
+                    t
+                } else {
+                    let buf = make_original_overlay(&tile_pixels[n_id], i, j, dir);
+                    let t =
+                        gfx.push_texture_rgba(&buf, SIZE.0 as u32, SIZE.1 as u32, Filter::Nearest);
+                    gfx.overlay_cache.insert(key, t);
+                    t
+                };
+                draws.push((tex, cx, cy));
+            }
+        }
+    }
+    draws.sort_unstable_by_key(|d| d.0);
+    for (tex, x, y) in draws {
+        gfx.draw_texture(tex, x, y, SIZE.0, SIZE.1, WHITE);
+    }
+    gfx.overlay_cache.len()
+}
+
+/// Рисует наплывы поверх уже нарисованных тайлов. Возвращает число уникальных
 pub fn draw_blend_overlays(
     gfx: &mut Gfx,
     tilemap: &TileMap<usize>,
@@ -323,7 +457,9 @@ pub fn bake_map_textures(
     let t_bake = std::time::Instant::now();
     draw_tiles(gfx, assets, &gamemap.tilemap);
     let mut n_overlays = 0;
-    if blend_mode != BlendMode::Off {
+    if blend_mode == BlendMode::Original {
+        n_overlays = draw_original_overlays(gfx, &gamemap.tilemap, tile_pixels);
+    } else if blend_mode != BlendMode::Off {
         n_overlays = draw_blend_overlays(gfx, &gamemap.tilemap, tile_pixels, blend_mode);
     }
     gfx.end_pass();

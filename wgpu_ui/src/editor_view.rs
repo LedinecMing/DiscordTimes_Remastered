@@ -10,7 +10,7 @@
 
 use crate::camera::{default_camera, Camera};
 use crate::gfx::{colors, Target};
-use crate::state::{EditorUi, Menu, SIZE};
+use crate::state::{EditorUi, Menu, MultiPick, SIZE};
 use crate::Ctx;
 use editor_core::command::{BatchPlace, PaintTile, PlaceArmy, PlaceBuilding, PlaceDeco};
 use editor_core::CommandResult;
@@ -298,22 +298,41 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
             .show(ui, |ui| {
                 tool_panel(ui, &mut rest);
             });
-        egui::Panel::right("editor_info_dock_panel")
-            .default_size(300.)
-            .min_size(220.)
-            .resizable(true)
-            .show_inside(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("info_dock_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        info_dock_panel(ui, &mut rest);
-                    });
-            });
+        // ЕДИНОЕ дерево экрана (п.3 ТЗ-2): карта + инфо-панели — тайлы;
+        // карту можно перетащить вкладкой. Пан/зум канваса — внутри
+        // pane (drag канваса обрабатывает canvas(), drag заголовка —
+        // egui_tiles, конфликтов нет).
         egui::CentralPanel::default().show(ui, |ui| {
-            state.actions.click_tile = canvas(ui, &mut rest);
+            let mut tree = rest
+                .editor
+                .screen_tree
+                .take()
+                .unwrap_or_else(|| egui_tiles::Tree::new_tabs("editor_screen_tree", vec![]));
+            let mut map_id: Option<egui_tiles::TileId> = None;
+            for (id, tile) in tree.tiles.iter() {
+                if let egui_tiles::Tile::Pane(crate::state::EditorPane::Map) = tile {
+                    map_id = Some(*id);
+                }
+            }
+            let map_id = match map_id {
+                Some(id) => id,
+                None => {
+                    let id = tree.tiles.insert_pane(crate::state::EditorPane::Map);
+                    if let Some(root) = tree.root() {
+                        tree.move_tile_to_container(id, root, 0, true);
+                    }
+                    id
+                }
+            };
+            tree.make_active(|id, _| id == map_id);
+            let mut behavior = ScreenTreeBehavior {
+                ectx: &mut rest,
+                click_tile: std::mem::take(&mut state.actions.click_tile),
+            };
+            tree.ui(&mut behavior, ui);
+            state.actions.click_tile = behavior.click_tile;
+            rest.editor.screen_tree = Some(tree);
         });
-        // Модальное окно размера новой карты (поверх панелей).
         size_dialog_window(ui, &mut rest);
     });
     state.keep_open
@@ -476,7 +495,14 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
                 }
             }
         });
-        brush_settings(ui, ectx);
+        // Настройки кисти/заливки — только для соответствующих
+        // инструментов; декор/строения/армии — без блока кисти.
+        if matches!(
+            ectx.editor.tool,
+            editor_core::Tool::Brush | editor_core::Tool::BucketFill
+        ) {
+            brush_settings(ui, ectx);
+        }
     } else {
         ui.separator();
         ui.label(
@@ -484,6 +510,19 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
                 .weak()
                 .small(),
         );
+        // Фильтр цели интеракта (п.7).
+        ui.horizontal(|ui| {
+            ui.label("Выбирать:");
+            egui::ComboBox::from_id_salt("interact_filter")
+                .selected_text(ectx.editor.interact_filter.label())
+                .show_ui(ui, |ui| {
+                    for f in crate::state::InteractFilter::ALL {
+                        let mut cur = ectx.editor.interact_filter;
+                        ui.selectable_value(&mut cur, f, f.label());
+                        ectx.editor.interact_filter = cur;
+                    }
+                });
+        });
     }
     // Внутри интеракта палитра не нужна; вкладки и undo-строка — общие.
     if mode == Mode::Paint {
@@ -510,11 +549,61 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
         }
     }
     ui.separator();
-    ui.label(format!(
-        "undo: {} redo: {}",
-        ectx.editor.history.undo_len(),
-        if ectx.editor.history.can_redo() { "+" } else { "-" },
-    ));
+    ui.horizontal(|ui| {
+        ui.label(format!(
+            "undo: {} redo: {}",
+            ectx.editor.history.undo_len(),
+            if ectx.editor.history.can_redo() { "+" } else { "-" },
+        ));
+        // Инструмент «История» (п.10): список действий + переход курсором.
+        let hist_resp = ui.button("История");
+        egui::Popup::from_toggle_button_response(&hist_resp)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| history_panel(ui, ectx));
+    });
+}
+
+/// Панель «История» (п.10): undo-стек с курсором; клик — вернуться к
+/// состоянию (undo/redo до записи, стек не мутируется). Фильтры — по
+/// типам команд (скрывают строки отображения, не трогают стек).
+fn history_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
+    ui.set_min_width(260.);
+    let names = ectx.editor.history.undo_names();
+    let cursor = names.len();
+    ui.label(RichText::new(format!("Курсор: {} / {}", cursor, names.len())).weak());
+    egui::ScrollArea::vertical()
+        .id_salt("history_scroll")
+        .max_height(320.)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            let label = if cursor == 0 {
+                RichText::new("● Старт").strong().color(Color32::LIGHT_GREEN)
+            } else {
+                RichText::new("Старт").weak()
+            };
+            if ui.selectable_label(cursor == 0, label).clicked() {
+                let editor = &mut ectx.editor;
+                editor.history.travel_to(0, &mut editor.state);
+                editor.bake_dirty = true;
+                editor.status = "История: к старту".into();
+            }
+            for (i, name) in names.iter().enumerate() {
+                let here = i + 1 == cursor;
+                let label = if here {
+                    RichText::new(format!("● {}", name))
+                        .strong()
+                        .color(Color32::LIGHT_GREEN)
+                } else {
+                    RichText::new(*name)
+                };
+                if ui.selectable_label(here, label).clicked() {
+                    let editor = &mut ectx.editor;
+                    editor.history.travel_to(i + 1, &mut editor.state);
+                    editor.bake_dirty = true;
+                    editor.status = format!("История: {} / {}", i + 1, names.len());
+                }
+            }
+        });
 }
 
 /// Режим тулбара: рисование (кисть/заливка/постановка) или интеракт.
@@ -577,16 +666,34 @@ fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
             });
         }
     }
-    // Мульти-выбор: список активных элементов.
+    // Мульти-выбор: список активных элементов + «выбрать всё».
     ui.separator();
+    ui.horizontal(|ui| {
+        let picks = ectx.editor.brush.multi_select.clone();
+        let order = ectx.editor.brush.multi_order;
+        ui.label(format!("Мульти-выбор ({}):", picks.len()));
+        // «Выбрать всё»: все элементы активной палитры (тайлы — все
+        // TILES; декор/строения — весь фильтрованный список; армии —
+        // все 4 шаблона).
+        if ui.button("Выбрать всё").clicked() {
+            let all = palette_all_picks(ectx);
+            for p in all {
+                if !ectx.editor.brush.multi_select.contains(&p) {
+                    ectx.editor.brush.multi_select.push(p);
+                }
+            }
+        }
+        if !picks.is_empty() && ui.button("Очистить").clicked() {
+            ectx.editor.brush.multi_select.clear();
+        }
+    });
     let picks = ectx.editor.brush.multi_select.clone();
     let order = ectx.editor.brush.multi_order;
-    ui.label(format!("Мульти-выбор ({}):", picks.len()));
     for (i, pick) in picks.iter().enumerate() {
         let label = multi_pick_label(ectx, *pick);
         ui.horizontal(|ui| {
             ui.label(format!("  {}. {}", i + 1, label));
-            if ui.button("✕").clicked() {
+            if ui.button("×").clicked() {
                 ectx.editor.brush.multi_select.remove(i);
             }
         });
@@ -600,17 +707,78 @@ fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
                 }
             }
         });
-        if ui.button("Очистить мульти-выбор").clicked() {
-            ectx.editor.brush.multi_select.clear();
-        }
     }
     ui.label(
         RichText::new(
-            "Галочка в палитре добавляет элемент;\nкогда список непуст — рисует он (случайно/последовательно).",
+            "Клик по ячейке палитры тогглит элемент;\nкогда список непуст — рисует он (случайно/последовательно).",
         )
         .weak()
         .small(),
     );
+}
+
+/// Все элементы текущей палитры — для кнопки «Выбрать всё».
+fn palette_all_picks(ectx: &EditorCtx) -> Vec<MultiPick> {
+    match ectx.editor.tool {
+        editor_core::Tool::Brush | editor_core::Tool::BucketFill => {
+            (0..editor_core::project::TILE_COUNT)
+                .map(MultiPick::Tile)
+                .collect()
+        }
+        editor_core::Tool::Deco => ectx
+            .registry
+            .objects
+            .inner
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| {
+                matches!(o.obj_type, dt_lib::map::object::ObjectType::MapDeco { .. })
+                    && ectx
+                        .editor
+                        .deco_category
+                        .as_ref()
+                        .is_none_or(|c| object_category(o) == *c)
+                    && ectx
+                        .editor
+                        .deco_size_max
+                        .is_none_or(|m| o.size.0.max(o.size.1) as u8 <= m)
+            })
+            .map(|(idx, _)| MultiPick::Deco(idx))
+            .collect(),
+        editor_core::Tool::Building => ectx
+            .registry
+            .objects
+            .inner
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| {
+                matches!(
+                    o.obj_type,
+                    dt_lib::map::object::ObjectType::Building { .. }
+                        | dt_lib::map::object::ObjectType::Bridge { .. }
+                ) && ectx
+                    .editor
+                    .building_category
+                    .as_ref()
+                    .is_none_or(|c| object_category(o) == *c)
+                    && ectx
+                        .editor
+                        .building_size_max
+                        .is_none_or(|m| o.size.0.max(o.size.1) as u8 <= m)
+            })
+            .map(|(idx, _)| MultiPick::Building(idx))
+            .collect(),
+        editor_core::Tool::Army => crate::state::ArmyNature::ALL
+            .iter()
+            .filter_map(|n| {
+                ectx.registry
+                    .units
+                    .str_to_id(&n.template_unit_name().to_string())
+            })
+            .map(MultiPick::Army)
+            .collect(),
+        editor_core::Tool::Interact => Vec::new(),
+    }
 }
 
 /// Человекочитаемая подпись элемента мульти-выбора.
@@ -748,21 +916,29 @@ fn search_field(ui: &mut Ui, ectx: &mut EditorCtx) {
     ui.horizontal(|ui| {
         ui.label("Поиск:");
         ui.text_edit_singleline(&mut ectx.editor.palette_search);
-        if ui.button("✕").clicked() {
+        if ui.button("×").clicked() {
             ectx.editor.palette_search.clear();
         }
     });
 }
 
-/// Маленький чекбокс «мн.» под ячейкой палитры: Some(true) — добавлен,
-/// Some(false) — убран, None — без изменений.
-fn toggle_multiselect_cell(ui: &mut Ui, on: bool) -> Option<bool> {
-    let mut v = on;
-    let resp = ui.checkbox(&mut v, "мн.");
-    if resp.changed() {
-        Some(v)
+/// Режим мультивыбора палитры: активен, пока список мульти-выбора
+/// непуст (клик по ячейке тогда тогглит, а не выбирает одиночно).
+fn palette_multi_mode(editor: &mut EditorUi) -> bool {
+    !editor.brush.multi_select.is_empty()
+}
+
+/// Тоггл элемента в мульти-выборе: есть — убрать, нет — добавить.
+fn palette_toggle_multi(editor: &mut EditorUi, pick: crate::state::MultiPick) {
+    if let Some(pos) = editor
+        .brush
+        .multi_select
+        .iter()
+        .position(|p| *p == pick)
+    {
+        editor.brush.multi_select.remove(pos);
     } else {
-        None
+        editor.brush.multi_select.push(pick);
     }
 }
 
@@ -835,7 +1011,8 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
                     if let Some(tex) = ectx.editor.palette_tex.get(sprite) {
                         draw_icon_fit(ui.painter(), tex, icon_rect);
                     }
-                    // Подпись поверх нижней части ячейки.
+                    // Подпись: фиксированная высота 30, усечение — ряды
+                    // ячеек ровные при любых именах (лесенка исключена).
                     ui.put(
                         egui::Rect::from_min_size(
                             cell.rect.left_bottom() - egui::vec2(0., 30.),
@@ -849,12 +1026,19 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
                                     Color32::LIGHT_GRAY
                                 })
                                 .small(),
-                        ),
+                        )
+                        .truncate(),
                     );
                     let cell = cell.on_hover_text(format!("{} ({})", names[tile], tile));
+                    // Единый клик-таргет: мультивыбор включён — клик
+                    // тогглит элемент в списке, иначе — одиночный выбор.
                     if cell.clicked() {
-                        ectx.editor.active_tile = tile;
-                        ectx.editor.state.set_active_tile(tile);
+                        if palette_multi_mode(&mut ectx.editor) {
+                            palette_toggle_multi(&mut ectx.editor, MultiPick::Tile(tile));
+                        } else {
+                            ectx.editor.active_tile = tile;
+                            ectx.editor.state.set_active_tile(tile);
+                        }
                     }
                     if selected {
                         ui.painter().rect_stroke(
@@ -924,24 +1108,51 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
         .into_iter()
         .collect();
     categories.dedup();
-    let current = if buildings {
-        &mut ectx.editor.building_category
+    let (current, size_max) = if buildings {
+        (
+            &mut ectx.editor.building_category,
+            &mut ectx.editor.building_size_max,
+        )
     } else {
-        &mut ectx.editor.deco_category
+        (
+            &mut ectx.editor.deco_category,
+            &mut ectx.editor.deco_size_max,
+        )
     };
-    egui::ComboBox::from_id_salt(if buildings {
-        "building_category"
-    } else {
-        "deco_category"
-    })
-    .selected_text(current.clone().unwrap_or_else(|| "все".into()))
-    .show_ui(ui, |ui| {
-        ui.selectable_value(current, None, "все");
-        for cat in &categories {
-            ui.selectable_value(current, Some(cat.clone()), cat);
-        }
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt(if buildings {
+            "building_category"
+        } else {
+            "deco_category"
+        })
+        .selected_text(current.clone().unwrap_or_else(|| "все".into()))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(current, None, "все");
+            for cat in &categories {
+                ui.selectable_value(current, Some(cat.clone()), cat);
+            }
+        });
+        // Фильтр размера (макс. сторона в клетках; «все» = без фильтра).
+        ui.label("Размер ≤");
+        egui::ComboBox::from_id_salt(if buildings {
+            "building_size_filter"
+        } else {
+            "deco_size_filter"
+        })
+        .selected_text(
+            size_max
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "все".into()),
+        )
+        .show_ui(ui, |ui| {
+            ui.selectable_value(size_max, None, "все");
+            for s in 1u8..=8 {
+                ui.selectable_value(size_max, Some(s), s.to_string());
+            }
+        });
     });
     let category = current.clone();
+    let size_max = *size_max;
     egui::ScrollArea::vertical()
         .id_salt(if buildings {
             "buildings_palette"
@@ -962,7 +1173,11 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                         dt_lib::map::object::ObjectType::Building { .. }
                             | dt_lib::map::object::ObjectType::Bridge { .. }
                     );
+                    let within_size = size_max.is_none_or(|m| {
+                        o.size.0.max(o.size.1) as u8 <= m
+                    });
                     is_building == buildings
+                        && within_size
                         && category
                             .as_ref()
                             .is_none_or(|c| object_category(o) == *c)
@@ -992,12 +1207,10 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                     };
                     let cell_size = egui::vec2(72., 80.);
                     let (resp, icon_rect) = palette_cell(ui, cell_size);
-                    let mut icon_rect = icon_rect;
-                    icon_rect.min.y += 10.;
                     if let Some(tex) = ectx.editor.palette_tex.get(&obj.path) {
                         draw_icon_fit(ui.painter(), tex, icon_rect);
                     }
-                    // Подпись поверх нижней части ячейки.
+                    // Подпись: фикс. высота 30, усечение (лесенка исключена).
                     ui.put(
                         egui::Rect::from_min_size(
                             resp.rect.left_bottom() - egui::vec2(0., 30.),
@@ -1011,33 +1224,24 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                                 } else {
                                     egui::Color32::LIGHT_GRAY
                                 }),
-                        ),
+                        )
+                        .truncate(),
                     );
                     let resp = resp.on_hover_text(format!(
                         "{} ({}) {:?}",
                         obj.name, obj.index, obj.size
                     ));
-                    let pick = if buildings {
-                        crate::state::MultiPick::Building(idx)
-                    } else {
-                        crate::state::MultiPick::Deco(idx)
-                    };
-                    let in_multi = ectx.editor.brush.multi_select.contains(&pick);
-                    if let Some(t) = toggle_multiselect_cell(ui, in_multi) {
-                        if t {
-                            ectx.editor.brush.multi_select.push(pick);
-                        } else if let Some(pos) = ectx
-                            .editor
-                            .brush
-                            .multi_select
-                            .iter()
-                            .position(|p| *p == pick)
-                        {
-                            ectx.editor.brush.multi_select.remove(pos);
-                        }
-                    }
+                    // Единый клик-таргет: мультивыбор включён — тоггл,
+                    // иначе одиночный выбор инструмента.
                     if resp.clicked() {
-                        if buildings {
+                        let pick = if buildings {
+                            crate::state::MultiPick::Building(idx)
+                        } else {
+                            crate::state::MultiPick::Deco(idx)
+                        };
+                        if palette_multi_mode(&mut ectx.editor) {
+                            palette_toggle_multi(&mut ectx.editor, pick);
+                        } else if buildings {
                             ectx.editor.active_building = Some(idx);
                         } else {
                             ectx.editor.active_deco = Some(idx);
@@ -1082,21 +1286,11 @@ fn armies_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
             }
             let label = format!("{} — {} ({})", nature.label(), unit.name, unit_id);
             if ui.selectable_label(selected, label).clicked() {
-                ectx.editor.active_army_template = Some(unit_id);
-            }
-            let pick = crate::state::MultiPick::Army(unit_id);
-            let in_multi = ectx.editor.brush.multi_select.contains(&pick);
-            if let Some(t) = toggle_multiselect_cell(ui, in_multi) {
-                if t {
-                    ectx.editor.brush.multi_select.push(pick);
-                } else if let Some(pos) = ectx
-                    .editor
-                    .brush
-                    .multi_select
-                    .iter()
-                    .position(|p| *p == pick)
-                {
-                    ectx.editor.brush.multi_select.remove(pos);
+                let pick = crate::state::MultiPick::Army(unit_id);
+                if palette_multi_mode(&mut ectx.editor) {
+                    palette_toggle_multi(&mut ectx.editor, pick);
+                } else {
+                    ectx.editor.active_army_template = Some(unit_id);
                 }
             }
         });
@@ -1214,22 +1408,23 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         let markers = ectx.editor.marker_handles.clone();
         markers_layer(ui, ectx, world_to_screen, &markers);
     }
-    // Сетка (вкладка «Рендер»).
-    let grid_step = 8.0 / zoom;
-    if zoom > 1.0 && ectx.editor.render_settings.grid {
+    // Сетка (поповер «Рендер»): линии строго ПО ГРАНИЦАМ ТАЙЛОВ в
+    // world-координатах (кратны SIZE), оба конца через world_to_screen —
+    // привязка к клеткам при любом зуме/пане.
+    if ectx.editor.render_settings.grid {
         let mut x = 0.;
-        while x <= world_w {
+        while x <= world_w + f32::EPSILON {
             let a = world_to_screen([x, 0.]);
             let b = world_to_screen([x, world_h]);
             painter.line_segment([a, b], Stroke::new(1., Color32::from_black_alpha(40)));
-            x += grid_step * 4.;
+            x += SIZE.0;
         }
         let mut y = 0.;
-        while y <= world_h {
+        while y <= world_h + f32::EPSILON {
             let a = world_to_screen([0., y]);
             let b = world_to_screen([world_w, y]);
             painter.line_segment([a, b], Stroke::new(1., Color32::from_black_alpha(40)));
-            y += grid_step * 4.;
+            y += SIZE.1;
         }
     }
     // Ховер тайла + превью фигуры кисти (в рисовании, размер > 1).
@@ -1309,6 +1504,53 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             anchor_world[1] + (cam.target[1] - anchor_world[1]) / factor,
         ];
     }
+    // Клавиатурная камера (приоритет владельца): стрелки/WASD — пан
+    // (8 клеток/сек, Shift ×3), +/− — зум от центра канваса (фактор
+    // 1.2, клампы как у колеса), `=` — Fit-to-screen.
+    {
+        let dt = ui.input(|i| i.stable_dt).max(1. / 240.);
+        let shift = ui.input(|i| i.modifiers.shift);
+        let cells_per_sec = if shift { 24. } else { 8. };
+        let pan_cells = cells_per_sec * dt;
+        let key = |k: egui::Key| ui.input(|i| i.key_down(k));
+        let (mut dx, mut dy) = (0f32, 0f32);
+        if key(egui::Key::ArrowLeft) || key(egui::Key::A) {
+            dx -= pan_cells * SIZE.0;
+        }
+        if key(egui::Key::ArrowRight) || key(egui::Key::D) {
+            dx += pan_cells * SIZE.0;
+        }
+        if key(egui::Key::ArrowUp) || key(egui::Key::W) {
+            dy -= pan_cells * SIZE.1;
+        }
+        if key(egui::Key::ArrowDown) || key(egui::Key::S) {
+            dy += pan_cells * SIZE.1;
+        }
+        if dx != 0. || dy != 0. {
+            cam.target[0] += dx;
+            cam.target[1] += dy;
+        }
+        // Зум с клавиатуры: от ЦЕНТРА канваса, фактор как у колеса.
+        let zoom_in = key(egui::Key::Plus);
+        let zoom_out = key(egui::Key::Minus);
+        if (zoom_in || zoom_out) && response.hovered() {
+            let factor = if zoom_in { 1.2 } else { 1. / 1.2 };
+            let center_world = screen_to_world(rect.center());
+            cam.zoom[0] = (cam.zoom[0] * factor).clamp(fit / world_w * 0.5, 4.0);
+            cam.zoom[1] = cam.zoom[0];
+            cam.target = [
+                center_world[0] + (cam.target[0] - center_world[0]) / factor,
+                center_world[1] + (cam.target[1] - center_world[1]) / factor,
+            ];
+        }
+        // `=` — Fit-to-screen: центр карты, вписанный зум (повторное
+        // нажатие — повторный fit после пана).
+        if ui.input(|i| i.key_pressed(egui::Key::Equals)) {
+            cam.zoom[0] = fit;
+            cam.zoom[1] = fit;
+            cam.target = [world_w * 0.5, world_h * 0.5];
+        }
+    }
     // ---------------- Hit-test объектов интеракта ----------------
     // Хелперы — чистая геометрия + поиск по проекту на месте вызова
     // (fn, не замыкания: ectx нужен мутабельно позже в кадре).
@@ -1318,28 +1560,35 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         cy: usize,
     ) -> Option<crate::state::Selection> {
         let project = ectx.editor.state.project();
-        if let Some(i) = project
-            .lanterns
-            .iter()
-            .position(|l| l.x == cx && l.y == cy)
-        {
-            return Some(crate::state::Selection::Lantern(i));
+        let filter = ectx.editor.interact_filter;
+        if filter.allows(crate::state::Selection::Lantern(0)) {
+            if let Some(i) = project
+                .lanterns
+                .iter()
+                .position(|l| l.x == cx && l.y == cy)
+            {
+                return Some(crate::state::Selection::Lantern(i));
+            }
         }
-        if let Some(i) = project
-            .map
-            .armys
-            .iter()
-            .position(|a| a.pos.0 == cx && a.pos.1 == cy)
-        {
-            return Some(crate::state::Selection::Army(i));
+        if filter.allows(crate::state::Selection::Army(0)) {
+            if let Some(i) = project
+                .map
+                .armys
+                .iter()
+                .position(|a| a.pos.0 == cx && a.pos.1 == cy)
+            {
+                return Some(crate::state::Selection::Army(i));
+            }
         }
         // Строение: клетка якоря или спан (якорь — правый-нижний угол,
         // спан влево-вверх; максимальный спан 8×7 — запас 8).
-        if let Some(i) = project.map.buildings.iter().position(|b| {
-            (b.pos.0 == cx && b.pos.1 == cy)
-                || (b.pos.0 >= cx && b.pos.0 < cx + 8 && b.pos.1 >= cy && b.pos.1 < cy + 8)
-        }) {
-            return Some(crate::state::Selection::Building(i));
+        if filter.allows(crate::state::Selection::Building(0)) {
+            if let Some(i) = project.map.buildings.iter().position(|b| {
+                (b.pos.0 == cx && b.pos.1 == cy)
+                    || (b.pos.0 >= cx && b.pos.0 < cx + 8 && b.pos.1 >= cy && b.pos.1 < cy + 8)
+            }) {
+                return Some(crate::state::Selection::Building(i));
+            }
         }
         None
     }
@@ -1357,6 +1606,63 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         ectx.editor.carrying = None;
         ectx.editor.status = "Перенос отменён".into();
     }
+
+    // Тултип объекта (п.6 ТЗ-2): ховер ≥ 3 с в интеракте → краткая
+    // инфа; до этого — прогресс-бар у курсора. Копим время сами
+    // (egui-тултипы показываются мгновенно).
+    if interact && response.hovered() {
+        let now = ui.ctx().input(|i| i.time);
+        let hover_cell_now = response
+            .hover_pos()
+            .and_then(cell_at);
+        let same = hover_cell_now == ectx.editor.hover_cell;
+        if !same {
+            ectx.editor.hover_cell = hover_cell_now;
+            ectx.editor.hover_since = Some(now);
+            ectx.editor.hover_sel = hover_cell_now.and_then(|(cx, cy)| object_at(ectx, cx, cy));
+        }
+        if let (Some(since), Some(sel)) = (ectx.editor.hover_since, ectx.editor.hover_sel) {
+            let elapsed = now - since;
+            let frac = ((elapsed / crate::state::TOOLTIP_DELAY) as f32).clamp(0., 1.);
+            if let Some(pointer) = ui.ctx().input(|i| i.pointer.hover_pos()) {
+                if elapsed < crate::state::TOOLTIP_DELAY {
+                    // Индикатор: мини-прогресс-бар рядом с курсором.
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(60., 8.),
+                        Sense::hover(),
+                    );
+                    ui.painter().rect_filled(
+                        rect,
+                        2.,
+                        Color32::from_black_alpha(120),
+                    );
+                    if frac > 0.01 {
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_size(
+                                rect.min,
+                                egui::vec2(rect.width() * frac, rect.height()),
+                            ),
+                            2.,
+                            Color32::LIGHT_GREEN,
+                        );
+                    }
+                } else {
+                    egui::Tooltip::always_open(
+                        ui.ctx().clone(),
+                        ui.layer_id(),
+                        ui.id(),
+                        egui::PopupAnchor::Pointer,
+                    )
+                    .show(|ui| tooltip_info(ui, ectx, sel));
+                }
+            }
+        }
+    } else {
+        ectx.editor.hover_cell = None;
+        ectx.editor.hover_since = None;
+        ectx.editor.hover_sel = None;
+    }
+
 
     // ЛКМ: интеракт — выбор объекта (рамка + инфоокно). Инструмент не
     // применяется по клику на объект.
@@ -1449,39 +1755,73 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         }
     }
 
-    // Подсветка выделения интеракта (рамка на канвасе).
-    if let Some(sel) = ectx.editor.selection {
-        let rect_of = |(x, y): (usize, usize), up: f32| -> egui::Rect {
-            let min = world_to_screen([x as f32 * SIZE.0, (y as f32 - up) * SIZE.1]);
-            let max = world_to_screen([(x + 1) as f32 * SIZE.0, (y + 1) as f32 * SIZE.1]);
-            egui::Rect::from_min_max(min, max)
-        };
-        let (rect, label) = match sel {
-            crate::state::Selection::Lantern(i) => {
-                let l = &ectx.editor.state.project().lanterns[i];
-                (rect_of((l.x, l.y), 1.), format!("Точка #{}", l.id))
-            }
-            crate::state::Selection::Army(i) => {
-                let a = &ectx.editor.state.project().map.armys[i];
-                (rect_of(a.pos, 0.), format!("Армия «{}»", a.stats.army_name))
-            }
-            crate::state::Selection::Event(i) => {
-                // Событие не имеет клетки: рамки нет.
-                let _ = i;
-                (egui::Rect::NOTHING, String::new())
-            }
-            crate::state::Selection::Building(i) => {
-                let b = &ectx.editor.state.project().map.buildings[i];
-                (rect_of(b.pos, 0.), format!("Строение #{}", b.id))
-            }
-        };
-        painter.rect_stroke(rect, 2., Stroke::new(2.5, Color32::LIGHT_GREEN), egui::StrokeKind::Inside);
-        painter.debug_text(
-            rect.left_top() + egui::vec2(2., -14.),
-            egui::Align2::LEFT_BOTTOM,
-            Color32::LIGHT_GREEN,
-            label,
+    // 4в: оригинал переносимого объекта СКРЫВАЕТСЯ — запечка в RT общая,
+    // поэтому затираем его rect полупрозрачным слоем (полу-призрак на
+    // исходном месте, полный ghost следует за курсором).
+    if let Some(carried) = ectx.editor.carrying {
+        let (from_x, from_y) = carried.from;
+        let (fw, fh) = carry_footprint(ectx);
+        let hide_rect = egui::Rect::from_min_max(
+            world_to_screen([from_x as f32 * SIZE.0, from_y as f32 * SIZE.1]),
+            world_to_screen([
+                (from_x + fw) as f32 * SIZE.0,
+                (from_y + fh) as f32 * SIZE.1,
+            ]),
         );
+        painter.rect_filled(hide_rect, 0., Color32::from_black_alpha(160));
+    }
+
+    // Подсветка выделения интеракта: рамка по ПОЛНОМУ хитбоксу
+    // (армия 1×2, строение — footprint, точка — 1 клетка) + маркер
+    // опорной точки (x, y) с подписью координат.
+    if let Some(sel) = ectx.editor.selection {
+        let project = ectx.editor.state.project();
+        let obj = match sel {
+            crate::state::Selection::Lantern(i) => project
+                .lanterns
+                .get(i)
+                .map(|l| ((l.x, l.y), (1usize, 1usize), format!("Точка #{} ({},{})", l.id, l.x, l.y))),
+            crate::state::Selection::Army(i) => project.map.armys.get(i).map(|a| {
+                (
+                    a.pos,
+                    (1usize, 2usize),
+                    format!("Армия «{}» ({},{})", a.stats.army_name, a.pos.0, a.pos.1),
+                )
+            }),
+            crate::state::Selection::Event(_) => None,
+            crate::state::Selection::Building(i) => project.map.buildings.get(i).map(|b| {
+                let (w, h) = ectx
+                    .registry
+                    .objects
+                    .inner
+                    .iter()
+                    .find(|o| o.index == b.id)
+                    .map(|o| (o.size.0.max(1) as usize, o.size.1.max(1) as usize))
+                    .unwrap_or((1, 1));
+                (
+                    b.pos,
+                    (w, h),
+                    format!("Строение #{} ({},{})", b.id, b.pos.0, b.pos.1),
+                )
+            }),
+        };
+        if let Some((anchor, span, label)) = obj {
+            let (sw, sh) = (anchor.0 as f32 * SIZE.0, anchor.1 as f32 * SIZE.1);
+            let rect = egui::Rect::from_min_max(
+                world_to_screen([sw, sh]),
+                world_to_screen([sw + span.0 as f32 * SIZE.0, sh + span.1 as f32 * SIZE.1]),
+            );
+            painter.rect_stroke(rect, 2., Stroke::new(2.5, Color32::LIGHT_GREEN), egui::StrokeKind::Inside);
+            // Маркер опорной точки (x, y) — угол footprint + координаты.
+            let dot = world_to_screen([sw, sh]);
+            painter.circle_filled(dot, 3., Color32::LIGHT_GREEN);
+            painter.debug_text(
+                dot + egui::vec2(6., -6.),
+                egui::Align2::LEFT_BOTTOM,
+                Color32::LIGHT_GREEN,
+                label,
+            );
+        }
     }
 
     // Ghost переносимого объекта (реалтайм, клик-клик И драг): текстура
@@ -1492,33 +1832,22 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     if ectx.editor.carrying.is_some() {
         if let Some(pos) = response.hover_pos().or(response.interact_pointer_pos()) {
             if let Some(cell) = cell_at(pos) {
-                let rect = egui::Rect::from_min_max(
-                    world_to_screen([cell.0 as f32 * SIZE.0, cell.1 as f32 * SIZE.1]),
-                    world_to_screen([
-                        (cell.0 + 1) as f32 * SIZE.0,
-                        (cell.1 + 1) as f32 * SIZE.1,
-                    ]),
-                );
+                // Размер ghost = реальный footprint объекта:
+                // армия 1×2 клетки (низ в клетке), строение — его
+                // полный спан (obj.size), точка — 1 клетка.
+                let (foot_w, foot_h) = carry_footprint(ectx);
                 // Текстура ghost: тот же спрайт, что рисует запечка.
                 // palette_tex-кэш (egui, с диска); не готова — рамка одна.
                 if let Some(tex) = carried_texture(ui, ectx) {
                     let tex_size = tex.size_vec2();
-                    // Армии и точки — 2 клетки в высоту (низ на нижней
-                    // грани), строения — во всю клетку-якорь.
-                    let h = match ectx.editor.carrying {
-                        Some(crate::state::CarriedObject {
-                            kind: crate::state::Selection::Building(_),
-                            ..
-                        }) => SIZE.1,
-                        _ => SIZE.1 * 2.,
-                    };
+                    let h = foot_h as f32 * SIZE.1;
                     let w = if tex_size.y > 0. {
                         tex_size.x * (h / tex_size.y)
                     } else {
-                        SIZE.0
+                        foot_w as f32 * SIZE.0
                     };
                     let min_world = [
-                        cell.0 as f32 * SIZE.0 + SIZE.0 * 0.5 - w * 0.5,
+                        cell.0 as f32 * SIZE.0 + foot_w as f32 * SIZE.0 * 0.5 - w * 0.5,
                         (cell.1 + 1) as f32 * SIZE.1 - h,
                     ];
                     let ghost_rect = egui::Rect::from_min_max(
@@ -1532,9 +1861,17 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
                         tex.id(),
                         ghost_rect,
                         egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 180),
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 200),
                     );
                 }
+                // Рамка по footprint (не 1 клетка).
+                let rect = egui::Rect::from_min_max(
+                    world_to_screen([cell.0 as f32 * SIZE.0, (cell.1 + 1 - foot_h) as f32 * SIZE.1]),
+                    world_to_screen([
+                        (cell.0 + foot_w) as f32 * SIZE.0,
+                        (cell.1 + 1) as f32 * SIZE.1,
+                    ]),
+                );
                 painter.rect_stroke(
                     rect,
                     2.,
@@ -1548,6 +1885,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     // Пан ПКМ-драгом: отменён при драге точки и переносе объектов.
     if response.dragged_by(egui::PointerButton::Secondary)
         && ectx.editor.lantern_drag.is_none()
+        && ectx.editor.carrying.is_none() // 4а: перенос приоритетнее пана
         && !interact
     {
         let delta = response.drag_delta();
@@ -1668,6 +2006,33 @@ fn carried_texture(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<egui::TextureHan
     let ctx = ui.ctx().clone();
     palette_icon_cache(&ctx, ectx.editor, &asset, &path)?;
     ectx.editor.palette_tex.get(&asset).cloned()
+}
+/// Footprint переносимого объекта в клетках (w, h): армия 1×2
+/// (низ в опорной клетке, как в запечке), строение — реальный спан
+/// (якорь-правый-низ, спан влево-вверх, как hit-test), точка — 1×1.
+fn carry_footprint(ectx: &EditorCtx) -> (usize, usize) {
+    let Some(carried) = ectx.editor.carrying else {
+        return (1, 1);
+    };
+    match carried.kind {
+        crate::state::Selection::Lantern(_) => (1, 1),
+        crate::state::Selection::Army(_) => (1, 2),
+        crate::state::Selection::Building(i) => {
+            let project = ectx.editor.state.project();
+            match project.map.buildings.get(i) {
+                Some(b) => ectx
+                    .registry
+                    .objects
+                    .inner
+                    .iter()
+                    .find(|o| o.index == b.id)
+                    .map(|o| (o.size.0.max(1) as usize, o.size.1.max(1) as usize))
+                    .unwrap_or((1, 1)),
+                None => (1, 1),
+            }
+        }
+        crate::state::Selection::Event(_) => (1, 1),
+    }
 }
 
 /// Слой редакторских маркеров поверх канваса (egui painter):
@@ -2345,79 +2710,131 @@ fn size_dialog_window(ui: &mut Ui, ectx: &mut EditorCtx) {
         ectx.editor.size_dialog = None;
     }
 }
-
-struct InfoDockBehavior<'a, 'b> {
-    ectx: &'a mut EditorCtx<'b>,
-    /// Индексы протухших панелей — снос после прохода дерева.
-    pub stale_drop: Vec<crate::state::Selection>,
-}
-
-impl<'a, 'b> InfoDockBehavior<'a, 'b> {
-    /// Снос накопленных протухших панелей (вызвать ПОСЛЕ tree.ui).
-    fn drop_stale(&mut self, tree: &mut egui_tiles::Tree<crate::state::Selection>) {
-        for sel in self.stale_drop.drain(..) {
-            let id = tree
-                .tiles
-                .iter()
-                .find(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(p) if *p == sel))
-                .map(|(id, _)| *id);
-            if let Some(id) = id {
-                tree.remove_recursively(id);
+/// Краткая инфа объекта для тултипа (имя/тип/координаты/ключевые поля).
+fn tooltip_info(ui: &mut Ui, ectx: &EditorCtx, sel: crate::state::Selection) {
+    let project = ectx.editor.state.project();
+    match sel {
+        crate::state::Selection::Lantern(i) => {
+            if let Some(l) = project.lanterns.get(i) {
+                ui.label(format!("Точка #{}", l.id));
+                ui.label(format!("клетка ({}, {})", l.x, l.y));
+                ui.label(format!("событий: {}, радиус: {}", l.events.len(), l.light_radius));
             }
         }
+        crate::state::Selection::Army(i) => {
+            if let Some(a) = project.map.armys.get(i) {
+                ui.label(format!("Армия «{}»", a.stats.army_name));
+                ui.label(format!("клетка {:?}", a.pos));
+                ui.label(format!("отрядов: {}, активна: {}", a.troops.len(), a.active));
+            }
+        }
+        crate::state::Selection::Building(i) => {
+            if let Some(b) = project.map.buildings.get(i) {
+                ui.label(format!("Строение #{} «{}»", b.id, b.name));
+                ui.label(format!("клетка {:?}", b.pos));
+            }
+        }
+        crate::state::Selection::Event(_) => {}
     }
 }
 
-impl<'a, 'b> egui_tiles::Behavior<crate::state::Selection> for InfoDockBehavior<'a, 'b> {
+
+
+
+/// Behavior единого дерева экрана: Map (канвас) и Info (инфоокна).
+struct ScreenTreeBehavior<'a, 'b> {
+    ectx: &'a mut EditorCtx<'b>,
+    click_tile: Option<(usize, usize)>,
+}
+
+impl<'a, 'b> egui_tiles::Behavior<crate::state::EditorPane> for ScreenTreeBehavior<'a, 'b> {
     fn pane_ui(
         &mut self,
         ui: &mut Ui,
-        tile_id: egui_tiles::TileId,
-        pane: &mut crate::state::Selection,
+        _tile_id: egui_tiles::TileId,
+        pane: &mut crate::state::EditorPane,
     ) -> egui_tiles::UiResponse {
-        // Протухший индекс (объект удалён undo/redo) — панель на снос:
-        // мутация дерева во время прохода запрещена, чистим после ui().
-        if !selection_exists(self.ectx, *pane) {
-            self.stale_drop.push(*pane);
-            return egui_tiles::UiResponse::None;
-        }
-        // Pin-галочка: закреплённая панель живёт и без выделения.
-        let pinned = self.ectx.editor.pinned.contains(pane);
-        let mut pin_now = pinned;
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut pin_now, "pin");
-        });
-        if pin_now != pinned {
-            if pin_now {
-                self.ectx.editor.pinned.push(*pane);
-            } else {
-                self.ectx.editor.pinned.retain(|p| p != pane);
+        match pane {
+            crate::state::EditorPane::Map => {
+                self.click_tile = canvas(ui, self.ectx);
             }
-        }
-        ui.separator();
-        match *pane {
-            crate::state::Selection::Lantern(_) => lantern_info(ui, self.ectx, *pane),
-            crate::state::Selection::Army(_) => army_info(ui, self.ectx, *pane),
-            crate::state::Selection::Building(_) => building_info(ui, self.ectx, *pane),
-            crate::state::Selection::Event(_) => event_info(ui, self.ectx, *pane),
+            crate::state::EditorPane::Info(sel) => {
+                if !selection_exists(self.ectx, *sel) {
+                    return egui_tiles::UiResponse::None;
+                }
+                let pinned = self.ectx.editor.pinned.contains(sel);
+                let mut pin_now = pinned;
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut pin_now, "pin");
+                });
+                if pin_now != pinned {
+                    if pin_now {
+                        self.ectx.editor.pinned.push(*sel);
+                    } else {
+                        self.ectx.editor.pinned.retain(|p| p != sel);
+                    }
+                }
+                ui.separator();
+                match *sel {
+                    crate::state::Selection::Lantern(_) => {
+                        lantern_info(ui, self.ectx, *sel)
+                    }
+                    crate::state::Selection::Army(_) => army_info(ui, self.ectx, *sel),
+                    crate::state::Selection::Building(_) => {
+                        building_info(ui, self.ectx, *sel)
+                    }
+                    crate::state::Selection::Event(_) => event_info(ui, self.ectx, *sel),
+                }
+            }
         }
         egui_tiles::UiResponse::None
     }
 
-    fn tab_title_for_pane(&mut self, pane: &crate::state::Selection) -> egui::WidgetText {
-        selection_title(self.ectx, *pane).into()
+    fn tab_title_for_pane(
+        &mut self,
+        pane: &crate::state::EditorPane,
+    ) -> egui::WidgetText {
+        match pane {
+            crate::state::EditorPane::Map => "Карта".into(),
+            crate::state::EditorPane::Info(sel) => selection_title(self.ectx, *sel).into(),
+        }
     }
 
-    // Контент инфоокна определяет высоту: без вертикального растяжения.
+    fn is_tab_closable(
+        &self,
+        tiles: &egui_tiles::Tiles<crate::state::EditorPane>,
+        tile_id: egui_tiles::TileId,
+    ) -> bool {
+        // Кнопка закрытия — только у инфо-тайлов (карту не закрыть).
+        !matches!(
+            tiles.get(tile_id),
+            Some(egui_tiles::Tile::Pane(crate::state::EditorPane::Map))
+        )
+    }
+
+    fn on_tab_close(
+        &mut self,
+        tiles: &mut egui_tiles::Tiles<crate::state::EditorPane>,
+        tile_id: egui_tiles::TileId,
+    ) -> bool {
+        // Закрытие панели объекта снимает его pin.
+        if let Some(egui_tiles::Tile::Pane(crate::state::EditorPane::Info(sel))) =
+            tiles.get(tile_id)
+        {
+            self.ectx.editor.pinned.retain(|p| p != sel);
+        }
+        true
+    }
+
     fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
         egui_tiles::SimplificationOptions {
             all_panes_must_have_tabs: true,
+            prune_single_child_tabs: false,
             ..Default::default()
         }
     }
 }
 
-/// Жив ли объект по индексу (после undo/redo индекс мог протухнуть).
 fn selection_exists(ectx: &EditorCtx, sel: crate::state::Selection) -> bool {
     let project = ectx.editor.state.project();
     match sel {
@@ -2457,50 +2874,6 @@ fn selection_title(ectx: &EditorCtx, sel: crate::state::Selection) -> String {
     }
 }
 
-/// Правая dock-панель: egui_tiles-дерево инфоокон + pin «по умолчанию».
-/// Панель рисуется всегда при ненулевом дереве; новый выбор (selection)
-/// добавляется в дерево как новая вкладка.
-fn info_dock_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
-    // Новый выбор → новая вкладка в дереве (дубль не добавляем).
-    if let Some(sel) = ectx.editor.selection {
-        let tree = ectx.editor.info_tree.get_or_insert_with(|| {
-            egui_tiles::Tree::new_tabs("editor_info_dock", vec![])
-        });
-        let already = tree.tiles.iter().any(|(_, tile)| {
-            matches!(tile, egui_tiles::Tile::Pane(p) if *p == sel)
-        });
-        if !already {
-            let pane_id = tree.tiles.insert_pane(sel);
-            if let Some(root) = tree.root() {
-                tree.move_tile_to_container(pane_id, root, usize::MAX, true);
-            } else {
-                tree.tiles.set_visible(pane_id, true);
-            }
-        }
-    }
-    // Галочка «закреплять по умолчанию» (пин новых выборов автоматически).
-    ui.horizontal(|ui| {
-        let mut pin = ectx.editor.pin_by_default;
-        ui.checkbox(&mut pin, "Закреплять по умолчанию");
-        ectx.editor.pin_by_default = pin;
-        if ectx.editor.selection.is_some()
-            && ui.button("Открепить всё").clicked()
-        {
-            ectx.editor.pinned.clear();
-        }
-    });
-    ui.separator();
-    if let Some(mut tree) = ectx.editor.info_tree.take() {
-        let mut behavior = InfoDockBehavior {
-            ectx,
-            stale_drop: Vec::new(),
-        };
-        tree.ui(&mut behavior, ui);
-        behavior.drop_stale(&mut tree);
-        // Возвращаем дерево (включая правки pane_ui) обратно в состояние.
-        ectx.editor.info_tree = Some(tree);
-    }
-}
 
 /// Содержимое инфоокна точки событий: тип, клетка, радиус, чекбокс
 /// активна-с-начала, интерактивный список событий (п.6).
@@ -2575,7 +2948,7 @@ fn lantern_info(ui: &mut Ui, ectx: &mut EditorCtx, sel: crate::state::Selection)
                 crate::editor_ui::object_ref::GameRef::Event,
             );
             let _ = r;
-            if ui.button("✕").clicked() {
+            if ui.button("×").clicked() {
                 let editor = &mut ectx.editor;
                 let command = Box::new(
                     editor_core::command::RemoveLanternEvent::new(index, row),
@@ -2755,15 +3128,37 @@ fn flush_pending_event_opens(ectx: &mut EditorCtx) {
         if !selection_exists(ectx, sel) {
             continue;
         }
-        let tree = ectx.editor.info_tree.get_or_insert_with(|| {
-            egui_tiles::Tree::new_tabs("editor_info_dock", vec![])
+        // 8а: непинned инфо-тайлы ЗАМЕНЯЮТ друг друга — при открытии
+        // нового (без пина) старые непинned Info-панели закрываются.
+        let will_pin =
+            ectx.editor.pin_by_default || ectx.editor.selection == Some(sel);
+        let tree = ectx.editor.screen_tree.get_or_insert_with(|| {
+            egui_tiles::Tree::new_tabs("editor_screen_tree", vec![])
         });
         let already = tree
             .tiles
             .iter()
-            .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(p) if *p == sel));
+            .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel));
         if !already {
-            let pane_id = tree.tiles.insert_pane(sel);
+            if !ectx.editor.pinned.contains(&sel) {
+                let mut stale: Vec<egui_tiles::TileId> = Vec::new();
+                for (id, tile) in tree.tiles.iter() {
+                    if let egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) = tile {
+                        if !ectx.editor.pinned.contains(p) {
+                            stale.push(*id);
+                        }
+                    }
+                }
+                for id in stale {
+                    tree.remove_recursively(id);
+                }
+            }
+            let pane_id = tree
+                .tiles
+                .insert_pane(crate::state::EditorPane::Info(sel));
+            if will_pin {
+                ectx.editor.pinned.push(sel);
+            }
             if let Some(root) = tree.root() {
                 tree.move_tile_to_container(pane_id, root, usize::MAX, true);
             } else {

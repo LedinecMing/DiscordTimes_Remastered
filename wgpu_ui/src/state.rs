@@ -69,14 +69,19 @@ pub enum BlendMode {
     EdgesStrong,
     Rounded,
     RoundedStrong,
+    /// Точная копия оригинального редактора (notes/тайлы): наплыв
+    /// половиной клетки с атласа соседа, линейный градиент альфы
+    /// 68→0 от шва к середине клетки.
+    Original,
 }
 impl BlendMode {
-    pub const ALL: [BlendMode; 5] = [
+    pub const ALL: [BlendMode; 6] = [
         BlendMode::Off,
         BlendMode::Edges,
         BlendMode::EdgesStrong,
         BlendMode::Rounded,
         BlendMode::RoundedStrong,
+        BlendMode::Original,
     ];
     pub fn next(self) -> BlendMode {
         let i = BlendMode::ALL.iter().position(|m| *m == self).unwrap();
@@ -96,6 +101,7 @@ impl BlendMode {
             BlendMode::EdgesStrong => "Strong",
             BlendMode::Rounded => "Rounded",
             BlendMode::RoundedStrong => "Rounded Strong",
+            BlendMode::Original => "Оригинал",
         }
     }
 }
@@ -219,6 +225,10 @@ pub struct EditorUi {
     pub deco_category: Option<String>,
     /// Фильтр категории строений (первое слово имени; None = все).
     pub building_category: Option<String>,
+    /// Фильтр размера объектов (макс. сторона в клетках; None = все).
+    /// Строения и декорации: 1×1, 2×2, 4×3, … — фильтр «до N».
+    pub deco_size_max: Option<u8>,
+    pub building_size_max: Option<u8>,
     /// Фильтр типа армейских шаблонов (None = все).
     pub army_nature: Option<ArmyNature>,
     /// Выбранный элемент палитры «События»: true — фонарик
@@ -235,20 +245,78 @@ pub struct EditorUi {
     /// Перенос клик-клик: ПКМ на объекте взял, ПКМ в новой клетке положил.
     /// Ghost следует за курсором без зажатой кнопки; Esc — отмена.
     pub carrying: Option<CarriedObject>,
-    /// Активный ПКМ-драг точки (индекс, исходная клетка, текущая клетка
-    /// курсора): маркер рисуется в текущей клетке (без мутации проекта),
-    /// ПКМ up завершает командой MoveLantern (from → текущая).
-    pub lantern_drag: Option<(usize, (usize, usize), (usize, usize))>,
-    /// Настройки кисти (форма/размер/заливка/мульти-выбор).
-    pub brush: BrushConfig,
     /// Докинг инфоокон (п.6): egui_tiles-дерево в правой панели,
     /// каждая панель = объект (Selection). None — дерево ещё не создано.
     pub info_tree: Option<egui_tiles::Tree<Selection>>,
+    /// Единое дерево экрана (п.3 ТЗ-2): палитра | карта | инфо-панели.
+    /// Панель Map — канвас; пользователь может перетащить как вкладку.
+    pub screen_tree: Option<egui_tiles::Tree<EditorPane>>,
+    pub lantern_drag: Option<(usize, (usize, usize), (usize, usize))>,
+    /// Настройки кисти (форма/размер/заливка/мульти-выбор).
+    pub brush: BrushConfig,
     /// Закреплять объекты по умолчанию (галочка в интеракте).
     pub pin_by_default: bool,
-    /// Открытые окна (пин = висит всегда): панель дерева И плавающие
-    /// окна для незакреплённых выборов — флаг «окно открыто».
+    /// Закреплённые объекты (пин = панель живёт без выделения).
     pub pinned: Vec<Selection>,
+    /// Фильтр цели интеракта (п.7): что object_at считает целью.
+    pub interact_filter: InteractFilter,
+    /// Тултип объекта (п.6 ТЗ-2): клетка, с которой начат ховер, и
+    /// время начала (ctx.time). Показ после 3 с.
+    pub hover_cell: Option<(usize, usize)>,
+    pub hover_since: Option<f64>,
+    pub hover_sel: Option<Selection>,
+}
+
+/// Задержка показа тултипа на объекте карты.
+pub const TOOLTIP_DELAY: f64 = 3.0;
+
+/// Что выбирает ЛКМ/ПКМ в интеракте.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InteractFilter {
+    /// Всё (первое попавшееся: точки → армии → строения).
+    #[default]
+    All,
+    /// Только строения.
+    Buildings,
+    /// Только армии.
+    Armies,
+    /// Только точки событий.
+    Lanterns,
+}
+
+impl InteractFilter {
+    pub const ALL: [InteractFilter; 4] = [
+        InteractFilter::All,
+        InteractFilter::Buildings,
+        InteractFilter::Armies,
+        InteractFilter::Lanterns,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            InteractFilter::All => "Всё",
+            InteractFilter::Buildings => "Строения",
+            InteractFilter::Armies => "Армии",
+            InteractFilter::Lanterns => "Точки",
+        }
+    }
+    /// Пропускает ли фильтр данный Selection.
+    pub fn allows(self, sel: Selection) -> bool {
+        match self {
+            InteractFilter::All => true,
+            InteractFilter::Buildings => matches!(sel, Selection::Building(_)),
+            InteractFilter::Armies => matches!(sel, Selection::Army(_)),
+            InteractFilter::Lanterns => matches!(sel, Selection::Lantern(_)),
+        }
+    }
+}
+
+/// Панель дерева экрана: карта или инфоокно объекта.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorPane {
+    /// Карта-канвас (центральная область).
+    Map,
+    /// Инфоокно объекта (id объекта в тайле).
+    Info(Selection),
 }
 
 /// Инфоокно по умолчанию закрыто, закреплённое живёт параллельно.
@@ -481,9 +549,9 @@ impl Default for EditorUi {
             state: editor_core::EditorState::new(editor_core::MapProject::new(50, 0)),
             tool: editor_core::Tool::default(),
             baked: false,
-            egui_tex: None,
             decos_rt: None,
             decos_tex: None,
+            egui_tex: None,
             marker_handles: std::collections::HashMap::new(),
             rt: None,
             cam: crate::camera::Camera::from_display_rect(
@@ -518,8 +586,15 @@ impl Default for EditorUi {
             carrying: None,
             brush: BrushConfig::default(),
             info_tree: None,
+            screen_tree: None,
             pin_by_default: false,
             pinned: Vec::new(),
+            interact_filter: InteractFilter::default(),
+            hover_cell: None,
+            hover_since: None,
+            hover_sel: None,
+            deco_size_max: None,
+            building_size_max: None,
         }
     }
 }
