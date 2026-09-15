@@ -621,6 +621,27 @@ impl Mode {
 
 /// Настройки кисти (п.3): форма, размер, заливка, мульти-выбор.
 fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
+    // Категории рисования (п.4): несколько одновременно; «Ластик» (п.5)
+    // переключает кисть на чистку выбранных категорий.
+    ui.separator();
+    ui.label("Слои:");
+    ui.horizontal(|ui| {
+        for cat in crate::state::PaintCategory::ALL {
+            let on = ectx.editor.brush.paint_categories.contains(&cat);
+            if ui.selectable_label(on, cat.label()).clicked() {
+                if on {
+                    ectx.editor.brush.paint_categories.retain(|c| *c != cat);
+                } else {
+                    ectx.editor.brush.paint_categories.push(cat);
+                }
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        let mut erase = ectx.editor.brush.erase_mode;
+        ui.checkbox(&mut erase, "Ластик (чистить слои)");
+        ectx.editor.brush.erase_mode = erase;
+    });
     let (shape, size) = {
         let b = &mut ectx.editor.brush;
         ui.separator();
@@ -641,7 +662,6 @@ fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
         });
         (b.shape, b.size)
     };
-    let _ = (shape, size);
     // Заливка: параметры актуальны только для BucketFill.
     {
         let b = &mut ectx.editor.brush;
@@ -2274,6 +2294,42 @@ fn multi_pick_tile(
 /// Применить активный инструмент: построить команду и выполнить.
 fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
     let editor = &mut ectx.editor;
+    // Ластик (п.5): кисть/заливка чистят выбранные категории. Тайл —
+    // сброс в базовый (id 0) той же кистью; декор/строение — EraseAt.
+    if editor.brush.erase_mode
+        && matches!(
+            editor.tool,
+            editor_core::Tool::Brush | editor_core::Tool::BucketFill
+        )
+    {
+        let cats = editor.brush.paint_categories.clone();
+        if cats.contains(&crate::state::PaintCategory::Tiles) {
+            editor.active_tile = 0;
+        }
+        if cats.contains(&crate::state::PaintCategory::Decos)
+            || cats.contains(&crate::state::PaintCategory::Buildings)
+        {
+            match editor.history.execute(
+                Box::new(editor_core::command::EraseAt::new(tile)),
+                &mut editor.state,
+            ) {
+                CommandResult::Applied => {
+                    editor.status = "Ластик: объект удалён".into();
+                    editor.bake_dirty = true;
+                }
+                CommandResult::Noop => {}
+            }
+        }
+        if cats.contains(&crate::state::PaintCategory::Tiles) {
+            // Тайл-ластик идёт обычным путём ниже (PaintTile/BatchPlace
+            // в базовый тайл) — выходим, чтобы не задвоить команду.
+            if !editor.brush.multi_select.is_empty() {
+                return;
+            }
+        } else {
+            return;
+        }
+    }
     // Мульти-выбор активен: элементы списка применяются к клеткам фигуры
     // (BatchPlace — одна undo-запись).
     if !editor.brush.multi_select.is_empty()

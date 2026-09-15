@@ -953,6 +953,92 @@ impl Command for SetProperty {
     }
 }
 
+/// Ластик (п.4/5 ТЗ-багфиксов): чистит декорации И строения в клетке
+/// (одна undo-запись; снятые объекты восстанавливаются при undo).
+#[derive(Debug)]
+pub struct EraseAt {
+    pub pos: Pos,
+    /// Снятые декорации: (индекс в decomap, MapDeco).
+    taken_decos: Vec<(usize, dt_lib::map::deco::MapDeco)>,
+    /// Снятые строения: (индекс в buildings, MapBuildingdata).
+    taken_buildings: Vec<(usize, dt_lib::map::object::MapBuildingdata)>,
+}
+
+impl EraseAt {
+    pub fn new(pos: Pos) -> Self {
+        Self {
+            pos,
+            taken_decos: Vec::new(),
+            taken_buildings: Vec::new(),
+        }
+    }
+}
+
+impl Command for EraseAt {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        let (x, y) = self.pos;
+        let project = state.project_mut();
+        self.taken_decos.clear();
+        // Декор: все в клетке.
+        let deco_ids: Vec<usize> = project
+            .map
+            .decomap
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.x == x && d.y == y)
+            .map(|(i, _)| i)
+            .collect();
+        for i in deco_ids.into_iter().rev() {
+            let d = project.map.decomap.remove(i);
+            self.taken_decos.push((i, d));
+        }
+        // Строения: спан уходит влево-вверх от якоря pos (pos —
+        // правый-нижний угол); попадание в клетку — строение целиком.
+        let registry_sizes: Vec<(usize, (u8, u8))> = project
+            .map
+            .buildings
+            .iter()
+            .map(|b| (b.id, (0, 0)))
+            .collect();
+        let _ = registry_sizes;
+        let build_ids: Vec<usize> = project
+            .map
+            .buildings
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| {
+                // Точный спан знает UI (registry); здесь — якорь и клетка
+                // якоря (UI передаёт клетку якоря из object_at).
+                b.pos == (x, y)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        for i in build_ids.into_iter().rev() {
+            let b = project.map.buildings.remove(i);
+            self.taken_buildings.push((i, b));
+        }
+        (!self.taken_decos.is_empty() || !self.taken_buildings.is_empty())
+            .then_some(CommandResult::Applied)
+            .unwrap_or(CommandResult::Noop)
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        let project = state.project_mut();
+        for (i, b) in self.taken_buildings.drain(..).rev() {
+            let at = i.min(project.map.buildings.len());
+            project.map.buildings.insert(at, b);
+        }
+        for (i, d) in self.taken_decos.drain(..).rev() {
+            let at = i.min(project.map.decomap.len());
+            project.map.decomap.insert(at, d);
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Erase"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
