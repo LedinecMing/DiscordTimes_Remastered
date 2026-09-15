@@ -1470,39 +1470,57 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         }
     }
 
-    // Подсветка выделения интеракта (рамка на канвасе).
+    // Подсветка выделения интеракта: рамка по ПОЛНОМУ хитбоксу
+    // (армия 1×2, строение — footprint, точка — 1 клетка) + маркер
+    // опорной точки (x, y) с подписью координат.
     if let Some(sel) = ectx.editor.selection {
-        let rect_of = |(x, y): (usize, usize), up: f32| -> egui::Rect {
-            let min = world_to_screen([x as f32 * SIZE.0, (y as f32 - up) * SIZE.1]);
-            let max = world_to_screen([(x + 1) as f32 * SIZE.0, (y + 1) as f32 * SIZE.1]);
-            egui::Rect::from_min_max(min, max)
+        let project = ectx.editor.state.project();
+        let obj = match sel {
+            crate::state::Selection::Lantern(i) => project
+                .lanterns
+                .get(i)
+                .map(|l| ((l.x, l.y), (1usize, 1usize), format!("Точка #{} ({},{})", l.id, l.x, l.y))),
+            crate::state::Selection::Army(i) => project.map.armys.get(i).map(|a| {
+                (
+                    a.pos,
+                    (1usize, 2usize),
+                    format!("Армия «{}» ({},{})", a.stats.army_name, a.pos.0, a.pos.1),
+                )
+            }),
+            crate::state::Selection::Event(_) => None,
+            crate::state::Selection::Building(i) => project.map.buildings.get(i).map(|b| {
+                let (w, h) = ectx
+                    .registry
+                    .objects
+                    .inner
+                    .iter()
+                    .find(|o| o.index == b.id)
+                    .map(|o| (o.size.0.max(1) as usize, o.size.1.max(1) as usize))
+                    .unwrap_or((1, 1));
+                (
+                    b.pos,
+                    (w, h),
+                    format!("Строение #{} ({},{})", b.id, b.pos.0, b.pos.1),
+                )
+            }),
         };
-        let (rect, label) = match sel {
-            crate::state::Selection::Lantern(i) => {
-                let l = &ectx.editor.state.project().lanterns[i];
-                (rect_of((l.x, l.y), 1.), format!("Точка #{}", l.id))
-            }
-            crate::state::Selection::Army(i) => {
-                let a = &ectx.editor.state.project().map.armys[i];
-                (rect_of(a.pos, 0.), format!("Армия «{}»", a.stats.army_name))
-            }
-            crate::state::Selection::Event(i) => {
-                // Событие не имеет клетки: рамки нет.
-                let _ = i;
-                (egui::Rect::NOTHING, String::new())
-            }
-            crate::state::Selection::Building(i) => {
-                let b = &ectx.editor.state.project().map.buildings[i];
-                (rect_of(b.pos, 0.), format!("Строение #{}", b.id))
-            }
-        };
-        painter.rect_stroke(rect, 2., Stroke::new(2.5, Color32::LIGHT_GREEN), egui::StrokeKind::Inside);
-        painter.debug_text(
-            rect.left_top() + egui::vec2(2., -14.),
-            egui::Align2::LEFT_BOTTOM,
-            Color32::LIGHT_GREEN,
-            label,
-        );
+        if let Some((anchor, span, label)) = obj {
+            let (sw, sh) = (anchor.0 as f32 * SIZE.0, anchor.1 as f32 * SIZE.1);
+            let rect = egui::Rect::from_min_max(
+                world_to_screen([sw, sh]),
+                world_to_screen([sw + span.0 as f32 * SIZE.0, sh + span.1 as f32 * SIZE.1]),
+            );
+            painter.rect_stroke(rect, 2., Stroke::new(2.5, Color32::LIGHT_GREEN), egui::StrokeKind::Inside);
+            // Маркер опорной точки (x, y) — угол footprint + координаты.
+            let dot = world_to_screen([sw, sh]);
+            painter.circle_filled(dot, 3., Color32::LIGHT_GREEN);
+            painter.debug_text(
+                dot + egui::vec2(6., -6.),
+                egui::Align2::LEFT_BOTTOM,
+                Color32::LIGHT_GREEN,
+                label,
+            );
+        }
     }
 
     // Ghost переносимого объекта (реалтайм, клик-клик И драг): текстура
