@@ -666,11 +666,29 @@ fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
             });
         }
     }
-    // Мульти-выбор: список активных элементов.
+    // Мульти-выбор: список активных элементов + «выбрать всё».
     ui.separator();
+    ui.horizontal(|ui| {
+        let picks = ectx.editor.brush.multi_select.clone();
+        let order = ectx.editor.brush.multi_order;
+        ui.label(format!("Мульти-выбор ({}):", picks.len()));
+        // «Выбрать всё»: все элементы активной палитры (тайлы — все
+        // TILES; декор/строения — весь фильтрованный список; армии —
+        // все 4 шаблона).
+        if ui.button("Выбрать всё").clicked() {
+            let all = palette_all_picks(ectx);
+            for p in all {
+                if !ectx.editor.brush.multi_select.contains(&p) {
+                    ectx.editor.brush.multi_select.push(p);
+                }
+            }
+        }
+        if !picks.is_empty() && ui.button("Очистить").clicked() {
+            ectx.editor.brush.multi_select.clear();
+        }
+    });
     let picks = ectx.editor.brush.multi_select.clone();
     let order = ectx.editor.brush.multi_order;
-    ui.label(format!("Мульти-выбор ({}):", picks.len()));
     for (i, pick) in picks.iter().enumerate() {
         let label = multi_pick_label(ectx, *pick);
         ui.horizontal(|ui| {
@@ -689,17 +707,78 @@ fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
                 }
             }
         });
-        if ui.button("Очистить мульти-выбор").clicked() {
-            ectx.editor.brush.multi_select.clear();
-        }
     }
     ui.label(
         RichText::new(
-            "Галочка в палитре добавляет элемент;\nкогда список непуст — рисует он (случайно/последовательно).",
+            "Клик по ячейке палитры тогглит элемент;\nкогда список непуст — рисует он (случайно/последовательно).",
         )
         .weak()
         .small(),
     );
+}
+
+/// Все элементы текущей палитры — для кнопки «Выбрать всё».
+fn palette_all_picks(ectx: &EditorCtx) -> Vec<MultiPick> {
+    match ectx.editor.tool {
+        editor_core::Tool::Brush | editor_core::Tool::BucketFill => {
+            (0..editor_core::project::TILE_COUNT)
+                .map(MultiPick::Tile)
+                .collect()
+        }
+        editor_core::Tool::Deco => ectx
+            .registry
+            .objects
+            .inner
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| {
+                matches!(o.obj_type, dt_lib::map::object::ObjectType::MapDeco { .. })
+                    && ectx
+                        .editor
+                        .deco_category
+                        .as_ref()
+                        .is_none_or(|c| object_category(o) == *c)
+                    && ectx
+                        .editor
+                        .deco_size_max
+                        .is_none_or(|m| o.size.0.max(o.size.1) as u8 <= m)
+            })
+            .map(|(idx, _)| MultiPick::Deco(idx))
+            .collect(),
+        editor_core::Tool::Building => ectx
+            .registry
+            .objects
+            .inner
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| {
+                matches!(
+                    o.obj_type,
+                    dt_lib::map::object::ObjectType::Building { .. }
+                        | dt_lib::map::object::ObjectType::Bridge { .. }
+                ) && ectx
+                    .editor
+                    .building_category
+                    .as_ref()
+                    .is_none_or(|c| object_category(o) == *c)
+                    && ectx
+                        .editor
+                        .building_size_max
+                        .is_none_or(|m| o.size.0.max(o.size.1) as u8 <= m)
+            })
+            .map(|(idx, _)| MultiPick::Building(idx))
+            .collect(),
+        editor_core::Tool::Army => crate::state::ArmyNature::ALL
+            .iter()
+            .filter_map(|n| {
+                ectx.registry
+                    .units
+                    .str_to_id(&n.template_unit_name().to_string())
+            })
+            .map(MultiPick::Army)
+            .collect(),
+        editor_core::Tool::Interact => Vec::new(),
+    }
 }
 
 /// Человекочитаемая подпись элемента мульти-выбора.
@@ -1029,24 +1108,51 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
         .into_iter()
         .collect();
     categories.dedup();
-    let current = if buildings {
-        &mut ectx.editor.building_category
+    let (current, size_max) = if buildings {
+        (
+            &mut ectx.editor.building_category,
+            &mut ectx.editor.building_size_max,
+        )
     } else {
-        &mut ectx.editor.deco_category
+        (
+            &mut ectx.editor.deco_category,
+            &mut ectx.editor.deco_size_max,
+        )
     };
-    egui::ComboBox::from_id_salt(if buildings {
-        "building_category"
-    } else {
-        "deco_category"
-    })
-    .selected_text(current.clone().unwrap_or_else(|| "все".into()))
-    .show_ui(ui, |ui| {
-        ui.selectable_value(current, None, "все");
-        for cat in &categories {
-            ui.selectable_value(current, Some(cat.clone()), cat);
-        }
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt(if buildings {
+            "building_category"
+        } else {
+            "deco_category"
+        })
+        .selected_text(current.clone().unwrap_or_else(|| "все".into()))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(current, None, "все");
+            for cat in &categories {
+                ui.selectable_value(current, Some(cat.clone()), cat);
+            }
+        });
+        // Фильтр размера (макс. сторона в клетках; «все» = без фильтра).
+        ui.label("Размер ≤");
+        egui::ComboBox::from_id_salt(if buildings {
+            "building_size_filter"
+        } else {
+            "deco_size_filter"
+        })
+        .selected_text(
+            size_max
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "все".into()),
+        )
+        .show_ui(ui, |ui| {
+            ui.selectable_value(size_max, None, "все");
+            for s in 1u8..=8 {
+                ui.selectable_value(size_max, Some(s), s.to_string());
+            }
+        });
     });
     let category = current.clone();
+    let size_max = *size_max;
     egui::ScrollArea::vertical()
         .id_salt(if buildings {
             "buildings_palette"
@@ -1067,7 +1173,11 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                         dt_lib::map::object::ObjectType::Building { .. }
                             | dt_lib::map::object::ObjectType::Bridge { .. }
                     );
+                    let within_size = size_max.is_none_or(|m| {
+                        o.size.0.max(o.size.1) as u8 <= m
+                    });
                     is_building == buildings
+                        && within_size
                         && category
                             .as_ref()
                             .is_none_or(|c| object_category(o) == *c)

@@ -225,6 +225,10 @@ pub struct EditorUi {
     pub deco_category: Option<String>,
     /// Фильтр категории строений (первое слово имени; None = все).
     pub building_category: Option<String>,
+    /// Фильтр размера объектов (макс. сторона в клетках; None = все).
+    /// Строения и декорации: 1×1, 2×2, 4×3, … — фильтр «до N».
+    pub deco_size_max: Option<u8>,
+    pub building_size_max: Option<u8>,
     /// Фильтр типа армейских шаблонов (None = все).
     pub army_nature: Option<ArmyNature>,
     /// Выбранный элемент палитры «События»: true — фонарик
@@ -589,6 +593,8 @@ impl Default for EditorUi {
             hover_cell: None,
             hover_since: None,
             hover_sel: None,
+            deco_size_max: None,
+            building_size_max: None,
         }
     }
 }
