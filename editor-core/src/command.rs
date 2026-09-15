@@ -756,6 +756,66 @@ impl Command for MoveArmy {
     }
 }
 
+/// Пакетная правка тайлов (заливка/кисть фигуры/мульти-выбор):
+/// Vec<(x, y, tile)> применяется как ОДНА undo-запись.
+///
+/// Не-performant по памяти (previous на клетку), но атомарно: undo/redo
+/// одного клика заливки откатывает все клетки сразу. Клетки вне карты и
+/// no-op совпадения фильтруются при apply.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchPlace {
+    pub edits: Vec<(usize, usize, usize)>,
+    previous: Vec<Option<usize>>,
+}
+
+impl BatchPlace {
+    pub fn new(edits: Vec<(usize, usize, usize)>) -> Self {
+        Self {
+            edits,
+            previous: Vec::new(),
+        }
+    }
+}
+
+impl Command for BatchPlace {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        let tilemap = &mut state.project_mut().map.tilemap;
+        let size = tilemap.size;
+        self.previous = vec![None; self.edits.len()];
+        let mut applied = 0;
+        for (i, (x, y, tile)) in self.edits.iter().enumerate() {
+            if *x >= size || *y >= size {
+                continue;
+            }
+            // Конвенция экрана: tilemap[(строка, колонка)].
+            let cell = &mut tilemap[(*y, *x)];
+            if *cell == *tile {
+                continue; // идемпотентность
+            }
+            self.previous[i] = Some(*cell);
+            *cell = *tile;
+            applied += 1;
+        }
+        (applied > 0).then_some(CommandResult::Applied).unwrap_or(CommandResult::Noop)
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        let tilemap = &mut state.project_mut().map.tilemap;
+        let size = tilemap.size;
+        for ((x, y, _), prev) in self.edits.iter().zip(&self.previous) {
+            if let Some(prev) = prev {
+                if *x < size && *y < size {
+                    tilemap[(*y, *x)] = *prev;
+                }
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Batch Place"
+    }
+}
+
 /// Изменение размера квадратной карты (якорь — левый верхний угол).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResizeMap {
@@ -1049,6 +1109,28 @@ mod tests {
         assert!(history.can_redo());
         history.execute(Box::new(PaintTile::new((0, 0), 2)), &mut state);
         assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn batch_place_atomic_undo() {
+        let mut state = state();
+        let mut history = CommandHistory::new();
+        let edits = vec![(0, 0, 5), (1, 0, 5), (2, 2, 7), (100, 100, 1)];
+        history.execute(Box::new(BatchPlace::new(edits)), &mut state);
+        assert_eq!(state.project().tile((0, 0)), Some(5));
+        assert_eq!(state.project().tile((1, 0)), Some(5));
+        assert_eq!(state.project().tile((2, 2)), Some(7));
+
+        // Один undo откатывает весь пакет (включая вне-карточную клетку).
+        history.undo(&mut state);
+        assert_eq!(state.project().tile((0, 0)), Some(0));
+        assert_eq!(state.project().tile((1, 0)), Some(0));
+        assert_eq!(state.project().tile((2, 2)), Some(0));
+
+        // Полный no-op (все клетки уже с нужным тайлом) — не в истории.
+        let before = history.undo_len();
+        history.execute(Box::new(BatchPlace::new(vec![(0, 0, 0)])), &mut state);
+        assert_eq!(history.undo_len(), before);
     }
 
     #[test]

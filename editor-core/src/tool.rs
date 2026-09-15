@@ -7,9 +7,12 @@
 /// Активный инструмент (палитра ТЗ §3 Map View).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tool {
-    /// Кисть тайлов.
+    /// Кисть тайлов (с фигурой/размером — BrushConfig в UI-состоянии).
     #[default]
     Brush,
+    /// Заливка связной области (flood по совпадению тайла; настройки —
+    /// BrushConfig: что менять/дальность/макс. объём).
+    BucketFill,
     /// Постановка декора.
     Deco,
     /// Постановка строения.
@@ -26,6 +29,7 @@ impl Tool {
     pub fn label(self) -> &'static str {
         match self {
             Tool::Brush => "Кисть",
+            Tool::BucketFill => "Заливка",
             Tool::Deco => "Декор",
             Tool::Building => "Строение",
             Tool::Army => "Армия",
@@ -34,13 +38,20 @@ impl Tool {
     }
 
     /// Все инструменты в порядке палитры.
-    pub const ALL: [Tool; 5] = [
+    pub const ALL: [Tool; 6] = [
         Tool::Brush,
+        Tool::BucketFill,
         Tool::Deco,
         Tool::Building,
         Tool::Army,
         Tool::Interact,
     ];
+
+    /// Режим «Рисование» (сегмент тулбара): кисть/заливка/декор/строения/
+    /// армии. Интеракт — отдельный режим.
+    pub fn is_paint(self) -> bool {
+        !matches!(self, Tool::Interact)
+    }
 }
 
 #[cfg(test)]
@@ -50,7 +61,7 @@ mod tests {
     #[test]
     fn all_tools_have_unique_labels() {
         let labels: Vec<_> = Tool::ALL.iter().map(|t| t.label()).collect();
-        assert_eq!(labels.len(), 5);
+        assert_eq!(labels.len(), 6);
         for (i, a) in labels.iter().enumerate() {
             for b in labels.iter().skip(i + 1) {
                 assert_ne!(a, b);
