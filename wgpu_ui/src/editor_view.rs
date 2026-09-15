@@ -779,8 +779,25 @@ fn object_category(obj: &dt_lib::map::object::ObjectInfo) -> String {
 }
 
 /// Грид тайлов: иконки TILES (спрайты уже в gfx-ассетах assets/Terrain).
+/// Иконки предзагружаются в palette_tex ДО отрисовки грида (п.5 ТЗ):
+/// битый лейаут при ленивой загрузке исключён, иконка — aspect-fit
+/// по ячейке.
 fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
     search_field(ui, ectx);
+    // Предзагрузка всех спрайтов TILES (16 штук): первый кадр — один
+    // синхронный проход по диску, дальше — кэш palette_tex.
+    let ctx = ui.ctx().clone();
+    for tile in 0..editor_core::project::TILE_COUNT {
+        let sprite = dt_lib::map::tile::TILES[tile].sprite();
+        if !ectx.editor.palette_tex.contains_key(sprite) {
+            palette_icon_cache(
+                &ctx,
+                ectx.editor,
+                sprite,
+                &format!("{ASSETS_TERRAIN}/{sprite}"),
+            );
+        }
+    }
     egui::ScrollArea::vertical()
         .id_salt("tiles_palette")
         .auto_shrink([false, false])
@@ -789,12 +806,6 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
                 .iter()
                 .map(|t| t.sprite().trim_end_matches(".png").to_string())
                 .collect();
-            // Иконки: спрайты TILES уже загружены gfx-ассетами
-            // (req_assets_terrain_list, ключ = имя файла спрайта) —
-            // в egui-палитру идут с диска (assets/Terrain/{sprite})
-            // через общий palette_tex-кэш.
-            let mut icons: std::collections::HashMap<String, Option<egui::TextureId>> =
-                std::collections::HashMap::new();
             ui.horizontal_wrapped(|ui| {
                 for tile in 0..editor_core::project::TILE_COUNT {
                     if !matches_search(
@@ -806,57 +817,39 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
                     }
                     let selected = ectx.editor.active_tile == tile;
                     let sprite = dt_lib::map::tile::TILES[tile].sprite();
-                    let tex = if let Some(t) = icons.get(sprite) {
-                        *t
-                    } else {
-                        let t = palette_icon_cache(
-                            ui.ctx(),
-                            ectx.editor,
-                            sprite,
-                            &format!("{ASSETS_TERRAIN}/{sprite}"),
-                        );
-                        icons.insert(sprite.to_string(), t);
-                        t
-                    };
-                    let in_multi = ectx
-                        .editor
-                        .brush
-                        .multi_select
-                        .contains(&crate::state::MultiPick::Tile(tile));
-                    let cell = ui
-                        .selectable_label(selected, format!("{}\n{}", names[tile], tile))
-                        .on_hover_text(format!("{} ({})", names[tile], tile));
-                    let pick = crate::state::MultiPick::Tile(tile);
-                    let toggled = toggle_multiselect_cell(ui, in_multi);
-                    if toggled == Some(true) {
-                        ectx.editor.brush.multi_select.push(pick);
-                    } else if toggled == Some(false) {
-                        if let Some(pos) = ectx
-                            .editor
-                            .brush
-                            .multi_select
-                            .iter()
-                            .position(|p| *p == pick)
-                        {
-                            ectx.editor.brush.multi_select.remove(pos);
-                        }
+                    let cell_size = egui::vec2(72., 80.);
+                    let (cell, icon_rect) = palette_cell(ui, cell_size);
+                    // Иконка по ячейке (aspect-fit, верх ячейки).
+                    if let Some(tex) = ectx.editor.palette_tex.get(sprite) {
+                        draw_icon_fit(ui.painter(), tex, icon_rect);
                     }
+                    // Подпись поверх нижней части ячейки.
+                    ui.put(
+                        egui::Rect::from_min_size(
+                            cell.rect.left_bottom() - egui::vec2(0., 30.),
+                            egui::vec2(cell_size.x, 30.),
+                        ),
+                        egui::Label::new(
+                            RichText::new(format!("{}\n{}", names[tile], tile))
+                                .color(if selected {
+                                    Color32::YELLOW
+                                } else {
+                                    Color32::LIGHT_GRAY
+                                })
+                                .small(),
+                        ),
+                    );
+                    let cell = cell.on_hover_text(format!("{} ({})", names[tile], tile));
                     if cell.clicked() {
                         ectx.editor.active_tile = tile;
                         ectx.editor.state.set_active_tile(tile);
                     }
-                    if let (Some(tex), true) = (tex, cell.hovered()) {
-                        // Иконка тайла над ячейкой: два ряда текстур.
-                        let rect = cell.rect;
-                        let icon_rect = egui::Rect::from_min_size(
-                            rect.left_top() + egui::vec2(2., 2.),
-                                            egui::vec2(28., 20.),
-                        );
-                        ui.painter().image(
-                            tex,
-                            icon_rect,
-                            egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-                            Color32::WHITE,
+                    if selected {
+                        ui.painter().rect_stroke(
+                            cell.rect,
+                            3.,
+                            Stroke::new(2., Color32::YELLOW),
+                            egui::StrokeKind::Inside,
                         );
                     }
                 }
@@ -864,11 +857,39 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
         });
 }
 
+/// Ячейка палитры фиксированного размера: возвращает реакцию всей ячейки
+/// и прямоугольник иконки (верх ячейки, минус подпись).
+fn palette_cell(ui: &mut Ui, cell_size: egui::Vec2) -> (egui::Response, egui::Rect) {
+    let (rect, resp) = ui.allocate_exact_size(cell_size, Sense::click());
+    let icon_rect = egui::Rect::from_min_size(
+        rect.left_top() + egui::vec2(4., 4.),
+        egui::vec2(cell_size.x - 8., cell_size.y - 34.),
+    );
+    (resp, icon_rect)
+}
+
+/// Рисует текстуру aspect-fit в прямоугольнике (центрирование).
+fn draw_icon_fit(painter: &egui::Painter, tex: &egui::TextureHandle, rect: egui::Rect) {
+    let [tw, th] = tex.size();
+    let (tw, th) = (tw as f32, th as f32);
+    if tw <= 0. || th <= 0. {
+        return;
+    }
+    let scale = (rect.width() / tw).min(rect.height() / th);
+    let (w, h) = (tw * scale, th * scale);
+    let min = rect.center() - egui::vec2(w * 0.5, h * 0.5);
+    let icon_rect = egui::Rect::from_min_size(min, egui::vec2(w, h));
+    painter.image(
+        tex.id(),
+        icon_rect,
+        egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
+        Color32::WHITE,
+    );
+}
 /// Грид декораций (buildings=false) или строений (buildings=true):
 /// иконки registry.objects по obj_type, поиск + фильтр категории.
 fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
     search_field(ui, ectx);
-    // Категории из префиксов имён объектов нужного типа, отсортированные.
     let mut categories: Vec<String> = ectx
         .registry
         .objects
@@ -936,10 +957,20 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                         && matches_search(&ectx.editor.palette_search, &o.name, o.index)
                 })
                 .collect();
-            // Иконки: кэш на кадр по имени ассета (повторяющиеся объекты
-            // одного спрайта не перечитывают PNG).
-            let mut icons: std::collections::HashMap<String, Option<egui::TextureId>> =
-                std::collections::HashMap::new();
+            // Предзагрузка иконок ДО отрисовки (п.5): весь фильтрованный
+            // список — один синхронный проход по кэшу; иконка рисуется
+            // aspect-fit по фиксированной ячейке.
+            let ctx = ui.ctx().clone();
+            for (_, obj) in &entries {
+                if !ectx.editor.palette_tex.contains_key(&obj.path) {
+                    palette_icon_cache(
+                        &ctx,
+                        ectx.editor,
+                        &obj.path,
+                        &format!("assets/Objects/{}", obj.path),
+                    );
+                }
+            }
             ui.horizontal_wrapped(|ui| {
                 for (idx, obj) in entries {
                     let selected = if buildings {
@@ -948,49 +979,32 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                         ectx.editor.active_deco == Some(idx)
                     };
                     let cell_size = egui::vec2(72., 80.);
-                    let path = obj.path.clone();
-                    let tex = if let Some(t) = icons.get(&path) {
-                        *t
-                    } else {
-                        let t = palette_icon_cache(
-                            ui.ctx(),
-                            ectx.editor,
-                            &path,
-                            &format!("assets/Objects/{path}"),
-                        );
-                        icons.insert(path, t);
-                        t
-                    };
-                    let cell = egui::Button::new(
-                        egui::RichText::new(format!("{}\n({})", obj.name, obj.index))
-                            .small()
-                            .color(if selected {
-                                egui::Color32::YELLOW
-                            } else {
-                                egui::Color32::LIGHT_GRAY
-                            }),
-                    )
-                    .min_size(cell_size);
-                    let resp = ui.add_enabled(tex.is_some(), cell).on_hover_text(format!(
+                    let (resp, icon_rect) = palette_cell(ui, cell_size);
+                    let mut icon_rect = icon_rect;
+                    icon_rect.min.y += 10.;
+                    if let Some(tex) = ectx.editor.palette_tex.get(&obj.path) {
+                        draw_icon_fit(ui.painter(), tex, icon_rect);
+                    }
+                    // Подпись поверх нижней части ячейки.
+                    ui.put(
+                        egui::Rect::from_min_size(
+                            resp.rect.left_bottom() - egui::vec2(0., 30.),
+                            egui::vec2(cell_size.x, 30.),
+                        ),
+                        egui::Label::new(
+                            egui::RichText::new(format!("{}\n({})", obj.name, obj.index))
+                                .small()
+                                .color(if selected {
+                                    egui::Color32::YELLOW
+                                } else {
+                                    egui::Color32::LIGHT_GRAY
+                                }),
+                        ),
+                    );
+                    let resp = resp.on_hover_text(format!(
                         "{} ({}) {:?}",
                         obj.name, obj.index, obj.size
                     ));
-                    if let Some(tex) = tex {
-                        // Иконка в верхней части ячейки, над подписью.
-                        let icon_rect = egui::Rect::from_min_size(
-                            resp.rect.left_top() + egui::vec2(4., 2.),
-                            egui::vec2(64., 44.),
-                        );
-                        ui.painter().image(
-                            tex,
-                            icon_rect,
-                            egui::Rect::from_min_max(
-                                egui::pos2(0., 0.),
-                                egui::pos2(1., 1.),
-                            ),
-                            egui::Color32::WHITE,
-                        );
-                    }
                     let pick = if buildings {
                         crate::state::MultiPick::Building(idx)
                     } else {
