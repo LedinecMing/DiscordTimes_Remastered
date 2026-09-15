@@ -12,6 +12,7 @@ use crate::camera::{default_camera, Camera};
 use crate::gfx::{colors, Target};
 use crate::state::{EditorUi, Menu, MultiPick, SIZE};
 use crate::Ctx;
+use std::fmt::Write as _;
 use editor_core::command::{BatchPlace, PaintTile, PlaceArmy, PlaceBuilding, PlaceDeco};
 use editor_core::CommandResult;
 use egui::{
@@ -291,17 +292,8 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
         egui::Panel::bottom("editor_status").show(ui, |ui| {
             status_bar(ui, &mut rest);
         });
-        egui::Panel::left("editor_tools")
-            .default_size(240.)
-            .min_size(200.)
-            .resizable(true)
-            .show(ui, |ui| {
-                tool_panel(ui, &mut rest);
-            });
-        // ЕДИНОЕ дерево экрана (п.3 ТЗ-2): карта + инфо-панели — тайлы;
-        // карту можно перетащить вкладкой. Пан/зум канваса — внутри
-        // pane (drag канваса обрабатывает canvas(), drag заголовка —
-        // egui_tiles, конфликтов нет).
+        // ЕДИНОЕ дерево экрана: инструменты + карта + инфо-панели — тайлы
+        // (п.7 итерации 3): левую панель тоже можно перетащить вкладкой.
         egui::CentralPanel::default().show(ui, |ui| {
             let mut tree = rest
                 .editor
@@ -309,26 +301,48 @@ fn egui_screen_ui(ctx: &mut Ctx) -> bool {
                 .take()
                 .unwrap_or_else(|| egui_tiles::Tree::new_tabs("editor_screen_tree", vec![]));
             let mut map_id: Option<egui_tiles::TileId> = None;
+            let mut tools_id: Option<egui_tiles::TileId> = None;
             for (id, tile) in tree.tiles.iter() {
-                if let egui_tiles::Tile::Pane(crate::state::EditorPane::Map) = tile {
-                    map_id = Some(*id);
+                match tile {
+                    egui_tiles::Tile::Pane(crate::state::EditorPane::Map) => {
+                        map_id = Some(*id);
+                    }
+                    egui_tiles::Tile::Pane(crate::state::EditorPane::Tools) => {
+                        tools_id = Some(*id);
+                    }
+                    _ => {}
                 }
             }
-            let map_id = match map_id {
-                Some(id) => id,
-                None => {
-                    // Карта попадает в дерево РАЗ при первом кадре и
-                    // становится активной вкладкой только здесь. Раньше
-                    // make_active(map) выполнялся КАЖДЫЙ кадр и гасил
-                    // только что открытую инфо-вкладку (п.1 итерации 2).
+            // Карта и инструменты попадают в дерево РАЗ при первом кадре.
+            // make_active(map) здесь же; в последующих кадрах активная
+            // вкладка не принуждается — иначе гасились инфо-вкладки.
+            if map_id.is_none() || tools_id.is_none() {
+                let map_done = map_id.is_some();
+                let tools_done = tools_id.is_some();
+                let root = tree
+                    .root()
+                    .unwrap_or_else(|| {
+                        let r = tree.tiles.insert_container(egui_tiles::Container::new_tabs(vec![]));
+                        tree.set_visible(r, true);
+                        r
+                    });
+                let mut activate_map = false;
+                if !map_done {
                     let id = tree.tiles.insert_pane(crate::state::EditorPane::Map);
-                    if let Some(root) = tree.root() {
-                        tree.move_tile_to_container(id, root, 0, true);
-                    }
-                    tree.make_active(|tid, _| tid == id);
-                    id
+                    tree.move_tile_to_container(id, root, 0, true);
+                    map_id = Some(id);
+                    activate_map = true;
                 }
-            };
+                if !tools_done {
+                    let id = tree.tiles.insert_pane(crate::state::EditorPane::Tools);
+                    tree.move_tile_to_container(id, root, 0, true);
+                    tools_id = Some(id);
+                }
+                if activate_map {
+                    tree.make_active(|tid, _| Some(tid) == map_id);
+                }
+            }
+            let _ = tools_id;
             let mut behavior = ScreenTreeBehavior {
                 ectx: &mut rest,
                 click_tile: std::mem::take(&mut state.actions.click_tile),
@@ -612,8 +626,16 @@ fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
             if ui.selectable_label(on, cat.label()).clicked() {
                 if on {
                     ectx.editor.brush.paint_categories.retain(|c| *c != cat);
+                    // Выключение слоя «Точки» гасит баблы на карте.
+                    if cat == crate::state::PaintCategory::Lanterns {
+                        ectx.editor.render_settings.markers = false;
+                    }
                 } else {
                     ectx.editor.brush.paint_categories.push(cat);
+                    // Слой «Точки» управляет и видимостью баблов на карте.
+                    if cat == crate::state::PaintCategory::Lanterns {
+                        ectx.editor.render_settings.markers = true;
+                    }
                 }
             }
         }
@@ -1640,7 +1662,6 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         ectx.editor.hover_sel = None;
     }
 
-
     // ЛКМ: интеракт — выбор объекта (рамка + инфоокно). Инструмент не
     // применяется по клику на объект.
     let mut object_clicked = false;
@@ -1648,6 +1669,10 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         if let Some(pos) = response.interact_pointer_pos() {
             let cell = cell_at(pos);
             let sel = cell.and_then(|(cx, cy)| object_at(ectx, cx, cy));
+            let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
+            if debug {
+                eprintln!("[infoflow] (1) ЛКМ: pos={pos:?} cell={cell:?} hit={sel:?} interact={interact}");
+            }
             if interact {
                 if let Some(sel) = sel {
                     ectx.editor.selection = Some(sel);
@@ -1670,131 +1695,116 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     //     фиксация по drag_stopped.
     // Приоритет над паном: если down попал в объект — жест считается
     // захваченным переносом (pan_interact ниже проверяет carry-логику).
-    if response.drag_started_by(egui::PointerButton::Secondary) && interact {
-        if let Some(pos) = response.interact_pointer_pos() {
-            let cell = cell_at(pos);
-            let sel = cell.and_then(|(cx, cy)| object_at(ectx, cx, cy));
-            let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
-            if debug {
-                eprintln!("[carry] PKM down: pos={pos:?} cell={cell:?} hit={sel:?} already_carrying={}", ectx.editor.carrying.is_some());
-            }
-            // already_carrying: этот down — «второй клик» клик-клик:
-            // фиксацию делает блок ниже, новую grab не начинаем.
-            if let (Some(sel), false) = (sel, ectx.editor.carrying.is_some()) {
-                let from = match sel {
-                    crate::state::Selection::Lantern(i) => {
-                        let l = &ectx.editor.state.project().lanterns[i];
-                        (l.x, l.y)
+    // ГРАБ ТОЛЬКО ПО ХК M (владелец, итерация 3): ПКМ больше не захватывает
+    // объекты — она всегда пан. M в интеракте: объект под курсором
+    // приклеивается к курсору (carrying), повторный M — отмена захвата.
+    if interact && ui.input(|i| i.key_pressed(egui::Key::M)) {
+        if ectx.editor.carrying.is_some() {
+            // Повторный M — отмена: объект возвращается на место.
+            ectx.editor.carrying = None;
+        } else if let Some(pos) = response.interact_pointer_pos() {
+            if let Some((cx, cy)) = cell_at(pos) {
+                if let Some(sel) = object_at(ectx, cx, cy) {
+                    let from = match sel {
+                        crate::state::Selection::Lantern(i) => {
+                            let l = &ectx.editor.state.project().lanterns[i];
+                            (l.x, l.y)
+                        }
+                        crate::state::Selection::Army(i) => {
+                            ectx.editor.state.project().map.armys[i].pos
+                        }
+                        crate::state::Selection::Event(_) => (0, 0),
+                        crate::state::Selection::Building(i) => {
+                            ectx.editor.state.project().map.buildings[i].pos
+                        }
+                    };
+                    ectx.editor.carrying = Some(crate::state::CarriedObject {
+                        kind: sel,
+                        from,
+                    });
+                    if std::env::var("DT_EGUI_DEBUG").is_ok() {
+                        eprintln!("[carry] M-граб: {sel:?} from={from:?}");
                     }
-                    crate::state::Selection::Army(i) => {
-                        ectx.editor.state.project().map.armys[i].pos
-                    }
-                    crate::state::Selection::Event(_) => (0, 0),
-                    crate::state::Selection::Building(i) => {
-                        ectx.editor.state.project().map.buildings[i].pos
-                    }
-                };
-                ectx.editor.carrying = Some(crate::state::CarriedObject {
-                    kind: sel,
-                    from,
-                });
-                if debug {
-                    eprintln!("[carry] carrying=Some({sel:?}) from={from:?} (приклеен к курсору)");
                 }
             }
         }
     }
 
-    // Фиксация переноса (клик-клик): ПКМ down при активном carrying.
-    // Драг при зажатой ПКМ тоже доезжает сюда через drag_stopped ниже.
+    // Фиксация переноса (после M-граба): ЛКМ-клик в новой клетке —
+    // поставить; повторный M — отмена (обработано выше); Esc — отмена.
     if let Some(carried) = ectx.editor.carrying {
-        let fix = |ectx: &mut EditorCtx, to: (usize, usize)| {
-            let from = carried.from;
-            let editor = &mut ectx.editor;
-            let command: Box<dyn editor_core::Command> = match carried.kind {
-                crate::state::Selection::Lantern(i) => {
-                    Box::new(editor_core::command::MoveLantern::new(i, from, to))
-                }
-                crate::state::Selection::Event(_) => return,
-                crate::state::Selection::Building(i) => {
-                    Box::new(editor_core::command::MoveBuilding::new(i, from, to))
-                }
-                crate::state::Selection::Army(i) => {
-                    Box::new(editor_core::command::MoveArmy::new(i, from, to))
-                }
-            };
-            editor.carrying = None;
-            let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
-            if debug {
-                eprintln!(
-                    "[carry] drop cell={to:?} cmd={:?} from={from:?}",
-                    command
-                );
-            }
-            match editor.history.execute(command, &mut editor.state) {
-                CommandResult::Applied => {
-                    if debug {
-                        eprintln!("[carry] Applied; bake_dirty=true");
-                    }
-                    editor.status = format!("Перенос: {:?} → {:?}", from, to);
-                    editor.bake_dirty = true;
-                }
-                CommandResult::Noop => {
-                    if debug {
-                        eprintln!("[carry] Noop (позиция не изменилась/протух индекс)");
-                    }
-                }
-            }
-        };
-        // Кликом-клик ПКМ down в новой клетке (не там, где взяли) —
-        // фиксация. ВАЖНО: тот же down, который только что ВЗЯЛ объект
-        // (grab выше), сюда не попадает — в этом кадре carrying уже
-        // установлен, но from совпадает с клеткой взятия.
-        let click_fixed = {
-            let mut fixed = false;
-            if response.drag_started_by(egui::PointerButton::Secondary) {
-                if let Some(pos) = response.interact_pointer_pos() {
-                    if let Some(to) = cell_at(pos) {
-                        if to != carried.from {
-                            fix(ectx, to);
-                            fixed = true;
-                        }
-                    }
-                }
-            }
-            fixed
-        };
-        // Обычный драг: отпустили ПКМ — фиксируем. Но если это ТОТ ЖЕ
-        // кадр, где произошёл grab (click-click: нажали-отпустили на
-        // объекте, ничего не перетащив) — carrying ЖИВЁТ дальше
-        // (приклеен к курсору), фиксация только следующим down.
-        if !click_fixed
-            && response.drag_stopped_by(egui::PointerButton::Secondary)
-            && !response.drag_started_by(egui::PointerButton::Secondary)
-        {
+        // Esc — отмена переноса.
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ectx.editor.carrying = None;
+        } else if response.clicked() && !interact {
+            // ЛКМ в клетке (интеракт всё ещё активен, но клик мимо
+            // объектов — либо не в интеракте): фиксируем.
+            let _ = carried;
+        }
+        // Фиксация ЛКМ-кликом в любой клетке при активном carrying
+        // (интеракт): сама ЛКМ-обработка выбора объекта происходит
+        // ниже; здесь перехватываем клик как «положить здесь».
+        if response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 if let Some(to) = cell_at(pos) {
-                    fix(ectx, to);
+                    let from = carried.from;
+                    let editor = &mut ectx.editor;
+                    let command: Option<Box<dyn editor_core::Command>> = match carried.kind {
+                        crate::state::Selection::Lantern(i) => Some(Box::new(
+                            editor_core::command::MoveLantern::new(i, from, to),
+                        )),
+                        crate::state::Selection::Event(_) => None,
+                        crate::state::Selection::Building(i) => Some(Box::new(
+                            editor_core::command::MoveBuilding::new(i, from, to),
+                        )),
+                        crate::state::Selection::Army(i) => Some(Box::new(
+                            editor_core::command::MoveArmy::new(i, from, to),
+                        )),
+                    };
+                    let Some(command) = command else {
+                        editor.carrying = None;
+                        ectx.editor.cam = cam;
+                        return None;
+                    };
+                    editor.carrying = None;
+                    let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
+                    if debug {
+                        eprintln!("[carry] drop cell={to:?} from={from:?}");
+                    }
+                    match editor.history.execute(command, &mut editor.state) {
+                        CommandResult::Applied => {
+                            if debug {
+                                eprintln!("[carry] Applied; bake_dirty=true");
+                            }
+                            editor.status = format!("Перенос: {:?} → {:?}", from, to);
+                            editor.bake_dirty = true;
+                        }
+                        CommandResult::Noop => {}
+                    }
                 }
             }
-        }
     }
-    // 4в: оригинал переносимого объекта СКРЫВАЕТСЯ — запечка в RT общая,
-    // поэтому затираем его rect полупрозрачным слоем (полу-призрак на
-    // исходном месте, полный ghost следует за курсором).
+    }
+    // Оригинал переносимого объекта ПОЛНОСТЬЮ скрыт: запечка в RT общая,
+    // поэтому закрашиваем его хитбокс-rect НЕПРОЗРАЧНЫМ цветом фона карты
+    // (полупрозрачная «тень» давала видимый силуэт на старом месте).
+    // Rect строится от якоря ВЛЕВО-ВВЕРХ [pos-w+1..pos]×[pos-h+1..pos] —
+    // та же формула, что calc_hitboxes/рамка выделения.
     if let Some(carried) = ectx.editor.carrying {
         let (from_x, from_y) = carried.from;
         let (fw, fh) = carry_footprint(ectx);
         let hide_rect = egui::Rect::from_min_max(
-            world_to_screen([from_x as f32 * SIZE.0, from_y as f32 * SIZE.1]),
             world_to_screen([
-                (from_x + fw) as f32 * SIZE.0,
-                (from_y + fh) as f32 * SIZE.1,
+                (from_x + 1 - fw) as f32 * SIZE.0,
+                (from_y + 1 - fh) as f32 * SIZE.1,
+            ]),
+            world_to_screen([
+                (from_x + 1) as f32 * SIZE.0,
+                (from_y + 1) as f32 * SIZE.1,
             ]),
         );
-        painter.rect_filled(hide_rect, 0., Color32::from_black_alpha(160));
+        painter.rect_filled(hide_rect, 0., egui::Color32::WHITE);
     }
-
     // Подсветка выделения интеракта: рамка по ПОЛНОМУ хитбоксу
     // (армия 1×2, строение — footprint, точка — 1 клетка) + маркер
     // опорной точки (x, y) с подписью координат.
@@ -1974,6 +1984,7 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
     } else {
         // Кисть отпущена: следующее нажатие начнёт новую траекторию.
         ectx.editor.brush_pos = None;
+        flush_lantern_stroke(ectx);
     }
     ectx.editor.cam = cam;
     clicked
@@ -2321,32 +2332,32 @@ fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
         if cats.contains(&crate::state::PaintCategory::Tiles) {
             editor.active_tile = 0;
         }
+        // Фигура ластика = та же геометрия, что у рисования:
+        // flood-fill для заливки, brush_cells для кисти.
+        let cells = if editor.tool == editor_core::Tool::BucketFill {
+            flood_fill(
+                editor.state.project(),
+                tile,
+                editor.brush.fill_max_range,
+                editor.brush.fill_max_volume,
+            )
+        } else {
+            let size = editor.state.project().size();
+            brush_cells(editor.brush.shape, editor.brush.size)
+                .into_iter()
+                .filter_map(|(dx, dy)| {
+                    let x = tile.0 as i64 + dx as i64;
+                    let y = tile.1 as i64 + dy as i64;
+                    (x >= 0 && y >= 0 && (x as usize) < size && (y as usize) < size)
+                        .then_some((x as usize, y as usize))
+                })
+                .collect::<Vec<_>>()
+        };
         if cats.contains(&crate::state::PaintCategory::Decos)
             || cats.contains(&crate::state::PaintCategory::Buildings)
         {
-            // Фигура ластика = та же геометрия, что у рисования:
-            // flood-fill для заливки, brush_cells для кисти.
-            let cells = if editor.tool == editor_core::Tool::BucketFill {
-                flood_fill(
-                    editor.state.project(),
-                    tile,
-                    editor.brush.fill_max_range,
-                    editor.brush.fill_max_volume,
-                )
-            } else {
-                let size = editor.state.project().size();
-                brush_cells(editor.brush.shape, editor.brush.size)
-                    .into_iter()
-                    .filter_map(|(dx, dy)| {
-                        let x = tile.0 as i64 + dx as i64;
-                        let y = tile.1 as i64 + dy as i64;
-                        (x >= 0 && y >= 0 && (x as usize) < size && (y as usize) < size)
-                            .then_some((x as usize, y as usize))
-                    })
-                    .collect::<Vec<_>>()
-            };
             match editor.history.execute(
-                Box::new(editor_core::command::EraseAt::new(cells)),
+                Box::new(editor_core::command::EraseAt::new(cells.clone())),
                 &mut editor.state,
             ) {
                 CommandResult::Applied => {
@@ -2354,6 +2365,38 @@ fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
                     editor.bake_dirty = true;
                 }
                 CommandResult::Noop => {}
+            }
+        }
+        if cats.contains(&crate::state::PaintCategory::Lanterns) {
+            // Ластик точек: RemoveLantern на каждую точку, чья клетка
+            // в фигуре кисти; серия — ОДНА undo-запись (Batch).
+            let project = editor.state.project();
+            let ids: Vec<usize> = project
+                .lanterns
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| cells.contains(&(l.x, l.y)))
+                .map(|(i, _)| i)
+                .collect();
+            drop(project);
+            if !ids.is_empty() {
+                let sub: Vec<Box<dyn editor_core::Command>> = ids
+                    .into_iter()
+                    .map(|i| {
+                        Box::new(editor_core::command::RemoveLantern::new(i))
+                            as Box<dyn editor_core::Command>
+                    })
+                    .collect();
+                match editor.history.execute(
+                    Box::new(editor_core::command::Batch::new(sub)),
+                    &mut editor.state,
+                ) {
+                    CommandResult::Applied => {
+                        editor.status = "Ластик: точки удалены".into();
+                        editor.bake_dirty = true;
+                    }
+                    CommandResult::Noop => {}
+                }
             }
         }
         if cats.contains(&crate::state::PaintCategory::Tiles) {
@@ -2508,9 +2551,12 @@ fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
         }
         editor_core::Tool::Interact => None,
     };
-    // Вкладка «События»: выбранный тип точки (active_lantern_kind)
-    // перекрывает инструмент — ЛКМ ставит фонарик/точку событий
-    // (map_model 8/9, радиус 3 — новую точку видно на карте).
+    // Точки событий (категория «Точки»): выбранный тип (active_lantern_kind)
+    // перекрывает инструмент — ЛКМ ставит фонарик/точку (map_model 8/9,
+    // радиус 3). ЛИНИЯ/ФИГУРА КИСТИ = ОДНА undo-запись: пока ЛКМ зажата,
+    // PlaceLantern накапливаются в lantern_stroke, на отпускании — один
+    // Batch (одиночный клик = та же механика, Batch из 1).
+    let lantern_override = editor.active_lantern_kind.is_some();
     let command = match (command, editor.active_lantern_kind) {
         (_, Some(lamp)) => {
             let (map_model, active) = if lamp { (8, true) } else { (9, false) };
@@ -2524,6 +2570,16 @@ fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
         editor.status = "Выберите элемент в палитре".into();
         return;
     };
+    if lantern_override {
+        editor
+            .brush
+            .lantern_stroke
+            .get_or_insert_with(Vec::new)
+            .push(command);
+        editor.bake_dirty = true;
+        editor.status = format!("Точки: линия из {}", editor.brush.lantern_stroke.as_ref().unwrap().len());
+        return;
+    }
     match editor.history.execute(command, &mut editor.state) {
         CommandResult::Applied => {
             editor.status = format!("{}: {:?}", editor.tool.label(), tile);
@@ -2531,6 +2587,27 @@ fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
         }
         CommandResult::Noop => {
             editor.status = format!("{}: без изменений", editor.tool.label());
+        }
+    }
+}
+
+/// Завершение линии точек: накопленный lantern_stroke фиксируется
+/// ОДНОЙ undo-записью (Batch). Вызывается из canvas при отпускании ЛКМ.
+fn flush_lantern_stroke(ectx: &mut EditorCtx) {
+    let editor = &mut ectx.editor;
+    if let Some(stroke) = editor.brush.lantern_stroke.take() {
+        if stroke.is_empty() {
+            return;
+        }
+        match editor
+            .history
+            .execute(Box::new(editor_core::command::Batch::new(stroke)), &mut editor.state)
+        {
+            CommandResult::Applied => {
+                editor.status = "Точки: линия поставлена (1 undo)".into();
+                editor.bake_dirty = true;
+            }
+            CommandResult::Noop => {}
         }
     }
 }
@@ -2841,6 +2918,9 @@ impl<'a, 'b> egui_tiles::Behavior<crate::state::EditorPane> for ScreenTreeBehavi
             crate::state::EditorPane::Map => {
                 self.click_tile = canvas(ui, self.ectx);
             }
+            crate::state::EditorPane::Tools => {
+                tool_panel(ui, self.ectx);
+            }
             crate::state::EditorPane::Info(sel) => {
                 if !selection_exists(self.ectx, *sel) {
                     return egui_tiles::UiResponse::None;
@@ -2879,6 +2959,7 @@ impl<'a, 'b> egui_tiles::Behavior<crate::state::EditorPane> for ScreenTreeBehavi
     ) -> egui::WidgetText {
         match pane {
             crate::state::EditorPane::Map => "Карта".into(),
+            crate::state::EditorPane::Tools => "Инструменты".into(),
             crate::state::EditorPane::Info(sel) => selection_title(self.ectx, *sel).into(),
         }
     }
@@ -3207,29 +3288,29 @@ thread_local! {
 fn open_info_pane(ectx: &mut EditorCtx, sel: crate::state::Selection) {
     let debug = std::env::var("DT_EGUI_DEBUG").is_ok();
     if debug {
-        eprintln!("[info] open_info_pane: sel={sel:?} exists={}", {
-            // selection_exists читает состояние до вставки.
-            let project = ectx.editor.state.project();
-            match sel {
-                crate::state::Selection::Lantern(i) => i < project.lanterns.len(),
-                crate::state::Selection::Army(i) => i < project.map.armys.len(),
-                crate::state::Selection::Building(i) => i < project.map.buildings.len(),
-                crate::state::Selection::Event(i) => i < project.events.len(),
-            }
-        });
+        eprintln!("[infoflow] (2) open_info_pane entered: sel={sel:?}");
     }
     if !selection_exists(ectx, sel) {
+        if debug {
+            eprintln!("[infoflow] (2a) SEL DEAD — выход (объект удалён?)");
+        }
         return;
     }
     // Pin «по умолчанию» — объект закрепляется при открытии.
     let will_pin = ectx.editor.pin_by_default && !ectx.editor.pinned.contains(&sel);
     let tree = ectx.editor.screen_tree.get_or_insert_with(|| {
+        if debug {
+            eprintln!("[infoflow] (2b) screen_tree was None — СОЗДАЁТСЯ здесь (дерево могло быть потеряно!)");
+        }
         egui_tiles::Tree::new_tabs("editor_screen_tree", vec![])
     });
     let already = tree
         .tiles
         .iter()
         .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel));
+    if debug {
+        eprintln!("[infoflow] (3) tree: root={:?} already_in_tree={already} pinned={}", tree.root().is_some(), ectx.editor.pinned.contains(&sel));
+    }
     if !already {
         // Непинned инфо-тайлы замещают друг друга.
         if !ectx.editor.pinned.contains(&sel) {
@@ -3257,6 +3338,11 @@ fn open_info_pane(ectx: &mut EditorCtx, sel: crate::state::Selection) {
         }
         if let Some(root) = tree.root() {
             tree.move_tile_to_container(pane_id, root, usize::MAX, true);
+            if debug {
+                eprintln!("[infoflow] (4) inserted pane {pane_id:?} → root; root={root:?}");
+            }
+        } else if debug {
+            eprintln!("[infoflow] (4!) NO ROOT — тайл висит без контейнера, GC его СОБЁТ!");
         }
     }
     // Поднять вкладку (даже если панель уже была).
@@ -3272,8 +3358,54 @@ fn open_info_pane(ectx: &mut EditorCtx, sel: crate::state::Selection) {
         })
         .map(|(id, _)| *id);
     if let Some(pane_id) = pane_id {
-        tree.make_active(|id, _| id == pane_id);
+        let activated = tree.make_active(|id, _| id == pane_id);
+        if debug {
+            eprintln!("[infoflow] (5) make_active({pane_id:?}) → {activated}");
+        }
     }
+    if debug {
+        dump_tree("[infoflow] (6)", tree);
+    }
+}
+
+/// Дамп структуры дерева (для [infoflow]-телеметрии).
+fn dump_tree(prefix: &str, tree: &egui_tiles::Tree<crate::state::EditorPane>) {
+    fn rec(
+        out: &mut String,
+        tree: &egui_tiles::Tree<crate::state::EditorPane>,
+        id: egui_tiles::TileId,
+        depth: usize,
+    ) {
+        if let Some(tile) = tree.tiles.get(id) {
+            match tile {
+                egui_tiles::Tile::Pane(p) => {
+                    let _ = writeln!(out, "{}{id:?} = {p:?}", "  ".repeat(depth));
+                }
+                egui_tiles::Tile::Container(c) => {
+                    let _ = writeln!(
+                        out,
+                        "{}{id:?} = {:?} (active={:?})",
+                        "  ".repeat(depth),
+                        c.kind(),
+                        match c {
+                            egui_tiles::Container::Tabs(t) => t.active,
+                            _ => None,
+                        }
+                    );
+                    for ch in c.children() {
+                        rec(out, tree, *ch, depth + 1);
+                    }
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    if let Some(root) = tree.root() {
+        rec(&mut out, tree, root, 1);
+    } else {
+        out.push_str("ROOT NONE\n");
+    }
+    eprintln!("{prefix} tree dump:\n{out}");
 }
 
 /// Применить отложенные открытия событий (вызывать в кадре egui,

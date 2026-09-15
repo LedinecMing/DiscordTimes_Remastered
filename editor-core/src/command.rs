@@ -837,6 +837,49 @@ impl Command for BatchPlace {
     }
 }
 
+impl std::fmt::Debug for Batch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!("Batch({} команд)", self.commands.len()))
+    }
+}
+
+
+/// Серия произвольных команд = ОДНА undo-запись (линия фонарей кистью,
+/// ластик нескольких категорий за клик). Undo идёт в обратном порядке
+/// (стековая семантика).
+pub struct Batch {
+    pub commands: Vec<Box<dyn Command>>,
+}
+
+impl Batch {
+    pub fn new(commands: Vec<Box<dyn Command>>) -> Self {
+        Self { commands }
+    }
+}
+
+impl Command for Batch {
+    fn apply(&mut self, state: &mut EditorState) -> CommandResult {
+        let mut applied = 0;
+        for command in &mut self.commands {
+            if command.apply(state) == CommandResult::Applied {
+                applied += 1;
+            }
+        }
+        (applied > 0)
+            .then_some(CommandResult::Applied)
+            .unwrap_or(CommandResult::Noop)
+    }
+
+    fn undo(&mut self, state: &mut EditorState) {
+        for command in self.commands.iter_mut().rev() {
+            command.undo(state);
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "Batch"
+    }
+}
 /// Изменение размера квадратной карты (якорь — левый верхний угол).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResizeMap {
