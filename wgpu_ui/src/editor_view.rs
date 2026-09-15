@@ -624,6 +624,7 @@ fn render_settings_tab(ui: &mut Ui, ectx: &mut EditorCtx) {
 fn palette_tab(ui: &mut Ui, ectx: &mut EditorCtx) {
     match ectx.editor.tool {
         editor_core::Tool::Brush => tiles_palette(ui, ectx),
+        editor_core::Tool::BucketFill => tiles_palette(ui, ectx),
         editor_core::Tool::Deco => objects_palette(ui, ectx, false),
         editor_core::Tool::Building => objects_palette(ui, ectx, true),
         editor_core::Tool::Army => armies_palette(ui, ectx),
@@ -1526,6 +1527,10 @@ fn apply_tool(ectx: &mut EditorCtx, tile: (usize, usize)) {
     let editor = &mut ectx.editor;
     let command: Option<Box<dyn editor_core::Command>> = match editor.tool {
         editor_core::Tool::Brush => Some(Box::new(PaintTile::new(tile, editor.active_tile))),
+        editor_core::Tool::BucketFill => {
+            // Примитивно — как кисть (настоящий flood-fill — пункт 3).
+            Some(Box::new(PaintTile::new(tile, editor.active_tile)))
+        }
         editor_core::Tool::Deco => editor.active_deco.and_then(|idx| {
             ectx.registry
                 .objects
