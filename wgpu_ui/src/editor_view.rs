@@ -625,7 +625,7 @@ fn brush_settings(ui: &mut Ui, ectx: &mut EditorCtx) {
         let label = multi_pick_label(ectx, *pick);
         ui.horizontal(|ui| {
             ui.label(format!("  {}. {}", i + 1, label));
-            if ui.button("✕").clicked() {
+            if ui.button("×").clicked() {
                 ectx.editor.brush.multi_select.remove(i);
             }
         });
@@ -2614,7 +2614,7 @@ fn lantern_info(ui: &mut Ui, ectx: &mut EditorCtx, sel: crate::state::Selection)
                 crate::editor_ui::object_ref::GameRef::Event,
             );
             let _ = r;
-            if ui.button("✕").clicked() {
+            if ui.button("×").clicked() {
                 let editor = &mut ectx.editor;
                 let command = Box::new(
                     editor_core::command::RemoveLanternEvent::new(index, row),
