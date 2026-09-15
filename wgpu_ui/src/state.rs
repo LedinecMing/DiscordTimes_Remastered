@@ -241,20 +241,28 @@ pub struct EditorUi {
     /// Перенос клик-клик: ПКМ на объекте взял, ПКМ в новой клетке положил.
     /// Ghost следует за курсором без зажатой кнопки; Esc — отмена.
     pub carrying: Option<CarriedObject>,
-    /// Активный ПКМ-драг точки (индекс, исходная клетка, текущая клетка
-    /// курсора): маркер рисуется в текущей клетке (без мутации проекта),
-    /// ПКМ up завершает командой MoveLantern (from → текущая).
-    pub lantern_drag: Option<(usize, (usize, usize), (usize, usize))>,
-    /// Настройки кисти (форма/размер/заливка/мульти-выбор).
-    pub brush: BrushConfig,
     /// Докинг инфоокон (п.6): egui_tiles-дерево в правой панели,
     /// каждая панель = объект (Selection). None — дерево ещё не создано.
     pub info_tree: Option<egui_tiles::Tree<Selection>>,
+    /// Единое дерево экрана (п.3 ТЗ-2): палитра | карта | инфо-панели.
+    /// Панель Map — канвас; пользователь может перетащить как вкладку.
+    pub screen_tree: Option<egui_tiles::Tree<EditorPane>>,
+    pub lantern_drag: Option<(usize, (usize, usize), (usize, usize))>,
+    /// Настройки кисти (форма/размер/заливка/мульти-выбор).
+    pub brush: BrushConfig,
     /// Закреплять объекты по умолчанию (галочка в интеракте).
     pub pin_by_default: bool,
-    /// Открытые окна (пин = висит всегда): панель дерева И плавающие
-    /// окна для незакреплённых выборов — флаг «окно открыто».
+    /// Закреплённые объекты (пин = панель живёт без выделения).
     pub pinned: Vec<Selection>,
+}
+
+/// Панель дерева экрана: карта или инфоокно объекта.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorPane {
+    /// Карта-канвас (центральная область).
+    Map,
+    /// Инфоокно объекта (id объекта в тайле).
+    Info(Selection),
 }
 
 /// Инфоокно по умолчанию закрыто, закреплённое живёт параллельно.
@@ -524,6 +532,7 @@ impl Default for EditorUi {
             carrying: None,
             brush: BrushConfig::default(),
             info_tree: None,
+            screen_tree: None,
             pin_by_default: false,
             pinned: Vec::new(),
         }
