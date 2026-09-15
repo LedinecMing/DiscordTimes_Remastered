@@ -91,6 +91,27 @@ impl CommandHistory {
     pub fn undo_len(&self) -> usize {
         self.undo_stack.len()
     }
+
+    /// Снапшот имён undo-стека (для панели «История»; от старых к новым).
+    pub fn undo_names(&self) -> Vec<&'static str> {
+        self.undo_stack.iter().map(|c| c.name()).collect()
+    }
+
+    /// Вернуться к состоянию после `target`-й команды (0 = пустое
+    /// состояние): undo/redo курсором. Середина стека не удаляется.
+    pub fn travel_to(&mut self, target: usize, state: &mut EditorState) -> usize {
+        while self.undo_stack.len() > target {
+            if self.undo(state).is_none() {
+                break;
+            }
+        }
+        while self.undo_stack.len() < target {
+            if self.redo(state).is_none() {
+                break;
+            }
+        }
+        self.undo_stack.len()
+    }
 }
 
 /// Рисование тайла кистью.

@@ -549,11 +549,61 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
         }
     }
     ui.separator();
-    ui.label(format!(
-        "undo: {} redo: {}",
-        ectx.editor.history.undo_len(),
-        if ectx.editor.history.can_redo() { "+" } else { "-" },
-    ));
+    ui.horizontal(|ui| {
+        ui.label(format!(
+            "undo: {} redo: {}",
+            ectx.editor.history.undo_len(),
+            if ectx.editor.history.can_redo() { "+" } else { "-" },
+        ));
+        // Инструмент «История» (п.10): список действий + переход курсором.
+        let hist_resp = ui.button("История");
+        egui::Popup::from_toggle_button_response(&hist_resp)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| history_panel(ui, ectx));
+    });
+}
+
+/// Панель «История» (п.10): undo-стек с курсором; клик — вернуться к
+/// состоянию (undo/redo до записи, стек не мутируется). Фильтры — по
+/// типам команд (скрывают строки отображения, не трогают стек).
+fn history_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
+    ui.set_min_width(260.);
+    let names = ectx.editor.history.undo_names();
+    let cursor = names.len();
+    ui.label(RichText::new(format!("Курсор: {} / {}", cursor, names.len())).weak());
+    egui::ScrollArea::vertical()
+        .id_salt("history_scroll")
+        .max_height(320.)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            let label = if cursor == 0 {
+                RichText::new("● Старт").strong().color(Color32::LIGHT_GREEN)
+            } else {
+                RichText::new("Старт").weak()
+            };
+            if ui.selectable_label(cursor == 0, label).clicked() {
+                let editor = &mut ectx.editor;
+                editor.history.travel_to(0, &mut editor.state);
+                editor.bake_dirty = true;
+                editor.status = "История: к старту".into();
+            }
+            for (i, name) in names.iter().enumerate() {
+                let here = i + 1 == cursor;
+                let label = if here {
+                    RichText::new(format!("● {}", name))
+                        .strong()
+                        .color(Color32::LIGHT_GREEN)
+                } else {
+                    RichText::new(*name)
+                };
+                if ui.selectable_label(here, label).clicked() {
+                    let editor = &mut ectx.editor;
+                    editor.history.travel_to(i + 1, &mut editor.state);
+                    editor.bake_dirty = true;
+                    editor.status = format!("История: {} / {}", i + 1, names.len());
+                }
+            }
+        });
 }
 
 /// Режим тулбара: рисование (кисть/заливка/постановка) или интеракт.
