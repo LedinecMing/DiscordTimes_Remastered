@@ -310,13 +310,15 @@ impl InteractFilter {
     }
 }
 
-/// Панель дерева экрана: карта или инфоокно объекта.
+/// Панель дерева экрана: карта, инфоокно объекта или инструменты.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorPane {
     /// Карта-канвас (центральная область).
     Map,
     /// Инфоокно объекта (id объекта в тайле).
     Info(Selection),
+    /// Панель инструментов/палитры (докится как вкладка).
+    Tools,
 }
 
 /// Инфоокно по умолчанию закрыто, закреплённое живёт параллельно.
@@ -329,7 +331,6 @@ impl EditorUi {
 
 /// Настройки кисти (п.3 ТЗ): форма и размер фигуры под курсором,
 /// flood-fill для заливки, мульти-выбор палитры.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrushConfig {
     /// Форма кисти.
     pub shape: BrushShape,
@@ -355,6 +356,9 @@ pub struct BrushConfig {
     /// Зерно рандома мульти-выбора: hash координат клетки (детерминизм
     /// относительно позиции — одно и то же место рисует одно и то же).
     pub multi_seed_salt: u64,
+    /// Незафлюшенная линия точек: PlaceLantern накапливаются, пока ЛКМ
+    /// зажата; на отпускании — одна undo-запись (Batch).
+    pub lantern_stroke: Option<Vec<Box<dyn editor_core::Command>>>,
 }
 
 impl Default for BrushConfig {
@@ -370,6 +374,7 @@ impl Default for BrushConfig {
             multi_select: Vec::new(),
             multi_order: MultiOrder::Random,
             multi_seed_salt: 0,
+            lantern_stroke: None,
         }
     }
 }
@@ -404,7 +409,6 @@ impl BrushShape {
     }
 }
 
-/// Категория рисования (п.4): может быть выбрано несколько одновременно.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaintCategory {
     /// Тайлы (кисть).
