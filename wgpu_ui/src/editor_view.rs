@@ -2492,6 +2492,32 @@ impl<'a, 'b> egui_tiles::Behavior<crate::state::EditorPane> for ScreenTreeBehavi
         }
     }
 
+    fn is_tab_closable(
+        &self,
+        tiles: &egui_tiles::Tiles<crate::state::EditorPane>,
+        tile_id: egui_tiles::TileId,
+    ) -> bool {
+        // Кнопка закрытия — только у инфо-тайлов (карту не закрыть).
+        !matches!(
+            tiles.get(tile_id),
+            Some(egui_tiles::Tile::Pane(crate::state::EditorPane::Map))
+        )
+    }
+
+    fn on_tab_close(
+        &mut self,
+        tiles: &mut egui_tiles::Tiles<crate::state::EditorPane>,
+        tile_id: egui_tiles::TileId,
+    ) -> bool {
+        // Закрытие панели объекта снимает его pin.
+        if let Some(egui_tiles::Tile::Pane(crate::state::EditorPane::Info(sel))) =
+            tiles.get(tile_id)
+        {
+            self.ectx.editor.pinned.retain(|p| p != sel);
+        }
+        true
+    }
+
     fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
         egui_tiles::SimplificationOptions {
             all_panes_must_have_tabs: true,
@@ -2794,6 +2820,10 @@ fn flush_pending_event_opens(ectx: &mut EditorCtx) {
         if !selection_exists(ectx, sel) {
             continue;
         }
+        // 8а: непинned инфо-тайлы ЗАМЕНЯЮТ друг друга — при открытии
+        // нового (без пина) старые непинned Info-панели закрываются.
+        let will_pin =
+            ectx.editor.pin_by_default || ectx.editor.selection == Some(sel);
         let tree = ectx.editor.screen_tree.get_or_insert_with(|| {
             egui_tiles::Tree::new_tabs("editor_screen_tree", vec![])
         });
@@ -2802,9 +2832,25 @@ fn flush_pending_event_opens(ectx: &mut EditorCtx) {
             .iter()
             .any(|(_, tile)| matches!(tile, egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) if *p == sel));
         if !already {
+            if !ectx.editor.pinned.contains(&sel) {
+                let mut stale: Vec<egui_tiles::TileId> = Vec::new();
+                for (id, tile) in tree.tiles.iter() {
+                    if let egui_tiles::Tile::Pane(crate::state::EditorPane::Info(p)) = tile {
+                        if !ectx.editor.pinned.contains(p) {
+                            stale.push(*id);
+                        }
+                    }
+                }
+                for id in stale {
+                    tree.remove_recursively(id);
+                }
+            }
             let pane_id = tree
                 .tiles
                 .insert_pane(crate::state::EditorPane::Info(sel));
+            if will_pin {
+                ectx.editor.pinned.push(sel);
+            }
             if let Some(root) = tree.root() {
                 tree.move_tile_to_container(pane_id, root, usize::MAX, true);
             } else {
