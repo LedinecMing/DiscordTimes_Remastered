@@ -510,6 +510,19 @@ fn tool_panel(ui: &mut Ui, ectx: &mut EditorCtx) {
                 .weak()
                 .small(),
         );
+        // Фильтр цели интеракта (п.7).
+        ui.horizontal(|ui| {
+            ui.label("Выбирать:");
+            egui::ComboBox::from_id_salt("interact_filter")
+                .selected_text(ectx.editor.interact_filter.label())
+                .show_ui(ui, |ui| {
+                    for f in crate::state::InteractFilter::ALL {
+                        let mut cur = ectx.editor.interact_filter;
+                        ui.selectable_value(&mut cur, f, f.label());
+                        ectx.editor.interact_filter = cur;
+                    }
+                });
+        });
     }
     // Внутри интеракта палитра не нужна; вкладки и undo-строка — общие.
     if mode == Mode::Paint {
@@ -1339,28 +1352,35 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
         cy: usize,
     ) -> Option<crate::state::Selection> {
         let project = ectx.editor.state.project();
-        if let Some(i) = project
-            .lanterns
-            .iter()
-            .position(|l| l.x == cx && l.y == cy)
-        {
-            return Some(crate::state::Selection::Lantern(i));
+        let filter = ectx.editor.interact_filter;
+        if filter.allows(crate::state::Selection::Lantern(0)) {
+            if let Some(i) = project
+                .lanterns
+                .iter()
+                .position(|l| l.x == cx && l.y == cy)
+            {
+                return Some(crate::state::Selection::Lantern(i));
+            }
         }
-        if let Some(i) = project
-            .map
-            .armys
-            .iter()
-            .position(|a| a.pos.0 == cx && a.pos.1 == cy)
-        {
-            return Some(crate::state::Selection::Army(i));
+        if filter.allows(crate::state::Selection::Army(0)) {
+            if let Some(i) = project
+                .map
+                .armys
+                .iter()
+                .position(|a| a.pos.0 == cx && a.pos.1 == cy)
+            {
+                return Some(crate::state::Selection::Army(i));
+            }
         }
         // Строение: клетка якоря или спан (якорь — правый-нижний угол,
         // спан влево-вверх; максимальный спан 8×7 — запас 8).
-        if let Some(i) = project.map.buildings.iter().position(|b| {
-            (b.pos.0 == cx && b.pos.1 == cy)
-                || (b.pos.0 >= cx && b.pos.0 < cx + 8 && b.pos.1 >= cy && b.pos.1 < cy + 8)
-        }) {
-            return Some(crate::state::Selection::Building(i));
+        if filter.allows(crate::state::Selection::Building(0)) {
+            if let Some(i) = project.map.buildings.iter().position(|b| {
+                (b.pos.0 == cx && b.pos.1 == cy)
+                    || (b.pos.0 >= cx && b.pos.0 < cx + 8 && b.pos.1 >= cy && b.pos.1 < cy + 8)
+            }) {
+                return Some(crate::state::Selection::Building(i));
+            }
         }
         None
     }

@@ -254,6 +254,48 @@ pub struct EditorUi {
     pub pin_by_default: bool,
     /// Закреплённые объекты (пин = панель живёт без выделения).
     pub pinned: Vec<Selection>,
+    /// Фильтр цели интеракта (п.7): что object_at считает целью.
+    pub interact_filter: InteractFilter,
+}
+
+/// Что выбирает ЛКМ/ПКМ в интеракте.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InteractFilter {
+    /// Всё (первое попавшееся: точки → армии → строения).
+    #[default]
+    All,
+    /// Только строения.
+    Buildings,
+    /// Только армии.
+    Armies,
+    /// Только точки событий.
+    Lanterns,
+}
+
+impl InteractFilter {
+    pub const ALL: [InteractFilter; 4] = [
+        InteractFilter::All,
+        InteractFilter::Buildings,
+        InteractFilter::Armies,
+        InteractFilter::Lanterns,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            InteractFilter::All => "Всё",
+            InteractFilter::Buildings => "Строения",
+            InteractFilter::Armies => "Армии",
+            InteractFilter::Lanterns => "Точки",
+        }
+    }
+    /// Пропускает ли фильтр данный Selection.
+    pub fn allows(self, sel: Selection) -> bool {
+        match self {
+            InteractFilter::All => true,
+            InteractFilter::Buildings => matches!(sel, Selection::Building(_)),
+            InteractFilter::Armies => matches!(sel, Selection::Army(_)),
+            InteractFilter::Lanterns => matches!(sel, Selection::Lantern(_)),
+        }
+    }
 }
 
 /// Панель дерева экрана: карта или инфоокно объекта.
@@ -495,9 +537,9 @@ impl Default for EditorUi {
             state: editor_core::EditorState::new(editor_core::MapProject::new(50, 0)),
             tool: editor_core::Tool::default(),
             baked: false,
-            egui_tex: None,
             decos_rt: None,
             decos_tex: None,
+            egui_tex: None,
             marker_handles: std::collections::HashMap::new(),
             rt: None,
             cam: crate::camera::Camera::from_display_rect(
@@ -535,6 +577,7 @@ impl Default for EditorUi {
             screen_tree: None,
             pin_by_default: false,
             pinned: Vec::new(),
+            interact_filter: InteractFilter::default(),
         }
     }
 }
