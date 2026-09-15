@@ -1394,6 +1394,53 @@ fn canvas(ui: &mut Ui, ectx: &mut EditorCtx) -> Option<(usize, usize)> {
             anchor_world[1] + (cam.target[1] - anchor_world[1]) / factor,
         ];
     }
+    // Клавиатурная камера (приоритет владельца): стрелки/WASD — пан
+    // (8 клеток/сек, Shift ×3), +/− — зум от центра канваса (фактор
+    // 1.2, клампы как у колеса), `=` — Fit-to-screen.
+    {
+        let dt = ui.input(|i| i.stable_dt).max(1. / 240.);
+        let shift = ui.input(|i| i.modifiers.shift);
+        let cells_per_sec = if shift { 24. } else { 8. };
+        let pan_cells = cells_per_sec * dt;
+        let key = |k: egui::Key| ui.input(|i| i.key_down(k));
+        let (mut dx, mut dy) = (0f32, 0f32);
+        if key(egui::Key::ArrowLeft) || key(egui::Key::A) {
+            dx -= pan_cells * SIZE.0;
+        }
+        if key(egui::Key::ArrowRight) || key(egui::Key::D) {
+            dx += pan_cells * SIZE.0;
+        }
+        if key(egui::Key::ArrowUp) || key(egui::Key::W) {
+            dy -= pan_cells * SIZE.1;
+        }
+        if key(egui::Key::ArrowDown) || key(egui::Key::S) {
+            dy += pan_cells * SIZE.1;
+        }
+        if dx != 0. || dy != 0. {
+            cam.target[0] += dx;
+            cam.target[1] += dy;
+        }
+        // Зум с клавиатуры: от ЦЕНТРА канваса, фактор как у колеса.
+        let zoom_in = key(egui::Key::Plus);
+        let zoom_out = key(egui::Key::Minus);
+        if (zoom_in || zoom_out) && response.hovered() {
+            let factor = if zoom_in { 1.2 } else { 1. / 1.2 };
+            let center_world = screen_to_world(rect.center());
+            cam.zoom[0] = (cam.zoom[0] * factor).clamp(fit / world_w * 0.5, 4.0);
+            cam.zoom[1] = cam.zoom[0];
+            cam.target = [
+                center_world[0] + (cam.target[0] - center_world[0]) / factor,
+                center_world[1] + (cam.target[1] - center_world[1]) / factor,
+            ];
+        }
+        // `=` — Fit-to-screen: центр карты, вписанный зум (повторное
+        // нажатие — повторный fit после пана).
+        if ui.input(|i| i.key_pressed(egui::Key::Equals)) {
+            cam.zoom[0] = fit;
+            cam.zoom[1] = fit;
+            cam.target = [world_w * 0.5, world_h * 0.5];
+        }
+    }
     // ---------------- Hit-test объектов интеракта ----------------
     // Хелперы — чистая геометрия + поиск по проекту на месте вызова
     // (fn, не замыкания: ectx нужен мутабельно позже в кадре).
