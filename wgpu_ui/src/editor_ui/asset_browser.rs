@@ -95,40 +95,30 @@ pub fn asset_browser<S: AssetSource>(
                         continue;
                     }
                     let selected = source.selected(&item.id);
-                    let (cell, icon_rect) = cell(ui, CELL);
-                    if let Some(icon) = source.icon(&item.tex_key, tex) {
-                        draw_icon_fit(ui.painter(), icon, icon_rect);
-                    }
                     let mut label = item.name.clone();
                     if let Some(sub) = &item.sub {
                         label.push('\n');
                         label.push_str(sub);
                     }
-                    ui.put(
-                        egui::Rect::from_min_size(
-                            cell.rect.left_bottom() - egui::vec2(0., 30.),
-                            egui::vec2(CELL.x, 30.),
-                        ),
-                        egui::Label::new(
-                            RichText::new(label)
-                                .color(if selected { Color32::YELLOW } else { Color32::LIGHT_GRAY })
-                                .small(),
-                        ),
-                    );
-                    let mut cell = cell.on_hover_text(format!(
+                    let cell = cell(ui, CELL, &label, selected);
+                    if let Some(icon) = source.icon(&item.tex_key, tex) {
+                        draw_icon_fit(ui.painter(), icon, icon_rect_of(cell.rect));
+                    }
+                    let cell = cell.on_hover_text(format!(
                         "{} ({})",
                         item.name,
                         item.sub.as_deref().unwrap_or("")
                     ));
                     if source.multi_select() {
-                        let checked = source.in_multi(&item.id);
-                        // Галочка мульти-выбора в углу ячейки.
-                        let cb = ui.put(
+                        // Галочка мульти-выбора в углу ячейки — place
+                        // (без сдвига курсора строки).
+                        let mut val = source.in_multi(&item.id);
+                        let cb = ui.place(
                             egui::Rect::from_min_size(
                                 cell.rect.right_top() - egui::vec2(18., 0.),
                                 egui::vec2(18., 18.),
                             ),
-                            egui::Checkbox::new(&mut checked.clone(), ""),
+                            egui::Checkbox::new(&mut val, ""),
                         );
                         if cb.clicked() {
                             source.toggle_multi(item.id);
@@ -155,13 +145,49 @@ pub fn asset_browser<S: AssetSource>(
     events
 }
 
-fn cell(ui: &mut Ui, size: egui::Vec2) -> (egui::Response, egui::Rect) {
+/// ЕДИНАЯ ячейка палитры (п.2 ТЗ-багфиксов): фиксированный размер,
+/// иконка aspect-fit вверху, подпись — painter'ом по ячейке (не через
+/// ui.put/place: те двигают курсор wrap-строки — «лесенка» рядов).
+pub fn cell(
+    ui: &mut Ui,
+    size: egui::Vec2,
+    label: &str,
+    selected: bool,
+) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let icon_rect = egui::Rect::from_min_size(
         rect.left_top() + egui::vec2(4., 4.),
         egui::vec2(size.x - 8., size.y - 34.),
     );
-    (resp, icon_rect)
+    let painter = ui.painter();
+    let mut lines = label.split('\n');
+    let name = lines.next().unwrap_or("");
+    let sub = lines.next();
+    painter.text(
+        egui::pos2(rect.center().x, rect.top() + 46.),
+        egui::Align2::CENTER_TOP,
+        name,
+        egui::FontId::proportional(10.),
+        if selected {
+            Color32::YELLOW
+        } else {
+            Color32::LIGHT_GRAY
+        },
+    );
+    if let Some(sub) = sub {
+        painter.text(
+            egui::pos2(rect.center().x, rect.top() + 59.),
+            egui::Align2::CENTER_TOP,
+            sub,
+            egui::FontId::proportional(9.),
+            if selected {
+                Color32::YELLOW
+            } else {
+                Color32::GRAY
+            },
+        );
+    }
+    resp
 }
 
 /// Aspect-fit текстуры в прямоугольнике (центрирование).
@@ -180,4 +206,12 @@ pub fn draw_icon_fit(painter: &egui::Painter, tex: &egui::TextureHandle, rect: e
         egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
         Color32::WHITE,
     );
+}
+
+/// Прямоугольник иконки внутри ячейки (верх, минус зона подписи).
+pub fn icon_rect_of(rect: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_size(
+        rect.left_top() + egui::vec2(4., 4.),
+        egui::vec2(rect.width() - 8., rect.height() - 34.),
+    )
 }

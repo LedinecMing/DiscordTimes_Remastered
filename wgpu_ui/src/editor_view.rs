@@ -1008,30 +1008,20 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
                     }
                     let selected = ectx.editor.active_tile == tile;
                     let sprite = dt_lib::map::tile::TILES[tile].sprite();
-                    let cell_size = egui::vec2(72., 80.);
-                    let (cell, icon_rect) = palette_cell(ui, cell_size);
-                    // Иконка по ячейке (aspect-fit, верх ячейки).
-                    if let Some(tex) = ectx.editor.palette_tex.get(sprite) {
-                        draw_icon_fit(ui.painter(), tex, icon_rect);
-                    }
-                    // Подпись: фиксированная высота 30, усечение — ряды
-                    // ячеек ровные при любых именах (лесенка исключена).
-                    ui.put(
-                        egui::Rect::from_min_size(
-                            cell.rect.left_bottom() - egui::vec2(0., 30.),
-                            egui::vec2(cell_size.x, 30.),
-                        ),
-                        egui::Label::new(
-                            RichText::new(format!("{}\n{}", names[tile], tile))
-                                .color(if selected {
-                                    Color32::YELLOW
-                                } else {
-                                    Color32::LIGHT_GRAY
-                                })
-                                .small(),
-                        )
-                        .truncate(),
+                    let label = format!("{}\n{}", names[tile], tile);
+                    let cell = crate::editor_ui::asset_browser::cell(
+                        ui,
+                        egui::vec2(72., 80.),
+                        &label,
+                        selected,
                     );
+                    if let Some(tex) = ectx.editor.palette_tex.get(sprite) {
+                        crate::editor_ui::asset_browser::draw_icon_fit(
+                            ui.painter(),
+                            tex,
+                            crate::editor_ui::asset_browser::icon_rect_of(cell.rect),
+                        );
+                    }
                     let cell = cell.on_hover_text(format!("{} ({})", names[tile], tile));
                     // Единый клик-таргет: мультивыбор включён — клик
                     // тогглит элемент в списке, иначе — одиночный выбор.
@@ -1056,35 +1046,6 @@ fn tiles_palette(ui: &mut Ui, ectx: &mut EditorCtx) {
         });
 }
 
-/// Ячейка палитры фиксированного размера: возвращает реакцию всей ячейки
-/// и прямоугольник иконки (верх ячейки, минус подпись).
-fn palette_cell(ui: &mut Ui, cell_size: egui::Vec2) -> (egui::Response, egui::Rect) {
-    let (rect, resp) = ui.allocate_exact_size(cell_size, Sense::click());
-    let icon_rect = egui::Rect::from_min_size(
-        rect.left_top() + egui::vec2(4., 4.),
-        egui::vec2(cell_size.x - 8., cell_size.y - 34.),
-    );
-    (resp, icon_rect)
-}
-
-/// Рисует текстуру aspect-fit в прямоугольнике (центрирование).
-fn draw_icon_fit(painter: &egui::Painter, tex: &egui::TextureHandle, rect: egui::Rect) {
-    let [tw, th] = tex.size();
-    let (tw, th) = (tw as f32, th as f32);
-    if tw <= 0. || th <= 0. {
-        return;
-    }
-    let scale = (rect.width() / tw).min(rect.height() / th);
-    let (w, h) = (tw * scale, th * scale);
-    let min = rect.center() - egui::vec2(w * 0.5, h * 0.5);
-    let icon_rect = egui::Rect::from_min_size(min, egui::vec2(w, h));
-    painter.image(
-        tex.id(),
-        icon_rect,
-        egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-        Color32::WHITE,
-    );
-}
 /// Грид декораций (buildings=false) или строений (buildings=true):
 /// иконки registry.objects по obj_type, поиск + фильтр категории.
 fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
@@ -1208,28 +1169,20 @@ fn objects_palette(ui: &mut Ui, ectx: &mut EditorCtx, buildings: bool) {
                     } else {
                         ectx.editor.active_deco == Some(idx)
                     };
-                    let cell_size = egui::vec2(72., 80.);
-                    let (resp, icon_rect) = palette_cell(ui, cell_size);
-                    if let Some(tex) = ectx.editor.palette_tex.get(&obj.path) {
-                        draw_icon_fit(ui.painter(), tex, icon_rect);
-                    }
-                    // Подпись: фикс. высота 30, усечение (лесенка исключена).
-                    ui.put(
-                        egui::Rect::from_min_size(
-                            resp.rect.left_bottom() - egui::vec2(0., 30.),
-                            egui::vec2(cell_size.x, 30.),
-                        ),
-                        egui::Label::new(
-                            egui::RichText::new(format!("{}\n({})", obj.name, obj.index))
-                                .small()
-                                .color(if selected {
-                                    egui::Color32::YELLOW
-                                } else {
-                                    egui::Color32::LIGHT_GRAY
-                                }),
-                        )
-                        .truncate(),
+                    let label = format!("{}\n({})", obj.name, obj.index);
+                    let resp = crate::editor_ui::asset_browser::cell(
+                        ui,
+                        egui::vec2(72., 80.),
+                        &label,
+                        selected,
                     );
+                    if let Some(tex) = ectx.editor.palette_tex.get(&obj.path) {
+                        crate::editor_ui::asset_browser::draw_icon_fit(
+                            ui.painter(),
+                            tex,
+                            crate::editor_ui::asset_browser::icon_rect_of(resp.rect),
+                        );
+                    }
                     let resp = resp.on_hover_text(format!(
                         "{} ({}) {:?}",
                         obj.name, obj.index, obj.size
